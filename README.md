@@ -7,7 +7,7 @@ Multi-domain knowledge and analytics — catalog your data, embed documents, ask
 ## Quick start
 
 ```bash
-git clone <your-repo-url> data-pro
+git clone https://github.com/siva18k/datapro_ai.git data-pro
 cd data-pro
 cp .env.example .env
 # Set MISTRAL_API_KEY in .env (or DEFAULT_LLM_BACKEND=ollama)
@@ -65,3 +65,7 @@ mcp_server.py     MCP server
 docker-compose.yml
 sample_docs/      Example files
 ```
+
+## License
+
+This project is licensed under the [MIT License](LICENSE) — free to use, copy, modify, and distribute. Only the repository owner can push changes; everyone else can clone and use the code read-only from GitHub.
