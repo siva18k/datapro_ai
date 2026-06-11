@@ -1,0 +1,102 @@
+# DATA Pro — Docker Compose
+#
+# Quick start:
+#   cp .env.example .env    # add MISTRAL_API_KEY (or use Ollama)
+#   docker compose up --build
+#   open http://localhost:5173
+#
+# Services: db (Postgres+pgvector), migrate (one-shot), api, web, mcp
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: datapro-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ragpro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpro}
+      POSTGRES_DB: ${POSTGRES_DB:-ragpro}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - datapro_pgdata:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ragpro} -d ${POSTGRES_DB:-ragpro}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build:
+      context: .
+      target: api
+    container_name: datapro-migrate
+    command: ["python", "scripts/migrate.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: &app-env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ragpro}:${POSTGRES_PASSWORD:-ragpro}@db:5432/${POSTGRES_DB:-ragpro}
+      PGSSLMODE: disable
+      DB_SCHEMA: ${DB_SCHEMA:-ragpro}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      DEFAULT_LLM_BACKEND: ${DEFAULT_LLM_BACKEND:-mistral}
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: api
+    container_name: datapro-api
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      MCP_URL: http://mcp:8000/mcp
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    volumes:
+      - ./sample_docs:/app/sample_docs:ro
+      - datapro_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+
+  web:
+    build:
+      context: .
+      target: web
+    container_name: datapro-web
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  mcp:
+    build:
+      context: .
+      target: mcp
+    container_name: datapro-mcp
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_PATH: /mcp
+      MCP_STATELESS: "true"
+
+volumes:
+  datapro_pgdata:
+  datapro_uploads:

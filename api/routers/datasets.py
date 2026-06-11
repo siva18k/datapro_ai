@@ -1,0 +1,415 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+
+from api.deps import get_embedder
+from api.llm import generate_answer
+from catalog_db import (
+    create_source,
+    delete_table_metadata,
+    get_column_metadata,
+    get_source,
+    get_table_metadata,
+    list_column_metadata,
+    list_sources,
+    list_table_metadata,
+    sync_columns_from_introspection,
+    update_source,
+    update_table_metadata,
+    upsert_column_metadata,
+    upsert_table_metadata,
+)
+from catalog_service import (
+    delete_dataset,
+    get_dataset_definition_path,
+    get_source_data_path,
+    get_source_ingest_map,
+    ingest_source_files,
+    list_source_files,
+    load_dataset_definition,
+    save_dataset_definition,
+    save_dataset_files,
+)
+from ingest_service import SUPPORTED_EXTENSIONS
+from structured_db import (
+    list_schema_tables,
+    list_table_columns,
+    postgres_config_from_source,
+    test_postgres_connection,
+)
+from code_orchestrator import build_file_dataset_context
+from structured_orchestrator import build_schema_context
+
+router = APIRouter(tags=["datasets"])
+
+DATASET_TYPES = {
+    "postgres": "structured",
+    "upload": "unstructured",
+    "file_path": "unstructured",
+    "api": "unstructured",
+    "sharepoint": "unstructured",
+    "web_url": "unstructured",
+}
+
+
+class DatasetCreate(BaseModel):
+    name: str
+    description: str = ""
+    connector: str
+    config: dict | None = None
+
+
+class DatasetUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    config: dict | None = None
+    enabled: bool | None = None
+
+
+class DefinitionBody(BaseModel):
+    markdown: str
+
+
+class TablesBody(BaseModel):
+    table_names: list[str]
+
+
+class TableUpdate(BaseModel):
+    definition: str | None = None
+    enabled: bool | None = None
+    table_role: str | None = None
+
+
+class ColumnUpdate(BaseModel):
+    labels: list[str] | None = None
+    description: str | None = None
+
+
+class IngestBody(BaseModel):
+    file_names: list[str]
+
+
+@router.get("/domains/{domain_id}/datasets")
+def list_domain_datasets(domain_id: str, enabled_only: bool = False):
+    return list_sources(domain_id=domain_id, enabled_only=enabled_only)
+
+
+@router.post("/domains/{domain_id}/datasets", status_code=201)
+def create_dataset(domain_id: str, body: DatasetCreate):
+    if body.connector not in DATASET_TYPES:
+        raise HTTPException(400, f"Unknown connector: {body.connector}")
+    return create_source(
+        domain_id,
+        body.name,
+        description=body.description,
+        source_type=DATASET_TYPES[body.connector],
+        connector=body.connector,
+        config=body.config,
+    )
+
+
+@router.get("/datasets/supported-file-types")
+def supported_file_types():
+    return {
+        "extensions": sorted(SUPPORTED_EXTENSIONS),
+        "accept": ",".join(ext.lstrip(".") for ext in sorted(SUPPORTED_EXTENSIONS)),
+    }
+
+
+@router.get("/datasets/{dataset_id}")
+def get_dataset(dataset_id: str):
+    row = get_source(source_id=dataset_id)
+    if not row:
+        raise HTTPException(404, "Dataset not found")
+    return row
+
+
+@router.patch("/datasets/{dataset_id}")
+def patch_dataset(dataset_id: str, body: DatasetUpdate):
+    if not get_source(source_id=dataset_id):
+        raise HTTPException(404, "Dataset not found")
+    fields = body.model_dump(exclude_none=True)
+    if fields:
+        update_source(dataset_id, **fields)
+    return get_source(source_id=dataset_id)
+
+
+@router.delete("/datasets/{dataset_id}")
+def remove_dataset(dataset_id: str):
+    if not get_source(source_id=dataset_id):
+        raise HTTPException(404, "Dataset not found")
+    result = delete_dataset(dataset_id)
+    if not result.get("deleted"):
+        raise HTTPException(500, "Failed to delete dataset")
+    return result
+
+
+@router.get("/datasets/{dataset_id}/summary")
+def dataset_summary(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    cfg = source.get("config") or {}
+    connector = source["connector"]
+    out: dict = {"connector": connector, "name": source["name"]}
+    if connector == "postgres":
+        out["host"] = cfg.get("host")
+        out["schema"] = cfg.get("schema")
+        out["table_count"] = len(list_table_metadata(dataset_id))
+    elif connector in ("upload", "file_path"):
+        files = list_source_files(source)
+        ingested = get_source_ingest_map(dataset_id)
+        out["file_count"] = len(files)
+        out["chunk_count"] = sum(int(v["chunk_count"]) for v in ingested.values())
+    elif connector == "api":
+        out["base_url"] = cfg.get("base_url")
+    else:
+        out["url"] = cfg.get("url")
+    return out
+
+
+@router.post("/datasets/{dataset_id}/test-connection")
+def test_connection(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source or source["connector"] != "postgres":
+        raise HTTPException(400, "Dataset is not a postgres connection")
+    cfg = postgres_config_from_source(source)
+    ok, msg = test_postgres_connection(cfg)
+    return {"ok": ok, "message": msg}
+
+
+@router.get("/datasets/{dataset_id}/remote-tables")
+def remote_tables(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source or source["connector"] != "postgres":
+        raise HTTPException(400, "Dataset is not a postgres connection")
+    try:
+        tables = list_schema_tables(postgres_config_from_source(source))
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"tables": tables}
+
+
+@router.get("/datasets/{dataset_id}/tables")
+def catalog_tables(dataset_id: str):
+    return list_table_metadata(dataset_id)
+
+
+@router.post("/datasets/{dataset_id}/tables")
+def add_tables(dataset_id: str, body: TablesBody):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    if source["connector"] != "postgres":
+        raise HTTPException(400, "Only postgres datasets support table cataloging")
+    schema = (source.get("config") or {}).get("schema") or "public"
+    pg_cfg = postgres_config_from_source(source)
+    created = []
+    for name in body.table_names:
+        table = upsert_table_metadata(dataset_id, schema, name)
+        try:
+            discovered = list_table_columns(pg_cfg, name)
+            sync_columns_from_introspection(table["id"], discovered)
+        except Exception as exc:
+            raise HTTPException(
+                502,
+                f"Table {name} cataloged but column sync failed: {exc}",
+            ) from exc
+        created.append(table)
+    return created
+
+
+@router.patch("/tables/{table_id}")
+def patch_table(table_id: str, body: TableUpdate):
+    fields = body.model_dump(exclude_none=True)
+    if fields:
+        update_table_metadata(table_id, **fields)
+    return {"ok": True}
+
+
+@router.delete("/tables/{table_id}")
+def remove_table(table_id: str):
+    table = get_table_metadata(table_id)
+    if not table:
+        raise HTTPException(404, "Table not found")
+    delete_table_metadata(table_id)
+    return {"ok": True, "source_id": table["source_id"], "table_name": table["table_name"]}
+
+
+@router.post("/tables/{table_id}/sync-columns")
+def sync_columns(table_id: str):
+    from catalog_db import get_table_metadata
+
+    table = get_table_metadata(table_id)
+    if not table:
+        raise HTTPException(404, "Table not found")
+    source = get_source(source_id=table["source_id"])
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    pg_cfg = postgres_config_from_source(source)
+    try:
+        discovered = list_table_columns(pg_cfg, table["table_name"])
+        result = sync_columns_from_introspection(table_id, discovered)
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return result
+
+
+@router.get("/tables/{table_id}/columns")
+def table_columns(table_id: str):
+    return list_column_metadata(table_id)
+
+
+@router.patch("/columns/{column_id}")
+def patch_column(column_id: str, body: ColumnUpdate):
+    col = get_column_metadata(column_id)
+    if not col:
+        raise HTTPException(404, "Column not found")
+    fields: dict = {}
+    if body.labels is not None:
+        fields["labels"] = body.labels
+    if body.description is not None:
+        fields["description"] = body.description
+    if fields:
+        upsert_column_metadata(col["table_metadata_id"], col["column_name"], **fields)
+    updated = get_column_metadata(column_id)
+    return updated or {"ok": True}
+
+
+@router.get("/datasets/{dataset_id}/schema-context")
+def schema_context(dataset_id: str):
+    """LLM-ready schema: definitions, table defs, column labels (for text-to-SQL)."""
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    if source.get("connector") == "postgres":
+        try:
+            ctx = build_schema_context(dataset_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {
+            "kind": "sql",
+            "source_id": ctx.source_id,
+            "source_name": ctx.source_name,
+            "domain_name": ctx.domain_name,
+            "tables": ctx.tables,
+            "prompt_block": ctx.to_llm_prompt_block(),
+        }
+    if source.get("connector") in ("upload", "file_path"):
+        try:
+            ctx = build_file_dataset_context(dataset_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {
+            "kind": "python",
+            "source_id": ctx.source_id,
+            "source_name": ctx.source_name,
+            "domain_name": ctx.domain_name,
+            "data_dir": ctx.data_dir,
+            "files": ctx.files,
+            "prompt_block": ctx.to_llm_prompt_block(),
+        }
+    raise HTTPException(400, f"Schema context not supported for connector {source.get('connector')}")
+
+
+@router.get("/datasets/{dataset_id}/definition")
+def get_definition(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    return {
+        "markdown": load_dataset_definition(source),
+        "path": str(get_dataset_definition_path(source)),
+    }
+
+
+@router.put("/datasets/{dataset_id}/definition")
+def put_definition(dataset_id: str, body: DefinitionBody):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    save_dataset_definition(source, body.markdown)
+    return {"ok": True, "path": str(get_dataset_definition_path(source))}
+
+
+@router.post("/datasets/{dataset_id}/definition/draft")
+def draft_definition(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    domain_name = source.get("domain_name", "")
+    prompt = (
+        f"Write a data-catalog definition in markdown for dataset '{source['name']}' "
+        f"in domain '{domain_name}', type '{source['connector']}'. "
+        "Sections: Overview, Purpose, Contents, Usage notes, Update cadence. Markdown only."
+    )
+    md = generate_answer(prompt)
+    save_dataset_definition(source, md)
+    return {"markdown": md}
+
+
+@router.get("/datasets/{dataset_id}/files")
+def list_files(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    files = list_source_files(source)
+    ingested = get_source_ingest_map(dataset_id)
+    return [
+        {
+            "name": f.name,
+            "size": f.stat().st_size,
+            "ingested": f.name in ingested,
+            "chunks": int(ingested[f.name]["chunk_count"]) if f.name in ingested else 0,
+        }
+        for f in files
+    ]
+
+
+@router.post("/datasets/{dataset_id}/upload")
+async def upload_dataset_files(
+    dataset_id: str,
+    files: list[UploadFile] = File(...),
+):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    if source.get("connector") not in ("upload", "file_path"):
+        raise HTTPException(400, "Upload is only supported for file-based datasets")
+    if not files:
+        raise HTTPException(400, "No files provided")
+
+    payloads: list[tuple[str, bytes]] = []
+    for upload in files:
+        name = upload.filename or ""
+        payloads.append((name, await upload.read()))
+
+    saved_paths, skipped = save_dataset_files(source, payloads)
+    if not saved_paths and skipped:
+        detail = "; ".join(f"{s['name']}: {s['reason']}" for s in skipped)
+        raise HTTPException(400, detail or "No supported files uploaded")
+
+    return {
+        "saved": [p.name for p in saved_paths],
+        "skipped": skipped,
+    }
+
+
+@router.post("/datasets/{dataset_id}/ingest")
+def ingest(dataset_id: str, body: IngestBody):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    if source.get("source_type") == "structured":
+        raise HTTPException(
+            400,
+            "Structured datasets use catalog metadata indexing (RAG page), not file ingest.",
+        )
+    base = get_source_data_path(source)
+    paths = [base / name for name in body.file_names]
+    missing = [n for n, p in zip(body.file_names, paths) if not p.exists()]
+    if missing:
+        raise HTTPException(400, f"Files not found: {', '.join(missing)}")
+    report = ingest_source_files(source, paths, get_embedder())
+    return report

@@ -1,0 +1,12 @@
+pg8000
+sentence-transformers
+torch
+torchvision
+requests
+pandas
+pypdf
+python-dotenv
+mcp[cli]
+fastapi
+uvicorn[standard]
+python-multipart

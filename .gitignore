@@ -1,0 +1,24 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Secrets and local config — use .env.example and saved_db_connections.json.example
+.env
+.env.*
+!.env.example
+saved_db_connections.json
+!saved_db_connections.json.example
+secrets.toml
+.streamlit/secrets.toml
+
+# Runtime / local artifacts
+outputs/
+chroma_store/
+.mcp_server.pid
+.mcp_server.log
+.api_server.pid
+.api_server.log
+
+# Frontend build
+web/node_modules/
+web/dist/

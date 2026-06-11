@@ -1,0 +1,85 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "path": "/mcp",
+    "transport": "streamable-http",
+    "stateless": true,
+    "instructions": "DATA Pro knowledge base (Postgres/pgvector). Use tools for search/ingest, resources for documents and metadata, prompts for grounded answers. Answer only from retrieved context."
+  },
+  "tools": {
+    "search_documents": {
+      "description": "Semantic search over ingested document chunks. Returns ranked chunks with citations.",
+      "enabled": true
+    },
+    "list_sources": {
+      "description": "List ingested source files with chunk counts and last-ingested timestamps.",
+      "enabled": true
+    },
+    "get_chunk": {
+      "description": "Fetch one chunk by source file name and chunk id (e.g. travel_policy.md / chunk_00).",
+      "enabled": true
+    },
+    "knowledge_base_stats": {
+      "description": "Return total chunk count and number of ingested source files.",
+      "enabled": true
+    },
+    "list_available_documents": {
+      "description": "List files on disk that can be ingested (may not yet be in the database).",
+      "enabled": true
+    },
+    "ingest_documents": {
+      "description": "Ingest documents from sample_docs (or docs_path) into the knowledge base.",
+      "enabled": true
+    }
+  },
+  "resources": {
+    "ragpro://knowledge-base/stats": {
+      "name": "knowledge_base_stats",
+      "description": "Knowledge base totals, source count, and embedding model.",
+      "mime_type": "application/json",
+      "enabled": true
+    },
+    "ragpro://knowledge-base/sources": {
+      "name": "ingested_sources",
+      "description": "All ingested source files with chunk counts.",
+      "mime_type": "application/json",
+      "enabled": true
+    },
+    "ragpro://chunks/{source_file}/{chunk_id}": {
+      "name": "chunk",
+      "description": "A single ingested chunk from the knowledge base.",
+      "mime_type": "application/json",
+      "enabled": true
+    },
+    "ragpro://documents/{source_file}": {
+      "name": "ingested_document",
+      "description": "All ingested chunks for a source file, ordered by chunk id.",
+      "mime_type": "application/json",
+      "enabled": true
+    },
+    "ragpro://sample-docs/{file_name}": {
+      "name": "sample_document",
+      "description": "Raw document text from sample_docs on disk.",
+      "mime_type": "text/plain",
+      "enabled": true
+    }
+  },
+  "prompts": {
+    "citation_rules": {
+      "description": "Grounding and citation rules for answering from the knowledge base.",
+      "template": "You are an internal knowledge assistant.\nAnswer only from provided document context retrieved via ragpro tools or resources.\nIf the answer is not supported by the context, say:\n\"I do not know based on the provided documents.\"\nAlways cite sources in the format [source_file - chunk_id].\nBe concise, helpful, and conversational.",
+      "enabled": true
+    },
+    "grounded_answer": {
+      "description": "Retrieve top chunks for a question and return a grounded answer prompt.",
+      "template": "{citation_rules}\n\nUser question:\n{question}\n\nContext:\n{context}",
+      "enabled": true
+    },
+    "summarize_document": {
+      "description": "Build a prompt to summarize one ingested source file from the knowledge base.",
+      "template": "Summarize the following ingested document.\nUse only the text below. Cite chunk ids where helpful.\n\nDocument: {source_file}\n\n{body}",
+      "enabled": true
+    }
+  }
+}
