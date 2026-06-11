@@ -1,105 +1,81 @@
 # User guide
 
-## UI pages
+## Pages
 
-| Page | Use for |
-|------|---------|
-| **Data Catalog** | Domains, datasets, connections, tables, uploads |
-| **Ask** | Chat; domain override, Top K, debug mode |
-| **Analytics** | Natural-language dashboards (Postgres datasets) |
-| **RAG** | Chunk settings, ingest / embed |
-| **MCP** | Server status, prompts, domain bindings |
-| **Settings** | DB, LLM, embeddings, start/stop servers |
+**Data Catalog** — domains, datasets, connections, table metadata, uploads.
 
-**Quick first Ask:** Catalog → ingest files → **RAG** → ingest → **Ask**.
+**Ask** — chat; you can override the domain, tweak Top K, turn on debug mode to see which chunks came back.
 
-Sample files: `sample_docs/` (General → Sample Documents after migrate).
+**Analytics** — natural-language dashboards (needs Postgres datasets).
+
+**RAG** — chunk size, overlap, ingest.
+
+**MCP** — server status, prompts, domain bindings.
+
+**Settings** — DB, LLM, embeddings, start/stop API and MCP.
+
+Fastest path to a first answer: Catalog → add files → **RAG** → ingest → **Ask**. After `migrate.py`, `sample_docs/` is wired to General → Sample Documents.
 
 ---
 
 ## Domains and datasets
 
-| Term | Meaning |
-|------|---------|
-| **Domain** | Business area — HR, Finance, Sales, … |
-| **Dataset** | One source inside a domain |
-| **Connector** | Postgres, upload, file path, API, … |
+A **domain** is a business area — HR, Finance, Sales, whatever you name it. A **dataset** is one source inside that domain (Postgres, upload, folder on disk, etc.).
 
-### Add a domain
+Default domains are created by `migrate.py`. To add another: **Data Catalog** → **+** in the sidebar.
 
-**Data Catalog** → sidebar **+** → name your domain.  
-Defaults (HR, Finance, Sales, General) are created by `migrate.py`.
+**Add dataset** → pick a format:
 
-### Add a dataset
+- **Postgres** — live tables, analytics, structured Ask
+- **Upload** — PDF, markdown, text, JSON
+- **File path** — folder on disk (e.g. `sample_docs`)
 
-1. **+ Add dataset** → name + format:
-
-| Format | Use for |
-|--------|---------|
-| **Postgres** | Structured tables + analytics |
-| **Upload** | PDF, Markdown, text, JSON |
-| **File path** | Folder on disk (e.g. `sample_docs`) |
-
-2. **Postgres:** pick **Settings → Dataset connections** or create a new connection.
+For Postgres, pick an existing connection from **Settings → Dataset connections** or create one there.
 
 ---
 
-## Document datasets (files)
+## File-based datasets
 
-1. **Definition** tab — markdown description for the LLM (optional **AI draft**).
-2. **Data** tab — upload files or use file-path folder.
-3. **RAG** page — select dataset → **Ingest & embed all files**.
+1. **Definition** tab — short markdown about what the data is (there's an AI draft button if you want a starting point).
+2. **Data** tab — upload files or point at a folder.
+3. **RAG** — select the dataset → **Ingest & embed all files**.
 
 ---
 
-## Postgres datasets (structured)
+## Postgres datasets
 
-1. **Connection** — test and save DB credentials.
+1. **Connection** — test and save credentials.
 2. **Data** — **Refresh tables** → select → **Add selected**.
-3. Edit table roles (**fact** vs **lookup**), descriptions, column labels.
-4. **RAG** — **Ingest & embed catalog** (metadata + lookup rows; not full fact tables).
-5. **Ask** — SQL/analytics on fact data; RAG helps with schema names.
+3. Tweak table roles (fact vs lookup), descriptions, column labels — this matters for SQL generation later.
+4. **RAG** → **Ingest & embed catalog** — indexes metadata and lookup rows, not whole fact tables.
+5. **Ask** — structured questions against fact data; RAG helps with schema names.
 
 ---
 
-## RAG embeddings
+## Embeddings
 
-Stored in `ragpro.knowledge_chunks` (pgvector).
+Chunks live in `ragpro.knowledge_chunks`.
 
-### When to re-ingest
+Re-ingest when:
 
-| Change | Action |
-|--------|--------|
-| New/updated files | **Data** tab or RAG **Ingest & embed all files** |
-| Catalog metadata changed | RAG **Ingest & embed catalog** |
-| Chunk size / instructions | Save profile → re-ingest |
-| Embedding model changed | Re-ingest **all** datasets |
+- files change → **Ingest & embed all files**
+- you edited catalog metadata → **Ingest & embed catalog**
+- chunk size, overlap, or instructions changed → save profile, re-ingest
+- embedding model changed → re-ingest **all** datasets (dimensions won't match otherwise)
 
-### Profile fields
+Profile fields worth caring about: chunk size/overlap, profile instructions, metadata/glossary.
 
-| Field | Purpose |
-|-------|---------|
-| Chunk size / overlap | How text is split |
-| Profile instructions | Retrieval and answer hints |
-| Metadata / glossary | Extra terms |
-
-### Verify
-
-- Catalog header — chunk/file counts.
-- **Ask** + **Debug mode** — see retrieved chunk IDs.
-- `GET /api/stats` — total chunks.
+Check it's working: chunk counts in the catalog header, **Ask** with debug mode, or `GET /api/stats`.
 
 ---
 
 ## Demo finance warehouse
 
-Optional sample data:
+Optional sample EDW-style data:
 
 ```bash
-# DBA once: migrations/finance_data/000_master_bootstrap.sql
+# DBA once if needed: migrations/finance_data/000_master_bootstrap.sql
 python scripts/migrate_finance_data.py --fresh
 ```
 
-See [migrations/finance_data/README.md](../migrations/finance_data/README.md).
-
-Then add a Postgres dataset in Catalog pointing at that database.
+Details in [migrations/finance_data/README.md](../migrations/finance_data/README.md). Then add a Postgres dataset in the catalog pointing at schema `finance_data`.

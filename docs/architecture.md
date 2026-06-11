@@ -1,8 +1,8 @@
-# DATA Pro — Architecture
+# Architecture
 
-This document describes how the multi-domain analytics platform is structured: components, data flows, storage model, and planned execution paths.
+How DATA Pro is put together — components, where data lives, and what happens when you hit Ask.
 
-## System overview
+## Overview
 
 ```mermaid
 flowchart TB
@@ -55,57 +55,43 @@ flowchart TB
     Code --> Files
 ```
 
-## Design goals
+The idea: route questions to the right domain (HR, Finance, …), keep datasets and metadata in a catalog both RAG and SQL paths share, and keep the UI thin — React only talks to FastAPI; MCP reuses the same Python modules.
 
-1. **Domain-aware answers** — route questions to HR, Finance, Sales, or General before retrieval.
-2. **Catalog-first** — datasets, definitions, and metadata are first-class; RAG and SQL/Python paths share the same catalog.
-3. **Separation of UI and logic** — React talks only to FastAPI; Python modules are reused by MCP.
-4. **Grounded responses** — answers cite ingested chunks; future paths curate tabular data before the answer LLM runs.
+## Frontend (`web/`)
 
-## Runtime components
+Vite dev server on 5173, proxies `/api` to FastAPI in dev. TanStack Query for fetching. Tailwind plus a few shared classes (`.btn`, `.card`, `.input`) — no component library layer.
 
-### React frontend (`web/`)
+Pages: Catalog, Ask, RAG, Analytics, MCP, Settings. Browser never touches Postgres directly.
 
-| Piece | Role |
-|-------|------|
-| **Vite dev server** | Serves UI; proxies `/api` → FastAPI in development |
-| **TanStack Query** | API data fetching and cache invalidation |
-| **Tailwind + index.css** | Utility CSS and a few shared classes (`.btn`, `.card`, `.input`) — no Radix/shadcn |
-| **Pages** | Catalog (datasets), Ask (chat), RAG (profiles) |
+## API (`api/`)
 
-The browser cannot run Python or connect to Postgres directly; all data operations go through the API.
+| Router | Handles |
+|--------|---------|
+| `health` | Liveness, chunk/file stats |
+| `domains` | Domain CRUD |
+| `datasets` | Sources, connections, metadata, ingest |
+| `ask` | Question → route → retrieve → LLM |
+| `rag` | Per-source profiles, re-ingest |
 
-### FastAPI (`api/`)
+Startup runs `bootstrap()` — catalog init and embedding model load (`all-MiniLM-L6-v2` by default).
 
-| Router | Responsibility |
-|--------|----------------|
-| `health` | Liveness and chunk/file stats |
-| `domains` | CRUD for business domains |
-| `datasets` | Datasets, connections, metadata, definitions, ingest |
-| `ask` | Question → route → retrieve → LLM answer |
-| `rag` | Per-source RAG profile and re-ingest |
+## Core modules (repo root)
 
-On startup, `bootstrap()` initializes the catalog and loads the embedding model once (`all-MiniLM-L6-v2`).
+| Module | Role |
+|--------|------|
+| `catalog_db.py` | SQL for domains, sources, RAG profiles, table/column metadata |
+| `catalog_service.py` | Paths, ingest orchestration, `definition.md` |
+| `db.py` | `knowledge_chunks`, pgvector search |
+| `ingest_service.py` | Chunk PDFs/text, embed, upsert |
+| `domain_router.py` | Keyword/embedding routing |
+| `orchestrator.py` | Route → classify execution kind → search chunks |
+| `structured_orchestrator.py` | Read-only SQL via LLM |
+| `code_orchestrator.py` | pandas scripts for CSV/large files |
+| `mcp_server.py` | MCP tools/resources over same stack |
 
-### Python core (repository root)
+MCP runs as its own process on port 8000 so agents don't need the UI.
 
-| Module | Responsibility |
-|--------|----------------|
-| `catalog_db.py` | SQL for domains, `data_sources`, `rag_profiles`, `table_metadata`, `column_metadata` |
-| `catalog_service.py` | File paths, ingest orchestration, `definition.md` read/write |
-| `db.py` | `knowledge_chunks` + pgvector similarity search |
-| `ingest_service.py` | PDF/text chunking, embedding, upsert |
-| `domain_router.py` | Keyword/embedding routing to a domain |
-| `orchestrator.py` | End-to-end retrieval: route → classify execution kind → search chunks |
-| `structured_orchestrator.py` | LLM-generated read-only SQL against dataset Postgres connections |
-| `code_orchestrator.py` | LLM-generated pandas scripts for CSV/large files |
-| `mcp_server.py` | MCP tools/resources/prompts over the same DB and ingest stack |
-
-### MCP server (`mcp_server.py`)
-
-Runs as a separate process (default port **8000**). External agents call `search_documents`, `ingest_documents`, etc., without the React UI. Configuration shares `.env` / secrets with the API.
-
-## Data model (catalog)
+## Catalog model
 
 ```mermaid
 erDiagram
@@ -150,14 +136,13 @@ erDiagram
     }
 ```
 
-**Connectors** on `data_sources`: `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`.
+Connectors on `data_sources`: `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`.
 
-- **Unstructured** connectors (`upload`, `file_path`, …) → files chunked into `knowledge_chunks`.
-- **Postgres** connectors → live DB introspection; `table_metadata` / `column_metadata` ground SQL generation.
+Files from upload/path connectors become chunks in `knowledge_chunks`. Postgres connectors introspect live DBs; `table_metadata` / `column_metadata` feed SQL generation.
 
-Migrations live in `migrations/`; schema name defaults to **`ragpro`** (`DB_SCHEMA`).
+Migrations in `migrations/`; schema name defaults to `ragpro` (`DB_SCHEMA`).
 
-## Ask flow (current — unstructured RAG)
+## Ask flow (document RAG today)
 
 ```mermaid
 sequenceDiagram
@@ -182,34 +167,24 @@ sequenceDiagram
     W-->>U: Chat bubble + expandable sources
 ```
 
-**Routing:** `domain_override` forces a domain; otherwise `domain_router` scores domains using catalog keywords and optional embeddings.
+`domain_override` skips routing. Otherwise `domain_router` scores domains from catalog keywords/embeddings. No hits in the routed domain → search widens globally.
 
-**Fallback:** If no chunks match within the routed domain, search runs globally.
+`orchestrator.py` already classifies `execution_kind` (`sql`, `python`, `hybrid`) but `/api/ask` still uses vector RAG only for now — wiring structured paths is the next step.
 
-**Not yet wired:** When `execution_kind` is `sql`, `python`, or `hybrid`, `/api/ask` still uses vector RAG only. Classification is computed in `orchestrator.py` for future use.
+## Execution kinds (where it's headed)
 
-## Planned execution paths
+| Kind | For | What happens |
+|------|-----|--------------|
+| `rag` | Docs, policies | pgvector → answer LLM |
+| `sql` | Postgres analytics | LLM writes read-only SELECT |
+| `python` | CSV / big files | pandas script, sandboxed |
+| `hybrid` | Both | SQL/Python + RAG chunks → answer LLM |
 
-The orchestrator classifies each question into an **execution kind**:
-
-| Kind | Use case | LLM output | Execution |
-|------|----------|------------|-----------|
-| **rag** | Policies, docs, Q&A | — | pgvector retrieval → answer LLM |
-| **sql** | Analytics on Postgres datasets | Read-only `SELECT` | Run against dataset connection |
-| **python** | CSV / large files | pandas script → `result` dict | Sandboxed exec (local guarded; ECS later) |
-| **hybrid** | Tabular + document context | SQL or Python + RAG | Combined payload → answer LLM |
-
-Intended pipeline:
-
-1. Route **domain** and **dataset**
-2. Load **definition.md**, table/column labels, or file listing as context
-3. LLM writes **SQL or Python** to reduce large data to a small result set
-4. **Sandbox** runs untrusted code outside the API container (AWS Fargate/Lambda target)
-5. **Answer LLM** receives curated rows plus optional RAG chunks
+Pipeline we're aiming for: route domain + dataset → load `definition.md` and schema context → LLM generates SQL or Python to shrink data → run in a sandbox (not inside the API process) → answer LLM gets curated rows plus optional chunks.
 
 `GET /api/datasets/{id}/schema-context` returns prompt blocks for SQL/Python grounding.
 
-## Ingest flow
+## Ingest
 
 ```mermaid
 flowchart LR
@@ -223,45 +198,22 @@ flowchart LR
     DOM[domains.id] --> U
 ```
 
-Re-ingest from the RAG page or `POST /api/rag/sources/{id}/reingest` applies the current profile to all files in the dataset folder.
+Re-ingest from the RAG page or `POST /api/rag/sources/{id}/reingest`.
 
-## Deployment shape (target)
+## Running it today vs production
 
-Today development runs three optional processes:
+Dev is usually three processes: API on 8080, Vite on 5173, MCP on 8000.
 
-| Process | Port | Purpose |
-|---------|------|---------|
-| `uvicorn api.main:app` | 8080 | REST API |
-| `npm run dev` (Vite) | 5173 | Frontend dev |
-| `python mcp_server.py` | 8000 | MCP |
+Production target (not fully there yet): API container with secrets from env/SSM, static `web/dist` behind nginx or a CDN, MCP as its own service, Python/SQL sandbox on something isolated (Fargate was the original idea). Mounting `web/dist` on FastAPI is an easy simplification if you don't need separate scaling.
 
-**Target production (not fully implemented):**
+## Security
 
-- API container on ECS (or similar) with env secrets
-- Static `web/dist` behind CDN or same ALB
-- MCP as separate service or sidecar
-- Python/SQL sandbox on Fargate — isolated from API
+SQL path is read-only by design; dataset credentials sit in catalog config (encrypt at rest in prod). Python path must not run arbitrary code in the API worker — sandbox first. Keys and DB passwords in `.env` or a secret manager; see [secrets.md](secrets.md).
 
-Single-port serving (FastAPI mounting `web/dist`) is a straightforward follow-up for simpler deploys.
+## Extending
 
-## Security notes
-
-- **SQL path** — designed for read-only queries; connection credentials stored per dataset in catalog config (encrypt at rest in production).
-- **Python path** — must not run arbitrary code in the API process; sandbox is required before production use.
-- **Secrets** — keep `MISTRAL_API_KEY` and DB passwords in `.env` or a secret manager; never commit `.env`. See [docs/secrets.md](secrets.md).
-
-## Extension points
-
-| Area | How to extend |
-|------|----------------|
-| New connector | Add type in catalog + UI + `catalog_service` path/connection logic |
-| New domain | Catalog UI or `POST /api/domains` |
-| Custom routing | Extend `domain_router.py` or domain descriptions in DB |
-| Agent access | MCP tools in `mcp_server.py` or direct `/api/ask` |
-| Structured Ask | Wire `structured_orchestrator` / `code_orchestrator` into `api/routers/ask.py` |
-
-## Related documentation
-
-- [Installation](installation.md) — setup and scripts
-- [MCP](mcp.md) — tools, resources, client configuration
-- [User guide](user-guide.md) — catalog and RAG workflows
+- New connector: catalog type + UI + `catalog_service` path logic
+- New domain: UI or `POST /api/domains`
+- Routing tweaks: `domain_router.py` or richer domain descriptions
+- Agents: MCP tools or plain `/api/ask`
+- Structured Ask: wire `structured_orchestrator` / `code_orchestrator` into `api/routers/ask.py`

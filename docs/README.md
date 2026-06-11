@@ -1,14 +1,16 @@
-# DATA Pro — Documentation
+# Documentation
 
-| Guide | Description |
-|-------|-------------|
-| [Installation](installation.md) | Docker or local setup, credentials, scripts |
-| [Secrets & local config](secrets.md) | `.env` and saved DB connections (never commit) |
-| [Docker](docker.md) | Compose services, commands, external Postgres, Ollama |
-| [User guide](user-guide.md) | Domains, datasets, files, Postgres, RAG embeddings, UI |
-| [MCP](mcp.md) | MCP server, tools, Cursor / Claude Desktop |
-| [Architecture](architecture.md) | Components, data model, Ask/ingest flows |
-| [Concepts](concepts.md) | What RAG and MCP mean (plain language) |
-| [Troubleshooting](troubleshooting.md) | Common issues |
+Start with [installation](installation.md) if you're setting up for the first time.
 
-**Also:** [Demo finance warehouse](../migrations/finance_data/README.md) — optional sample SQL data.
+| Doc | What's in it |
+|-----|----------------|
+| [Installation](installation.md) | Docker or local dev, env vars, scripts |
+| [Secrets](secrets.md) | `.env` and `saved_db_connections.json` — keep these local |
+| [Docker](docker.md) | Compose services, external Postgres, Ollama |
+| [User guide](user-guide.md) | Catalog, datasets, RAG ingest, Ask |
+| [MCP](mcp.md) | MCP server, tools, Cursor / Claude config |
+| [Architecture](architecture.md) | Components and data flows |
+| [Concepts](concepts.md) | RAG and MCP in plain terms |
+| [Troubleshooting](troubleshooting.md) | Fixes for common problems |
+
+Optional sample data: [finance_data warehouse](../migrations/finance_data/README.md).

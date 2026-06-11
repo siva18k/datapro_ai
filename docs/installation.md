@@ -1,50 +1,29 @@
 # Installation
 
-## Prerequisites
+You need either Docker Desktop (easiest) or Python 3.11+ and Node 20+ for local dev. Either way you need an LLM — Mistral API key by default, or Ollama running on your machine. Postgres with the `vector` extension holds the catalog and embeddings; Docker bundles that for you.
 
-| Requirement | Notes |
-|-------------|--------|
-| **Docker Desktop** (recommended) | Postgres, API, UI, MCP in one command |
-| **Or** Python 3.11+ and Node 20+ | Local development |
-| **LLM** | [Mistral](https://console.mistral.ai/) API key (default) or [Ollama](https://ollama.com/) locally |
-| **PostgreSQL + pgvector** | Included in Docker; otherwise your own instance |
-
----
-
-## Option A — Docker (recommended)
+## Docker
 
 ```bash
-git clone <your-repo-url> data-pro
+git clone https://github.com/siva18k/datapro_ai.git data-pro
 cd data-pro
 cp .env.example .env
-# Edit .env — set MISTRAL_API_KEY (or DEFAULT_LLM_BACKEND=ollama)
+# Edit .env — at minimum MISTRAL_API_KEY, or DEFAULT_LLM_BACKEND=ollama
 
 docker compose up --build
 ```
 
-Open **http://localhost:5173**
+UI: http://localhost:5173  
+API health: http://localhost:8080/api/health  
+MCP: http://127.0.0.1:8000/mcp
 
-| URL | Service |
-|-----|---------|
-| http://localhost:5173 | UI |
-| http://localhost:8080/api/health | API |
-| http://127.0.0.1:8000/mcp | MCP |
+First startup can take a few minutes while the embedding model downloads. More compose detail in [docker.md](docker.md).
 
-First run may take a few minutes (embedding model download).
+Once it's up: check **Settings** (LLM + DB are mostly pre-filled in Docker), add a domain and dataset in **Data Catalog**, ingest something, then try **Ask**.
 
-More detail: [Docker guide](docker.md).
+## Local development
 
-### First steps after start
-
-1. **Settings** — LLM provider and API key (DB is pre-configured in Docker).
-2. **Data Catalog** — domain + dataset → ingest data ([user guide](user-guide.md)).
-3. **Ask** — try a question.
-
----
-
-## Option B — Local development
-
-### 1. Python and Node
+**Python and Node**
 
 ```bash
 python -m venv .venv
@@ -54,92 +33,74 @@ pip install -r requirements.txt
 cd web && npm install && cd ..
 ```
 
-### 2. Environment
+**Environment**
 
 ```bash
 cp .env.example .env
 ```
 
-Set `DATABASE_URL` (or `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`) and `MISTRAL_API_KEY`.
-
-On your Postgres database:
+Set `DATABASE_URL` (or the `PG*` vars) and `MISTRAL_API_KEY`. On your Postgres instance:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### 3. Migrations
+**Migrations**
 
 ```bash
 python scripts/migrate.py
 ```
 
-Creates schema `ragpro`, default domains (HR, Finance, Sales, General), and vector tables.
+That creates schema `ragpro`, default domains (HR, Finance, Sales, General), and the vector tables.
 
-### 4. Run
+**Run the app**
 
-**Terminal 1 — API**
+Terminal 1 — API:
 
 ```bash
 uvicorn api.main:app --reload --host 127.0.0.1 --port 8080
 ```
 
-**Terminal 2 — UI**
+Terminal 2 — UI:
 
 ```bash
 cd web && npm run dev
 ```
 
-Or both: `./scripts/dev.sh`
-
-**Optional — MCP**
-
-```bash
-python mcp_server.py
-```
-
----
+Or `./scripts/dev.sh` for both. MCP is optional: `python mcp_server.py`.
 
 ## Environment variables
 
-Secrets live in `.env` (also editable from **Settings**). See [Secrets & local config](secrets.md) — **do not commit** `.env` or `saved_db_connections.json`; use [`.env.example`](../.env.example) and [`saved_db_connections.json.example`](../saved_db_connections.json.example).
+Secrets go in `.env` (you can also edit many of them from **Settings**). Don't commit `.env` or `saved_db_connections.json` — copy from the `.example` files instead. See [secrets.md](secrets.md).
 
-| Variable | Required | Purpose |
-|----------|----------|---------|
-| `MISTRAL_API_KEY` | Yes* | Default LLM |
+| Variable | Required? | Notes |
+|----------|-----------|-------|
+| `MISTRAL_API_KEY` | Usually | Skip if `DEFAULT_LLM_BACKEND=ollama` |
 | `DATABASE_URL` | Yes | Catalog + vectors |
-| `DB_SCHEMA` | No | Default `ragpro` |
-| `PGSSLMODE` | No | `require` (RDS) or `disable` (local Docker) |
+| `DB_SCHEMA` | No | Defaults to `ragpro` |
+| `PGSSLMODE` | No | `require` for RDS, `disable` for local Docker |
 | `EMBEDDING_MODEL` | No | Default `all-MiniLM-L6-v2` |
 | `DEFAULT_LLM_BACKEND` | No | `mistral`, `openai`, `anthropic`, `gemini`, `openrouter`, `ollama` |
 | `OLLAMA_BASE_URL` | If Ollama | e.g. `http://localhost:11434` |
 | `MCP_URL` | No | Default `http://127.0.0.1:8000/mcp` |
 
-\*Or set `DEFAULT_LLM_BACKEND=ollama` with no cloud key.
+Warehouse Postgres connections (the databases you query in Ask) live in `saved_db_connections.json` or **Settings → Dataset connections**, not in `.env`.
 
-**Source databases** (warehouse Postgres) use **`saved_db_connections.json`** (local, gitignored) or **Settings → Dataset connections** in the UI — not `.env`. See [Secrets & local config](secrets.md).
+## Handy scripts
 
----
+- `python scripts/migrate.py` — apply migrations, seed domains
+- `python scripts/migrate_finance_data.py --fresh` — optional demo warehouse
+- `python mcp_server.py` — MCP on port 8000
+- `./scripts/dev.sh` — API + Vite together
+- `docker compose up --build` — full stack
+- `python ingest.py` — old CLI path for `sample_docs/`
 
-## Scripts
+If you change the embedding model in Settings, re-ingest everything or your vectors won't match.
 
-| Command | Purpose |
-|---------|---------|
-| `python scripts/migrate.py` | Apply schema migrations + seed domains |
-| `python scripts/migrate_finance_data.py --fresh` | Optional demo warehouse |
-| `python mcp_server.py` | Start MCP on port 8000 |
-| `./scripts/dev.sh` | API + Vite together |
-| `docker compose up --build` | Full Docker stack |
-| `python ingest.py` | Legacy CLI ingest of `sample_docs/` |
-
-After changing **embedding model** in Settings, re-ingest all datasets.
-
----
-
-## Production frontend build
+## Production frontend
 
 ```bash
 cd web && npm run build
 ```
 
-Output: `web/dist/`. Serve with nginx (`docker/nginx.conf`) proxying `/api` to FastAPI.
+Output lands in `web/dist/`. The Docker image serves it through nginx (`docker/nginx.conf`) with `/api` proxied to FastAPI.

@@ -1,66 +1,49 @@
 # Secrets and local config
 
-**Never commit real credentials to git.** DATA Pro keeps secrets in local files that are listed in `.gitignore`. Use the **example** files in the repo as templates.
+Don't commit real credentials. `.gitignore` already excludes the files below — use the example templates in the repo and fill in your own values.
 
-## Files overview
+| Local file (ignored) | Copy from | What it's for |
+|----------------------|-----------|---------------|
+| `.env` | `.env.example` | Catalog DB, LLM keys, embedding model, MCP URL |
+| `saved_db_connections.json` | `saved_db_connections.json.example` | Named Postgres connections for datasets |
 
-| Local file (gitignored) | Template (safe to commit) | Purpose |
-|-------------------------|---------------------------|---------|
-| `.env` | [`.env.example`](../.env.example) | Catalog DB, LLM API keys, embedding model, MCP URL |
-| `saved_db_connections.json` | [`saved_db_connections.json.example`](../saved_db_connections.json.example) | Named Postgres connections for **Settings → Dataset connections** and Postgres datasets |
+Log and pid files (`.mcp_server.log`, `.api_server.log`, etc.) are ignored too.
 
-Optional runtime files (also gitignored): `.mcp_server.log`, `.api_server.log`, `.mcp_server.pid`, `.api_server.pid`.
-
-## Setup
-
-### 1. Environment (`.env`)
+## `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your values:
+Typical things to set:
 
-- **`MISTRAL_API_KEY`** (or another LLM provider / Ollama)
-- **`DATABASE_URL`** or `PGHOST`, `PGUSER`, `PGPASSWORD`, etc. — catalog + vector store Postgres
-- **`DB_SCHEMA`** — usually `ragpro`
+- `MISTRAL_API_KEY` — or another provider / Ollama
+- `DATABASE_URL` or `PGHOST`, `PGUSER`, `PGPASSWORD`, … for the catalog database
+- `DB_SCHEMA` — usually `ragpro`
 
-The **Settings** page can update many of these and write back to `.env`. Restart the API or MCP server after catalog-related changes.
+**Settings** in the UI can update a lot of this and write back to `.env`. Restart the API or MCP after catalog-related changes. Docker defaults in `.env.example` match the bundled Postgres service.
 
-For Docker, defaults in `.env.example` match the bundled Postgres service.
+## Saved dataset connections
 
-### 2. Saved dataset connections (optional)
-
-Used when you add **Postgres** datasets in the Data Catalog. You can create connections in the UI (**Settings → Dataset connections**) instead of editing JSON by hand.
-
-To seed from the template:
+For **Postgres** datasets in the catalog. You can add connections in **Settings → Dataset connections** instead of editing JSON by hand.
 
 ```bash
 cp saved_db_connections.json.example saved_db_connections.json
-# Edit host, user, password, database, schema
+# edit host, user, password, database, schema
 ```
 
-Or start with an empty store — the app creates `{"connections": []}` on first use:
+Or let the app create an empty file on first use:
 
 ```bash
 echo '{"connections": []}' > saved_db_connections.json
 ```
 
-Passwords are stored in this file locally. The API never returns passwords to the browser (`password_set: true` only).
+Passwords stay on disk in that file. The API never sends them to the browser — you'll only see `password_set: true`.
 
-## What not to commit
+## After cloning
 
-- `.env`, `.env.local`, or any `.env.*` except `.env.example`
-- `saved_db_connections.json`
-- Any file containing API keys, DB passwords, or private hostnames you do not want public
-- Log and PID files under the project root
+1. Copy `.env.example` → `.env` and the connections example if you need it.
+2. Fill in your own keys and hosts.
+3. Follow [installation.md](installation.md).
 
-## Sharing the project
-
-When you clone or fork:
-
-1. Copy both example files to their local names.
-2. Fill in your own credentials.
-3. Run [Installation](installation.md) (migrate, start servers).
-
-Do not copy another developer’s `.env` or `saved_db_connections.json` into the repository.
+Don't copy someone else's `.env` into the repo, even by mistake.

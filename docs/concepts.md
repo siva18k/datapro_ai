@@ -1,22 +1,16 @@
 # Concepts
 
-## RAG (Retrieval-Augmented Generation)
+## RAG
 
-1. Files and catalog text are split into **chunks**.
-2. Each chunk is **embedded** and stored in Postgres (**pgvector**).
-3. A question finds similar chunks and sends them to an **LLM** as context.
-4. Answers are **grounded** in your data, with citations.
+RAG here is pretty standard: your files get split into chunks, each chunk gets an embedding stored in Postgres (pgvector), and when someone asks a question we find similar chunks and pass them to the LLM as context. Answers should cite the source chunks instead of making things up.
 
-Manage RAG in the UI: **Data Catalog** → add data → **RAG** → ingest → **Ask**.
+In the UI: add data under **Data Catalog**, run ingest on the **RAG** page, then ask questions on **Ask**.
 
-## MCP (Model Context Protocol)
+## MCP
 
-**MCP** lets AI assistants (Cursor, Claude Desktop) call DATA Pro — search, ingest, read resources.
+MCP (Model Context Protocol) is how external agents — Cursor, Claude Desktop, etc. — call into DATA Pro: search chunks, list sources, trigger ingest, read resources.
 
-- **Browser UI** — for people (catalog, ask, settings).
-- **MCP server** — for agents in your IDE.
-
-MCP is optional. See [MCP guide](mcp.md).
+The browser UI is for humans. The MCP server (port 8000) is for tools in your IDE. You don't need MCP to use the app; see [mcp.md](mcp.md) when you want it.
 
 ## How it fits together
 
@@ -48,13 +42,4 @@ flowchart TB
     API --> SrcDB
 ```
 
-## Typical journey
-
-```mermaid
-flowchart LR
-    A[Install] --> B[Settings: LLM + DB]
-    B --> C[Catalog: domain + dataset]
-    C --> D[Ingest / index]
-    D --> E[Ask]
-    E --> F[Optional: MCP]
-```
+Rough order of operations: install → **Settings** (LLM + DB) → catalog domain + dataset → ingest → **Ask** → optionally wire up MCP.

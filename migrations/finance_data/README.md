@@ -1,18 +1,18 @@
-# finance_data schema migration
+# finance_data demo warehouse
 
-Loads a demo **enterprise data warehouse** into PostgreSQL schema **`finance_data`** for structured SQL / analytics testing.
+Loads a fake enterprise warehouse into Postgres schema `finance_data` so you can try structured SQL and analytics without pointing at a real EDW.
 
-## Run
+## Run it
 
-**Step 1 — DBA / master (once)** if `ragpro_dev` gets `permission denied for database postgres`:
+**Step 1 — one-time DBA script** if `ragpro_dev` hits `permission denied for database postgres`:
 
 ```bash
 psql "$DATABASE_URL" -f migrations/finance_data/000_master_bootstrap.sql
 ```
 
-Run as RDS master, not the app user. This creates schema `finance_data`, grants it to `ragpro_dev`, and enables `uuid-ossp`.
+Run as RDS master (or superuser), not the app user. Creates schema `finance_data`, grants to `ragpro_dev`, enables `uuid-ossp`.
 
-**Step 2 — App user:**
+**Step 2 — app user:**
 
 ```bash
 cd data-pro
@@ -20,79 +20,47 @@ source .venv/bin/activate
 python scripts/migrate_finance_data.py --fresh
 ```
 
-Options:
+Flags:
 
-| Flag | Purpose |
-|------|---------|
-| `--fresh` | `DROP SCHEMA finance_data CASCADE` then rebuild |
-| `--all-in-one` | Use `postgres_all_in_one_edw_agentic.sql` (large synthetic dataset, `edw` model) |
-| `--dry-run` | Print statements without executing |
+- `--fresh` — drop and rebuild `finance_data`
+- `--all-in-one` — single big script (`postgres_all_in_one_edw_agentic.sql`, synthetic `edw` model)
+- `--dry-run` — print SQL, don't execute
 
-Default pipeline uses the **myedw** DDL/seed files with fixes (recommended for catalog demos).
+Default path uses the myedw DDL/seed files with fixes applied — best for catalog demos.
 
-## Source files used
+## What gets loaded
 
-| File | Role |
-|------|------|
-| `1_1_schema_core.sql` | Reference tables, calendar, extensions |
-| `1_2_schema_customer_sales.sql` | Customers, inventory products, sales |
-| `1_3_schema_hr_finance_support_docs.sql` | HR, finance, support, documents |
-| `1_4_schema_views_sanity.sql` | Views only (sanity SELECTs skipped) |
-| `02_myedw_reference_seed.sql` | Reference + calendar data |
-| `03_customer_seed.sql` | ~250 customers |
-| `05_sales_seed.sql` | Orders, invoices, payments (syntax fix applied) |
-| `06_myedw_finance_seed.sql` | GL, AP, journals |
-| `migrations/finance_data/seed_*.sql` | Fixed product, HR, support, analytics seeds |
+Core schema from `1_1` through `1_4`, reference seeds (`02`, `03`, `05`, `06`), plus fixed seeds in `migrations/finance_data/seed_*.sql` for products, HR, support, analytics.
 
-## Source files skipped (and why)
+We skip a few upstream files on purpose:
 
-| File | Reason |
-|------|--------|
-| `00_myedw_check_data.sql` | Validation SELECTs only |
-| `04_inventory_ddl.sql` | Conflicts with `inventory_products` in `1_2` |
-| `04_inventory_seed.sql` | Syntax errors; wrong inventory model |
-| `06_schema_hr.sql` | Duplicate HR DDL |
-| `07_myedw_hr_seed.sql` | Syntax errors → `seed_hr.sql` |
-| `08_myedw_support_seed.sql` | Syntax errors → `seed_support.sql` |
-| `09_analytics_fact_sales.sql` | → `seed_analytics.sql` |
+- `00_myedw_check_data.sql` — validation SELECTs only
+- `04_inventory_*` — conflicts with `inventory_products` in `1_2`
+- `06_schema_hr.sql` — duplicate HR DDL
+- `07_myedw_hr_seed.sql`, `08_myedw_support_seed.sql` — syntax issues; replaced by `seed_hr.sql` / `seed_support.sql`
+- `09_analytics_fact_sales.sql` — replaced by `seed_analytics.sql`
 
-## May require master / DBA (one-time)
+## If the app user can't create extensions
 
-If `ragpro_dev` cannot create extensions or drop schemas:
+Someone with superuser needs:
 
 ```sql
--- As RDS master / superuser
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Optional read-only role (from all-in-one script)
+-- optional read-only login
 CREATE ROLE finance_data_ro LOGIN PASSWORD 'change-me';
 GRANT USAGE ON SCHEMA finance_data TO finance_data_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA finance_data TO finance_data_ro;
 ALTER DEFAULT PRIVILEGES IN SCHEMA finance_data GRANT SELECT ON TABLES TO finance_data_ro;
 ```
 
-`CREATE EXTENSION "uuid-ossp"` is only required for the myedw pipeline (`1_1`). The `--all-in-one` path uses `pgcrypto` instead.
+`uuid-ossp` is for the myedw pipeline (`1_1`). The `--all-in-one` path uses `pgcrypto` instead.
 
-## Connect from Data Catalog
+## Hook it up in the catalog
 
-Add a Postgres dataset with:
+Add a Postgres dataset:
 
-- **Schema:** `finance_data`
-- **Host / DB:** same as `DATABASE_URL` in `.env`
-- Test connection → refresh tables → use in Ask (structured path, when wired)
+- schema: `finance_data`
+- host/database: same as `DATABASE_URL` in `.env`
 
-
-cd data-pro
-source .venv/bin/activate
-cp .env.example .env   # edit MISTRAL_API_KEY, DATABASE_URL
-pip install -r requirements.txt
-python scripts/migrate.py
-cd web && npm install && cd ..
-
-
-Start Services
-uvicorn api.main:app --reload --host 127.0.0.1 --port 8080
-python3 mcp_server.py
-cd web &&  npm run dev
-
-
+Test connection → refresh tables → use in Ask (structured path when that's wired through).

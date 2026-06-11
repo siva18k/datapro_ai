@@ -1,19 +1,7 @@
-# Finance Data
+# finance_data
 
-## Overview
-Brief description of what this dataset contains and who uses it.
+Postgres schema with the demo EDW — GL, AP, customers, sales, HR, support, reference tables. Meant for trying structured Ask and analytics against something that looks like a real warehouse without connecting to production.
 
-## Type
-postgres
+Load it with `python scripts/migrate_finance_data.py --fresh` (see migrations/finance_data/README.md). Point a Postgres dataset in the catalog at schema `finance_data`.
 
-## Purpose
-Why this dataset exists in the catalog.
-
-## Contents
-- Key entities, tables, or document types
-
-## Usage notes
-How analysts and AI should use this data.
-
-## Update cadence
-How often the data is refreshed.
+Fact tables for analytics; lookup/reference tables for joins and RAG catalog ingest. Refresh is manual — it's sample data, not a live feed.

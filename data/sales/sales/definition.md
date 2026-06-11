@@ -1,19 +1,5 @@
-# Sales
+# sales
 
-## Overview
-Brief description of what this dataset contains and who uses it.
+Sales domain dataset. Postgres — orders, invoices, line items, that kind of thing. Use it for revenue questions, pipeline-style reporting, and joins back to customer or product dimensions.
 
-## Type
-postgres
-
-## Purpose
-Why this dataset exists in the catalog.
-
-## Contents
-- Key entities, tables, or document types
-
-## Usage notes
-How analysts and AI should use this data.
-
-## Update cadence
-How often the data is refreshed.
+Update cadence depends on how you've wired the source; for the bundled demo it's static seed data. When asking questions, prefer fact tables for aggregates and dimension tables for filters (region, product category, etc.).

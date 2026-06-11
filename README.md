@@ -1,59 +1,61 @@
 # DATA Pro
 
-Multi-domain knowledge and analytics — catalog your data, embed documents, ask questions, and optionally connect AI assistants via MCP.
+Catalog your data, embed documents, ask questions across domains, and hook up Cursor or Claude via MCP if you want agents in the loop.
 
-**Stack:** React · FastAPI · PostgreSQL + pgvector · sentence-transformers · Mistral or Ollama
+Built with React, FastAPI, Postgres + pgvector, sentence-transformers, and Mistral or Ollama for the LLM.
 
-## Quick start
+## Get running
 
 ```bash
 git clone https://github.com/siva18k/datapro_ai.git data-pro
 cd data-pro
 cp .env.example .env
-# Set MISTRAL_API_KEY in .env (or DEFAULT_LLM_BACKEND=ollama)
+# Put your MISTRAL_API_KEY in .env — or set DEFAULT_LLM_BACKEND=ollama
 # Optional: cp saved_db_connections.json.example saved_db_connections.json
 
 docker compose up --build
 ```
 
-Open **http://localhost:5173**
+Then open http://localhost:5173
 
-Local dev (no Docker): see [docs/installation.md](docs/installation.md).
+Prefer running things locally without Docker? See [docs/installation.md](docs/installation.md).
 
-## What you can do
+## What it does
 
-- **Data Catalog** — domains, datasets, Postgres connections, file uploads  
-- **Ask** — chat over documents (RAG) or structured SQL  
-- **Analytics** — dashboards from natural language  
-- **RAG** — chunk settings and embedding ingest  
-- **MCP** — tools for Cursor / Claude Desktop  
+**Data Catalog** — domains, datasets, Postgres connections, file uploads.
 
-New to RAG or MCP? Start with [docs/concepts.md](docs/concepts.md).
+**Ask** — chat over your documents (RAG) or structured SQL when you have Postgres datasets wired up.
 
-## Documentation
+**Analytics** — build dashboards from plain English.
 
-| Guide | Description |
-|-------|-------------|
-| [docs/README.md](docs/README.md) | Documentation index |
-| [Installation](docs/installation.md) | Setup, credentials, scripts |
-| [Secrets & local config](docs/secrets.md) | `.env` and saved connections (templates only in git) |
-| [Docker](docs/docker.md) | Compose, services, Ollama |
-| [User guide](docs/user-guide.md) | Domains, datasets, RAG, UI |
-| [MCP](docs/mcp.md) | MCP server and client config |
-| [Architecture](docs/architecture.md) | System design and data flows |
-| [Troubleshooting](docs/troubleshooting.md) | Common fixes |
+**RAG** — chunk settings and embedding ingest.
 
-**Demo data:** [migrations/finance_data/README.md](migrations/finance_data/README.md)
+**MCP** — same knowledge base, but callable from Cursor / Claude Desktop.
 
-## URLs (default)
+If RAG or MCP are new to you, [docs/concepts.md](docs/concepts.md) explains both in a few minutes.
 
-| URL | Service |
-|-----|---------|
+## Docs
+
+- [docs/README.md](docs/README.md) — index
+- [Installation](docs/installation.md) — setup and scripts
+- [Secrets](docs/secrets.md) — `.env` and saved connections (templates only in git)
+- [Docker](docs/docker.md) — compose, services, Ollama on the host
+- [User guide](docs/user-guide.md) — catalog, ingest, Ask
+- [MCP](docs/mcp.md) — server and client config
+- [Architecture](docs/architecture.md) — how the pieces fit
+- [Troubleshooting](docs/troubleshooting.md) — when something breaks
+
+Demo warehouse SQL: [migrations/finance_data/README.md](migrations/finance_data/README.md)
+
+## Default URLs
+
+| URL | What |
+|-----|------|
 | http://localhost:5173 | UI |
 | http://localhost:8080/docs | API (OpenAPI) |
 | http://127.0.0.1:8000/mcp | MCP |
 
-## Project layout
+## Layout
 
 ```
 api/              FastAPI backend
@@ -68,4 +70,4 @@ sample_docs/      Example files
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE) — free to use, copy, modify, and distribute. Only the repository owner can push changes; everyone else can clone and use the code read-only from GitHub.
+MIT — see [LICENSE](LICENSE). Clone and use it however you like; only the repo owner can push changes upstream.

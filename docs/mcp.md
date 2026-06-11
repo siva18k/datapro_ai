@@ -1,18 +1,18 @@
-# MCP Server
+# MCP server
 
-DATA Pro exposes a **Model Context Protocol** server so Cursor, Claude Desktop, and other agents can search and ingest your knowledge base. Same `.env` and Postgres store as the UI.
+Same Postgres and `.env` as the web app — agents just talk to port 8000 instead of the React UI.
 
-## Start MCP
+## Start it
 
-- **Docker:** `docker compose up datapro-mcp` (or full stack)
-- **Local:** `python mcp_server.py`
-- **UI:** **Settings → MCP server → Start** or **MCP** page
+- Docker: `docker compose up datapro-mcp` (or the full stack)
+- Local: `python mcp_server.py`
+- UI: **Settings → MCP server → Start**, or the **MCP** page
 
-Endpoint: **http://127.0.0.1:8000/mcp**
+Endpoint: http://127.0.0.1:8000/mcp
 
-## Connect Cursor / Claude Desktop
+## Cursor / Claude Desktop
 
-Copy JSON from the **MCP** page, or use:
+Grab the JSON from the **MCP** page, or paste something like:
 
 ```json
 {
@@ -24,9 +24,9 @@ Copy JSON from the **MCP** page, or use:
 }
 ```
 
-After editing prompts or domain bindings → **Restart MCP**.
+Restart MCP after you change prompts or domain bindings.
 
-### stdio mode
+**stdio mode** (some clients want this):
 
 ```bash
 MCP_TRANSPORT=stdio python mcp_server.py
@@ -34,41 +34,37 @@ MCP_TRANSPORT=stdio python mcp_server.py
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
+| Tool | What it does |
+|------|----------------|
 | `search_documents` | Semantic search over chunks |
-| `list_sources` | Ingested files and chunk counts |
+| `list_sources` | Files + chunk counts |
 | `get_chunk` | One chunk by file + id |
-| `knowledge_base_stats` | Totals and embedding model |
+| `knowledge_base_stats` | Totals, embedding model |
 | `list_available_documents` | Files under `sample_docs/` |
-| `ingest_documents` | Ingest into knowledge base |
+| `ingest_documents` | Run ingest |
 | `list_domains` | Catalog domains |
 | `list_domain_sources` | Sources in a domain |
 
-## Resources (URIs)
+## Resources (`ragpro://` URIs)
 
-| URI | Description |
-|-----|-------------|
+| URI | Content |
+|-----|---------|
 | `ragpro://knowledge-base/stats` | DB stats (JSON) |
 | `ragpro://knowledge-base/sources` | Ingested sources |
-| `ragpro://chunks/{source_file}/{chunk_id}` | One chunk |
+| `ragpro://chunks/{source_file}/{chunk_id}` | Single chunk |
 | `ragpro://documents/{source_file}` | All chunks for a file |
 | `ragpro://sample-docs/{file_name}` | Raw file from `sample_docs/` |
 | `ragpro://domains` | Domain list |
-| `ragpro://domains/{domain}/sources` | Domain sources |
+| `ragpro://domains/{domain}/sources` | Sources in domain |
 | `ragpro://domains/{domain}/stats` | Domain stats |
-
-URIs use the `ragpro://` scheme (internal, stable).
 
 ## Prompts
 
-| Prompt | Purpose |
-|--------|---------|
-| `citation_rules` | Grounding instructions |
-| `grounded_answer` | Retrieve + build prompt |
-| `summarize_document` | Summarize one document |
+- `citation_rules` — grounding instructions
+- `grounded_answer` — retrieve + build prompt
+- `summarize_document` — one-doc summary
 
-## Environment
+## Env vars
 
 | Variable | Default |
 |----------|---------|
@@ -79,12 +75,12 @@ URIs use the `ragpro://` scheme (internal, stable).
 | `DATABASE_URL` / `PG*` | Same as API |
 | `DB_SCHEMA` | `ragpro` |
 
-## Agent flow
+## Typical agent flow
 
-1. `knowledge_base_stats` or `list_sources` — check data exists.
-2. `search_documents(query="...", top_k=3)`.
-3. Answer with `[source_file - chunk_id]` citations.
+1. `knowledge_base_stats` or `list_sources` — make sure there's data
+2. `search_documents(query="...", top_k=3)`
+3. Answer with `[source_file - chunk_id]` citations
 
 Or read `ragpro://knowledge-base/stats` and use the `grounded_answer` prompt.
 
-Ingest via UI (**RAG** page), `ingest_documents` tool, or `python ingest.py`.
+Ingest from the **RAG** page, the `ingest_documents` tool, or `python ingest.py`.
