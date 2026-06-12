@@ -13,7 +13,6 @@ export function AskRetrievalPanel({
   outputFormats,
   onOutputFormatsChange,
   debugMode,
-  onDebugModeChange,
 }: {
   topK: number;
   onTopKChange: (value: number) => void;
@@ -21,8 +20,7 @@ export function AskRetrievalPanel({
   onDomainOverrideChange: (value: string) => void;
   outputFormats: OutputFormat[];
   onOutputFormatsChange: (value: OutputFormat[]) => void;
-  debugMode: boolean;
-  onDebugModeChange: (value: boolean) => void;
+  debugMode?: boolean;
 }) {
   const collapsed = useSidebarCollapsed();
   const { data: domains } = useQuery({
@@ -63,14 +61,24 @@ export function AskRetrievalPanel({
       <div className="sidebar-panel sidebar-panel-compact">
         <p className="sidebar-panel-title">Retrieval</p>
         <div className="sidebar-field">
-          <label className="sidebar-label">Top K</label>
+          <div className="sidebar-label-row">
+            <label className="sidebar-label mb-0" htmlFor="ask-top-k">
+              Top K
+            </label>
+            <span className="sidebar-range-value">{topK}</span>
+          </div>
           <input
-            type="number"
-            className="input"
+            id="ask-top-k"
+            type="range"
+            className="sidebar-range"
             min={1}
             max={8}
+            step={1}
             value={topK}
             onChange={(e) => onTopKChange(Number(e.target.value))}
+            aria-valuemin={1}
+            aria-valuemax={8}
+            aria-valuenow={topK}
           />
         </div>
         <div className="sidebar-field mb-0">
@@ -84,17 +92,6 @@ export function AskRetrievalPanel({
             ))}
           </select>
         </div>
-        <label className="sidebar-check mt-3 flex cursor-pointer items-center gap-2 text-sm text-zinc-600">
-          <input
-            type="checkbox"
-            checked={debugMode}
-            onChange={(e) => onDebugModeChange(e.target.checked)}
-          />
-          Debug mode
-        </label>
-        {debugMode && (
-          <p className="mt-1 text-xs text-zinc-500">Sources &amp; chunk IDs per answer</p>
-        )}
       </div>
       <AskOutputOptions selected={outputFormats} onChange={onOutputFormatsChange} />
     </>

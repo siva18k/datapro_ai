@@ -152,6 +152,19 @@ def knowledge_chunks_has_source_chunk_unique() -> bool:
     return _SOURCE_CHUNK_UNIQUE
 
 
+def chunk_verify_sql(source_file: str, chunk_id: str) -> str:
+    """Read-only SQL to inspect a retrieved chunk in knowledge_chunks."""
+    schema = _safe_identifier(get_db_config()["schema"])
+    sf = source_file.replace("'", "''")
+    cid = chunk_id.replace("'", "''")
+    return (
+        f"SELECT id, source_file, chunk_id, domain_id, source_id,\n"
+        f"       LEFT(content, 300) AS content_preview, updated_at\n"
+        f"FROM {schema}.knowledge_chunks\n"
+        f"WHERE source_file = '{sf}' AND chunk_id = '{cid}';"
+    )
+
+
 def search_chunks(
     question,
     embedder,

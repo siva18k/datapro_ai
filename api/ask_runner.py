@@ -8,18 +8,68 @@ from typing import Any
 from api.answer_format import build_sql_summary_prompt
 from api.llm import generate_answer, resolve_llm_runtime
 from catalog_service import ensure_catalog_ready
-from db import search_chunks
-from mcp_client import get_default_mcp_url
+from db import chunk_verify_sql, search_chunks
+from mcp_client import check_mcp_server, get_default_mcp_url
 from mcp_client import search_documents as mcp_search_documents
 from orchestrator import build_domain_rag_prompt, strip_source_citations, _legacy_query_kind
 from query_planner import find_best_rag_domain, resolve_query_plan, structured_fallback_available
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
 
-from api.ask_models import AskRequest, AskResponse, SourceChunk
+from api.ask_models import (
+    AskRequest,
+    AskResponse,
+    PipelineChunkRef,
+    PipelineTraceDetail,
+    PipelineTraceStep,
+    SourceChunk,
+)
 
 
 def _status(message: str) -> dict[str, Any]:
     return {"type": "status", "message": message}
+
+
+def _trace_event(body: AskRequest, message: str, phase: str, **detail: Any) -> dict[str, Any]:
+    cleaned = {k: v for k, v in detail.items() if v is not None}
+    step = PipelineTraceStep(
+        message=message,
+        phase=phase,
+        detail=PipelineTraceDetail(**cleaned) if cleaned else None,
+    )
+    return {"type": "trace", "step": step.model_dump()}
+
+
+def _maybe_trace(body: AskRequest, message: str, phase: str, **detail: Any) -> Iterator[dict[str, Any]]:
+    if body.debug:
+        yield _trace_event(body, message, phase, **detail)
+
+
+def _truncate_debug_text(text: str, max_len: int = 6000) -> str:
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len]}\n… [truncated]"
+
+
+def _chunk_refs(chunks: list[dict]) -> list[PipelineChunkRef]:
+    refs: list[PipelineChunkRef] = []
+    for chunk in chunks:
+        source_file = chunk.get("source", chunk.get("source_file", ""))
+        chunk_id = chunk.get("chunk_id", "")
+        if not source_file or not chunk_id:
+            continue
+        text = chunk.get("text") or ""
+        refs.append(
+            PipelineChunkRef(
+                source_file=source_file,
+                chunk_id=chunk_id,
+                distance=chunk.get("distance"),
+                domain_id=chunk.get("domain_id"),
+                source_id=chunk.get("source_id"),
+                text_preview=text[:280] + ("…" if len(text) > 280 else "") if text else None,
+                verify_sql=chunk_verify_sql(source_file, chunk_id),
+            )
+        )
+    return refs
 
 
 def _result(response: AskResponse) -> dict[str, Any]:
@@ -28,6 +78,66 @@ def _result(response: AskResponse) -> dict[str, Any]:
 
 def _error(message: str) -> dict[str, Any]:
     return {"type": "error", "message": message}
+
+
+def _usage_event(usage: dict[str, bool]) -> dict[str, Any]:
+    return {"type": "usage", "rag": usage.get("rag", False), "mcp": usage.get("mcp", False)}
+
+
+def _mark_rag(usage: dict[str, bool]) -> Iterator[dict[str, Any]]:
+    if usage.get("rag"):
+        return
+    usage["rag"] = True
+    yield _usage_event(usage)
+
+
+def _mark_mcp(usage: dict[str, bool]) -> Iterator[dict[str, Any]]:
+    changed = False
+    if not usage.get("rag"):
+        usage["rag"] = True
+        changed = True
+    if not usage.get("mcp"):
+        usage["mcp"] = True
+        changed = True
+    if changed:
+        yield _usage_event(usage)
+
+
+def _response_from_meta(meta: dict[str, Any], **kwargs: Any) -> AskResponse:
+    usage = meta.get("usage") or {}
+    return AskResponse(
+        used_rag=bool(usage.get("rag")),
+        used_mcp=bool(usage.get("mcp")),
+        **kwargs,
+    )
+
+
+def _vector_search_chunks(
+    body: AskRequest,
+    embedder,
+    meta: dict[str, Any],
+    domain_id: str | None,
+) -> list[dict]:
+    chunks = search_chunks(
+        body.question,
+        embedder,
+        top_k=body.top_k,
+        domain_id=domain_id,
+    )
+    if not chunks:
+        best_domain, chunks = find_best_rag_domain(
+            body.question, embedder, top_k=body.top_k, prefer_domain_id=domain_id
+        )
+        if best_domain and best_domain["id"] != domain_id:
+            meta["domain_id"] = best_domain["id"]
+            meta["domain_name"] = best_domain["name"]
+            meta["routing"] = {
+                **(meta.get("routing") or {}),
+                "domain_id": best_domain["id"],
+                "domain_name": best_domain["name"],
+                "domain_slug": best_domain.get("slug"),
+            }
+    return chunks
 
 
 def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
@@ -39,6 +149,15 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         base_url=body.ollama_base_url,
     )
 
+    yield from _maybe_trace(
+        body,
+        "Question received",
+        "input",
+        question=body.question,
+        top_k=body.top_k,
+        domain_override=body.domain_override,
+    )
+
     yield _status("Routing question to the best domain and dataset…")
     plan = resolve_query_plan(body.question, embedder, domain_override=body.domain_override)
     routing = plan.routing
@@ -46,16 +165,44 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
 
     if method == "override" and plan.domain_name:
         yield _status(f"Using {plan.domain_name} domain (your selection).")
+        routing_msg = f"Using {plan.domain_name} domain (your selection)."
     elif plan.domain_name:
         yield _status(f"Matched {plan.domain_name} domain.")
+        routing_msg = f"Matched {plan.domain_name} domain."
     else:
         yield _status("No single domain match — searching all domains.")
+        routing_msg = "No single domain match — searching all domains."
+
+    yield from _maybe_trace(
+        body,
+        routing_msg,
+        "routing",
+        domain_id=plan.domain_id,
+        domain_name=plan.domain_name,
+        routing_method=routing.get("method"),
+        routing_confidence=routing.get("confidence"),
+        execution_kind=plan.execution_kind,
+        source_id=plan.source_id,
+        source_name=plan.source_name,
+    )
 
     for note in plan.notes:
         yield _status(note)
+        yield from _maybe_trace(body, note, "routing")
 
     if plan.source_name and plan.execution_kind in ("sql", "hybrid"):
-        yield _status(f"Selected dataset «{plan.source_name}» ({plan.execution_kind.upper()} path).")
+        dataset_msg = f"Selected dataset «{plan.source_name}» ({plan.execution_kind.upper()} path)."
+        yield _status(dataset_msg)
+        yield from _maybe_trace(
+            body,
+            dataset_msg,
+            "sql",
+            source_id=plan.source_id,
+            source_name=plan.source_name,
+            domain_id=plan.domain_id,
+            domain_name=plan.domain_name,
+            execution_kind=plan.execution_kind,
+        )
 
     meta: dict[str, Any] = {
         "routing": routing,
@@ -65,6 +212,7 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         "query_kind": _legacy_query_kind(plan.execution_kind),
         "source_id": plan.source_id,
         "source_name": plan.source_name,
+        "usage": {"rag": False, "mcp": False},
     }
 
     llm = (llm_backend, llm_model, llm_base_url)
@@ -103,7 +251,17 @@ def _structured_events(
 
     ctx = plan.schema_context
     table_count = len(ctx.tables)
-    yield _status(f"Using dataset «{ctx.source_name}» ({table_count} cataloged tables).")
+    dataset_msg = f"Using dataset «{ctx.source_name}» ({table_count} cataloged tables)."
+    yield _status(dataset_msg)
+    yield from _maybe_trace(
+        body,
+        dataset_msg,
+        "sql",
+        source_id=plan.source_id,
+        source_name=ctx.source_name,
+        domain_id=meta.get("domain_id"),
+        domain_name=domain_name,
+    )
 
     yield _status("Generating SQL from schema definitions…")
 
@@ -117,10 +275,21 @@ def _structured_events(
             base_url=llm_base_url,
         )
         yield _status("Running read-only query on the database…")
+        yield from _maybe_trace(
+            body,
+            "SQL generated — executing read-only query",
+            "sql",
+            sql=plan.sql,
+            source_id=plan.source_id,
+            source_name=ctx.source_name,
+            domain_id=meta.get("domain_id"),
+            domain_name=domain_name,
+        )
     except Exception as exc:
         if execution_kind == "sql":
             yield _result(
-                AskResponse(
+                _response_from_meta(
+                    meta,
                     answer=f"I could not query the database for this question: {exc}",
                     domain_name=domain_name,
                     routing_method=routing.get("method"),
@@ -135,8 +304,19 @@ def _structured_events(
         return
 
     row_count = len(rows)
-    yield _status(
-        f"Retrieved {row_count} row{'s' if row_count != 1 else ''} — summarizing answer…"
+    rows_msg = f"Retrieved {row_count} row{'s' if row_count != 1 else ''} — summarizing answer…"
+    yield _status(rows_msg)
+    yield from _maybe_trace(
+        body,
+        rows_msg,
+        "sql",
+        sql=plan.sql,
+        source_id=plan.source_id,
+        source_name=ctx.source_name,
+        domain_id=meta.get("domain_id"),
+        domain_name=domain_name,
+        columns=columns,
+        row_count=row_count,
     )
 
     summary_prompt = build_sql_summary_prompt(
@@ -165,6 +345,8 @@ def _structured_events(
         yield _status("Also searching ingested documents…")
         for event in _rag_search_events(body, embedder, meta):
             if event["type"] == "status":
+                yield event
+            elif event["type"] == "usage":
                 yield event
             elif event["type"] == "_chunks":
                 chunks = event["chunks"]
@@ -196,8 +378,21 @@ def _structured_events(
     if not body.debug:
         answer = strip_source_citations(answer)
 
+    yield from _maybe_trace(
+        body,
+        "Answer generated and displayed above",
+        "output",
+        execution_kind=execution_kind,
+        query_kind="structured" if execution_kind == "sql" else "hybrid",
+        domain_id=meta.get("domain_id"),
+        domain_name=domain_name,
+        sql=plan.sql if execution_kind in ("sql", "hybrid") else None,
+        row_count=row_count,
+    )
+
     yield _result(
-        AskResponse(
+        _response_from_meta(
+            meta,
             answer=answer,
             question=body.question,
             domain_name=domain_name,
@@ -217,44 +412,118 @@ def _rag_search_events(
     embedder,
     meta: dict[str, Any],
 ) -> Iterator[dict[str, Any]]:
-    """Search chunks; final event is internal _chunks payload."""
+    """Search documents via MCP when the server is reachable, else local vector search."""
+    usage = meta.setdefault("usage", {"rag": False, "mcp": False})
     domain_id = meta.get("domain_id")
-    if body.use_mcp:
+    url = body.mcp_url or get_default_mcp_url()
+    domain_arg = meta.get("routing", {}).get("domain_slug") or meta.get("domain_name")
+    chunks: list[dict] = []
+    retrieval = "vector"
+
+    if check_mcp_server(url):
+        yield from _mark_mcp(usage)
         yield _status("Searching documents via MCP server…")
-        url = body.mcp_url or get_default_mcp_url()
-        domain_arg = meta.get("routing", {}).get("domain_slug") or meta.get("domain_name")
-        chunks = mcp_search_documents(
-            url,
-            body.question,
+        mcp_args: dict[str, Any] = {"query": body.question, "top_k": body.top_k}
+        if domain_id and domain_arg:
+            mcp_args["domain"] = domain_arg
+        yield from _maybe_trace(
+            body,
+            "MCP session connecting",
+            "mcp",
+            retrieval="mcp",
+            mcp_url=url,
+            retrieval_query=body.question,
             top_k=body.top_k,
-            domain=domain_arg if domain_id else None,
+            domain_id=domain_id,
+            domain_name=meta.get("domain_name"),
         )
-    else:
-        yield _status(f"Searching ingested documents (top {body.top_k} chunks)…")
+        yield from _maybe_trace(
+            body,
+            "MCP tool call: search_documents",
+            "mcp",
+            retrieval="mcp",
+            mcp_url=url,
+            mcp_tool="search_documents",
+            mcp_arguments=mcp_args,
+            retrieval_query=body.question,
+            top_k=body.top_k,
+            domain_id=domain_id,
+            domain_name=meta.get("domain_name"),
+        )
+        try:
+            chunks = mcp_search_documents(
+                url,
+                body.question,
+                top_k=body.top_k,
+                domain=domain_arg if domain_id else None,
+            )
+            retrieval = "mcp"
+        except Exception as exc:
+            yield _status(f"MCP search failed ({exc}) — using local index…")
+            chunks = []
+
+        if chunks:
+            yield from _maybe_trace(
+                body,
+                f"MCP tool returned {len(chunks)} chunk(s)",
+                "mcp",
+                retrieval="mcp",
+                mcp_url=url,
+                mcp_tool="search_documents",
+                mcp_arguments=mcp_args,
+                retrieval_query=body.question,
+                top_k=body.top_k,
+                domain_id=domain_id,
+                domain_name=meta.get("domain_name"),
+                chunks=_chunk_refs(chunks),
+            )
+
+    if not chunks:
+        search_msg = f"Searching ingested documents (top {body.top_k} chunks)…"
+        yield _status(search_msg)
+        yield from _maybe_trace(
+            body,
+            search_msg,
+            "rag",
+            retrieval="vector",
+            retrieval_query=body.question,
+            top_k=body.top_k,
+            domain_id=domain_id,
+            domain_name=meta.get("domain_name"),
+        )
+        domain_id_before = meta.get("domain_id")
+        if retrieval == "mcp":
+            yield _status("No MCP results — searching local index…")
         chunks = search_chunks(
             body.question,
             embedder,
             top_k=body.top_k,
-            domain_id=domain_id,
+            domain_id=domain_id_before,
         )
         if not chunks:
-            yield _status("No chunks in this domain — searching other domains…")
-            best_domain, chunks = find_best_rag_domain(
-                body.question, embedder, top_k=body.top_k, prefer_domain_id=domain_id
-            )
-            if best_domain and best_domain["id"] != domain_id:
-                meta["domain_id"] = best_domain["id"]
-                meta["domain_name"] = best_domain["name"]
-                meta["routing"] = {
-                    **(meta.get("routing") or {}),
-                    "domain_id": best_domain["id"],
-                    "domain_name": best_domain["name"],
-                    "domain_slug": best_domain.get("slug"),
-                }
-                yield _status(f"Found relevant documents in {best_domain['name']} domain.")
+            if domain_id_before:
+                yield _status("No chunks in this domain — searching other domains…")
+            chunks = _vector_search_chunks(body, embedder, meta, domain_id_before)
+        if chunks and meta.get("domain_id") != domain_id_before:
+            domain_name = meta.get("domain_name")
+            if domain_name:
+                yield _status(f"Found relevant documents in {domain_name} domain.")
+        yield from _mark_rag(usage)
+        retrieval = "vector"
 
     if chunks:
-        yield _status(f"Found {len(chunks)} relevant chunk(s).")
+        found_msg = f"Found {len(chunks)} relevant chunk(s)."
+        yield _status(found_msg)
+        yield from _maybe_trace(
+            body,
+            found_msg,
+            "rag" if retrieval == "vector" else "mcp",
+            retrieval=retrieval,
+            top_k=body.top_k,
+            domain_id=meta.get("domain_id"),
+            domain_name=meta.get("domain_name"),
+            chunks=_chunk_refs(chunks),
+        )
     yield {"type": "_chunks", "chunks": chunks}
 
 
@@ -271,6 +540,8 @@ def _rag_events(
     chunks: list[dict] = []
     for event in _rag_search_events(body, embedder, meta):
         if event["type"] == "status":
+            yield event
+        elif event["type"] == "usage":
             yield event
         elif event["type"] == "_chunks":
             chunks = event["chunks"]
@@ -298,7 +569,8 @@ def _rag_events(
         if structured:
             yield _status("No catalog embeddings found for this domain yet.")
             yield _result(
-                AskResponse(
+                _response_from_meta(
+                    meta,
                     answer=(
                         "I could not find embedded catalog metadata for this question. "
                         "Try rephrasing as an analytical question (counts, totals, lists) to run SQL, "
@@ -315,7 +587,8 @@ def _rag_events(
 
         yield _status("No matching documents found in any domain.")
         yield _result(
-            AskResponse(
+            _response_from_meta(
+                meta,
                 answer="I do not know based on the provided documents.",
                 domain_name=domain_name,
                 routing_method=routing.get("method"),
@@ -326,13 +599,24 @@ def _rag_events(
         )
         return
 
-    yield _status("Generating answer from document context…")
+    gen_msg = "Generating answer from document context…"
+    yield _status(gen_msg)
     domain_name = meta.get("domain_name") or domain_name
     _, prompt = build_domain_rag_prompt(
         body.question,
         chunks,
         domain_name=domain_name,
         cite_sources=body.debug,
+    )
+    yield from _maybe_trace(
+        body,
+        gen_msg,
+        "llm",
+        domain_id=meta.get("domain_id"),
+        domain_name=domain_name,
+        retrieval_query=body.question,
+        llm_prompt=_truncate_debug_text(prompt) if body.debug else None,
+        chunks=_chunk_refs(chunks),
     )
     answer = generate_answer(
         prompt,
@@ -352,8 +636,21 @@ def _rag_events(
         )
         for c in chunks
     ]
+
+    yield from _maybe_trace(
+        body,
+        "Answer generated and displayed above",
+        "output",
+        execution_kind=meta.get("execution_kind"),
+        query_kind=meta.get("query_kind"),
+        domain_id=meta.get("domain_id"),
+        domain_name=domain_name,
+        chunks=_chunk_refs(chunks),
+    )
+
     yield _result(
-        AskResponse(
+        _response_from_meta(
+            meta,
             answer=answer,
             question=body.question,
             domain_name=domain_name,

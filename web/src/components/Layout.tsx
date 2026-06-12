@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { ApiOfflineBanner } from "./ApiOfflineBanner";
+import { SystemReadinessBanner } from "./SystemReadinessBanner";
 import { AppBrand } from "./AppBrand";
 import {
   SIDEBAR_COLLAPSED_WIDTH,
@@ -178,6 +179,7 @@ export function Layout() {
 
         <div className="page-content">
           <ApiOfflineBanner />
+          <SystemReadinessBanner />
           <Outlet />
         </div>
       </main>

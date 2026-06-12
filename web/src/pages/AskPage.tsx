@@ -1,13 +1,15 @@
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AskOutputChips } from "../components/AskOutputChips";
+import { AskPipelineSteps } from "../components/AskPipelineSteps";
 import { ChatAssistantMessage } from "../components/ChatAssistantMessage";
 import type { OutputFormat } from "../components/AskOutputOptions";
+import { AskPromptComposer, buildAskQuestion, type AskAttachment } from "../components/AskPromptComposer";
 import { AskRetrievalPanel } from "../components/AskRetrievalPanel";
 import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
-import type { AskSource } from "../types";
+import type { AskSource, PipelineTraceStep } from "../types";
 import { stripSourceCitations } from "../utils/answerDisplay";
 
 interface Message {
@@ -20,6 +22,15 @@ interface Message {
   columns?: string[];
   rows?: unknown[][];
   sources?: AskSource[];
+  pipeline_trace?: PipelineTraceStep[];
+}
+
+interface AskMutationInput {
+  question: string;
+  displayQuestion: string;
+  topK: number;
+  domainOverride: string;
+  debug: boolean;
 }
 
 export function AskPage() {
@@ -29,8 +40,30 @@ export function AskPage() {
   const [domainOverride, setDomainOverride] = useState("");
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>([]);
   const [debugMode, setDebugMode] = useState(false);
+  const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   const messagesRef = useRef<HTMLDivElement>(null);
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
+  const [pipelineTrace, setPipelineTrace] = useState<PipelineTraceStep[]>([]);
+  const pipelineTraceRef = useRef<PipelineTraceStep[]>([]);
+
+  const appendPipelineTrace = (step: PipelineTraceStep) => {
+    const prev = pipelineTraceRef.current;
+    const last = prev[prev.length - 1];
+    if (last?.message === step.message && last?.phase === step.phase) return;
+    const next = [...prev, step];
+    pipelineTraceRef.current = next;
+    setPipelineTrace(next);
+  };
+
+  const resetPipelineTrace = () => {
+    pipelineTraceRef.current = [];
+    setPipelineTrace([]);
+  };
+
+  const handleDebugModeChange = (enabled: boolean) => {
+    setDebugMode(enabled);
+    if (!enabled) resetPipelineTrace();
+  };
 
   const sidebarPanel = useMemo(
     () => (
@@ -42,7 +75,6 @@ export function AskPage() {
         outputFormats={outputFormats}
         onOutputFormatsChange={setOutputFormats}
         debugMode={debugMode}
-        onDebugModeChange={setDebugMode}
       />
     ),
     [topK, domainOverride, outputFormats, debugMode],
@@ -50,30 +82,41 @@ export function AskPage() {
   useSetSidebarContent(sidebarPanel);
 
   const ask = useMutation({
-    mutationFn: (question: string) =>
+    mutationFn: ({ question, topK, domainOverride, debug }: AskMutationInput) =>
       api.askStream(
         {
           question,
           top_k: topK,
           domain_override: domainOverride || undefined,
-          debug: debugMode,
+          debug,
         },
         (message) => setActivityStatus(message),
+        debug ? (step) => appendPipelineTrace(step) : undefined,
       ),
     onSettled: () => setActivityStatus(null),
-    onSuccess: (res, question) => {
+    onError: (_err, variables) => {
+      if (variables.debug) {
+        appendPipelineTrace({
+          message: "Request failed — see error above",
+          phase: "output",
+        });
+      }
+    },
+    onSuccess: (res, variables) => {
+      const completedTrace = variables.debug ? [...pipelineTraceRef.current] : undefined;
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
           content: res.answer,
-          question: res.question ?? question,
+          question: res.question ?? variables.displayQuestion,
           domain_name: res.domain_name,
           query_kind: res.query_kind,
           sql: res.sql,
           columns: res.columns,
           rows: res.rows,
           sources: res.sources,
+          pipeline_trace: completedTrace,
         },
       ]);
     },
@@ -85,30 +128,44 @@ export function AskPage() {
   }, [messages, ask.isPending]);
 
   const submitQuestion = () => {
-    const q = input.trim();
+    const q = buildAskQuestion(input, attachments);
     if (!q || ask.isPending) return;
-    setMessages((prev) => [...prev, { role: "user", content: q }]);
+    if (debugMode) resetPipelineTrace();
+    const displayQuestion = input.trim();
+    setMessages((prev) => [...prev, { role: "user", content: displayQuestion }]);
     setInput("");
-    ask.mutate(q);
+    setAttachments([]);
+    ask.mutate({
+      question: q,
+      displayQuestion,
+      topK,
+      domainOverride,
+      debug: debugMode,
+    });
   };
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    submitQuestion();
-  };
-
-  const onPromptKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submitQuestion();
+  const lastAssistantTrace = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" && m.pipeline_trace?.length) return m.pipeline_trace;
     }
-  };
+    return [];
+  }, [messages]);
+
+  const visiblePipelineTrace = ask.isPending ? pipelineTrace : lastAssistantTrace;
 
   return (
     <div className="ask-page">
       <div className="shrink-0">
       <PageHeader title="Ask" description="Q&A across domains">
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setMessages([])}>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => {
+            setMessages([]);
+            resetPipelineTrace();
+          }}
+        >
           New chat
         </button>
       </PageHeader>
@@ -124,7 +181,6 @@ export function AskPage() {
           outputFormats={outputFormats}
           onOutputFormatsChange={setOutputFormats}
           debugMode={debugMode}
-          onDebugModeChange={setDebugMode}
         />
       </div>
 
@@ -199,35 +255,34 @@ export function AskPage() {
 
         {ask.isPending && (
           <div className="ask-status shrink-0">
-            <p className="ask-activity" role="status" aria-live="polite">
-              {activityStatus ?? "Starting…"}
-            </p>
+            <div className="ask-composer-stack">
+              <p className="ask-composer-status" role="status" aria-live="polite">
+                {activityStatus ?? "Starting…"}
+              </p>
+            </div>
           </div>
         )}
 
         <div className="ask-composer shrink-0 border-t border-zinc-100">
-          <form onSubmit={submit} className="ask-prompt-form">
-            <div
-              className={`ask-prompt-shell${ask.isPending ? " ask-prompt-shell--active" : ""}`}
-            >
-              <textarea
-                className="ask-prompt"
-                rows={2}
-                placeholder="Ask a question… (Shift+Enter for new line)"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={onPromptKeyDown}
-                disabled={ask.isPending}
-                aria-busy={ask.isPending}
-              />
-            </div>
-            <button type="submit" className="btn shrink-0" disabled={ask.isPending || !input.trim()}>
-              Send
-            </button>
-          </form>
-          {ask.isError && <p className="alert-error mt-2">{String(ask.error)}</p>}
+          <AskPromptComposer
+            value={input}
+            onChange={setInput}
+            onSubmit={submitQuestion}
+            isPending={ask.isPending}
+            error={ask.isError ? String(ask.error) : null}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
+            debugMode={debugMode}
+            onDebugModeChange={handleDebugModeChange}
+          />
         </div>
       </div>
+
+      {debugMode && visiblePipelineTrace.length > 0 && (
+        <div className="ask-pipeline-panel shrink-0">
+          <AskPipelineSteps steps={visiblePipelineTrace} isActive={ask.isPending} />
+        </div>
+      )}
     </div>
   );
 }

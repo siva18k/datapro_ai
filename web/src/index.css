@@ -247,9 +247,69 @@ button.sidebar-hint {
   @apply mx-auto w-full max-w-6xl px-4 pb-6 sm:px-8;
   padding-top: 1.125rem;
 }
+
+/* —— Top message bars (API offline, readiness, etc.) —— */
+.message-bar {
+  @apply -mx-4 mb-4 border-b px-4 py-3 text-sm sm:-mx-8 sm:px-8;
+}
+.message-bar--warning {
+  @apply border-amber-200 bg-amber-50 text-amber-950;
+}
+[data-theme="dark"] .message-bar--warning {
+  @apply border-amber-900/60 bg-amber-950/40 text-amber-100;
+}
+.message-bar-inner {
+  @apply mx-auto flex max-w-6xl flex-wrap items-start justify-between gap-3;
+}
+.message-bar-title {
+  @apply font-medium;
+}
+.message-bar-list {
+  @apply mt-1 list-disc space-y-0.5 pl-5;
+}
+.message-bar-hint {
+  @apply mt-2 text-xs opacity-90;
+}
+.message-bar-link {
+  @apply font-medium underline underline-offset-2;
+}
 .page-content:has(.ask-page) {
   padding-top: 1.5rem;
   padding-bottom: 1rem;
+}
+@media (min-width: 1024px) {
+  .page-content:has(.ask-page) {
+    max-width: 80rem;
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+    padding-top: 2.25rem;
+    padding-bottom: 1.75rem;
+  }
+}
+@media (min-width: 1280px) {
+  .page-content:has(.ask-page) {
+    max-width: 84rem;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+    padding-top: 2.5rem;
+    padding-bottom: 2rem;
+  }
+}
+.page-content:has(.mcp-page) {
+  @apply max-w-none px-4 pb-6 sm:px-5;
+  padding-top: 1.25rem;
+}
+@media (min-width: 1024px) {
+  .page-content:has(.mcp-page) {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+@media (min-width: 1280px) {
+  .page-content:has(.mcp-page) {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
 }
 .page-content:has(.analytics-page) {
   @apply max-w-none overflow-hidden px-5 pb-3 sm:px-8;
@@ -258,6 +318,22 @@ button.sidebar-hint {
 @media (min-width: 640px) {
   .page-content:has(.analytics-page) {
     padding-top: 1.5rem;
+  }
+}
+@media (min-width: 1024px) {
+  .page-content:has(.analytics-page) {
+    padding-left: 2.25rem;
+    padding-right: 2.25rem;
+    padding-top: 2rem;
+    padding-bottom: 1.5rem;
+  }
+}
+@media (min-width: 1280px) {
+  .page-content:has(.analytics-page) {
+    padding-left: 2.75rem;
+    padding-right: 2.75rem;
+    padding-top: 2.5rem;
+    padding-bottom: 2rem;
   }
 }
 @media (min-width: 768px) {
@@ -364,6 +440,48 @@ button.sidebar-hint {
 .sidebar-label {
   @apply mb-0.5 block text-xs font-medium;
   color: var(--color-text-muted);
+}
+.sidebar-label-row {
+  @apply mb-1.5 flex items-center justify-between gap-2;
+}
+.sidebar-range-value {
+  @apply text-xs font-semibold tabular-nums;
+  color: var(--color-text);
+}
+.sidebar-range {
+  @apply block w-full cursor-pointer appearance-none bg-transparent;
+  height: 1.25rem;
+}
+.sidebar-range:focus {
+  @apply outline-none;
+}
+.sidebar-range::-webkit-slider-runnable-track {
+  height: 0.3rem;
+  border-radius: 9999px;
+  background: var(--color-border);
+}
+.sidebar-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin-top: -0.325rem;
+  border-radius: 9999px;
+  border: 2px solid var(--color-surface);
+  background: var(--color-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.15);
+}
+.sidebar-range::-moz-range-track {
+  height: 0.3rem;
+  border-radius: 9999px;
+  background: var(--color-border);
+}
+.sidebar-range::-moz-range-thumb {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 9999px;
+  border: 2px solid var(--color-surface);
+  background: var(--color-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.15);
 }
 .sidebar-check {
   @apply inline-flex cursor-pointer items-center gap-1.5 text-sm;
@@ -476,6 +594,9 @@ button.sidebar-hint {
 }
 
 .settings-db-split {
+  @apply grid gap-4 lg:grid-cols-2 lg:items-start;
+}
+.mcp-page-split {
   @apply grid gap-4 lg:grid-cols-2 lg:items-start;
 }
 .saved-connections-list {
@@ -817,6 +938,18 @@ label.file-upload-btn {
     max-height: calc(100dvh - 4rem);
   }
 }
+@media (min-width: 1024px) {
+  .ask-page {
+    height: calc(100dvh - 5.5rem);
+    max-height: calc(100dvh - 5.5rem);
+  }
+}
+@media (min-width: 1280px) {
+  .ask-page {
+    height: calc(100dvh - 6.25rem);
+    max-height: calc(100dvh - 6.25rem);
+  }
+}
 .ask-chat {
   @apply rounded-3xl;
   min-height: 0;
@@ -831,9 +964,19 @@ label.file-upload-btn {
     padding-right: 2rem;
   }
 }
+.ask-status {
+  background: var(--color-surface);
+  padding: 0.75rem 1.5rem 0.625rem;
+}
+@media (min-width: 640px) {
+  .ask-status {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+}
 .ask-composer {
   background: var(--color-surface);
-  padding: 1rem 1.5rem 1.75rem;
+  padding: 0.75rem 1.5rem 1.75rem;
 }
 @media (min-width: 640px) {
   .ask-composer {
@@ -842,80 +985,386 @@ label.file-upload-btn {
     padding-bottom: 2rem;
   }
 }
-.ask-status {
+.ask-composer-stack {
+  @apply mx-auto w-full;
+  max-width: min(100%, 58rem);
+}
+.ask-composer-status {
+  @apply mb-0 text-xs italic;
+  color: var(--color-text-muted);
+  animation: ask-activity-pulse 1.8s ease-in-out infinite;
+}
+.ask-composer-form {
+  @apply w-full;
+}
+.ask-composer-shell {
+  position: relative;
+  border-radius: 1.75rem;
+  padding: 1px;
+  background: var(--color-border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition:
+    box-shadow 0.45s ease,
+    padding 0.35s ease,
+    background 0.45s ease;
+}
+.ask-composer-inner {
+  position: relative;
+  overflow: hidden;
+  border-radius: calc(1.75rem - 1px);
   background: var(--color-surface);
-  padding: 0.75rem 1.5rem 0;
+  isolation: isolate;
+  transition: background 0.35s ease;
 }
-@media (min-width: 640px) {
-  .ask-status {
-    padding-left: 2rem;
-    padding-right: 2rem;
-  }
+.ask-composer-inner::before,
+.ask-composer-inner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.45s ease;
 }
-.ask-status .ask-activity {
-  @apply mb-0;
+.ask-composer-inner::before {
+  background:
+    radial-gradient(ellipse 90% 70% at 0% 100%, rgba(66, 133, 244, 0.14), transparent 58%),
+    radial-gradient(ellipse 70% 55% at 100% 0%, rgba(171, 71, 188, 0.12), transparent 52%),
+    radial-gradient(ellipse 60% 45% at 50% 100%, rgba(52, 168, 83, 0.08), transparent 48%),
+    radial-gradient(ellipse 55% 40% at 85% 85%, rgba(251, 188, 5, 0.07), transparent 45%);
+  mix-blend-mode: multiply;
 }
-.ask-composer .ask-prompt-form,
-.ask-composer > .alert-error {
-  width: 100%;
-  max-width: none;
-}
-
-/* Colorful animated border around textarea only while Ask is running */
-.ask-prompt-form {
-  @apply flex items-end gap-2;
-}
-.ask-prompt-shell {
-  @apply min-w-0 flex-1;
-  border-radius: 1.25rem;
-}
-.ask-prompt-shell--active {
-  padding: 1.5px;
-  border-radius: 1.25rem;
+.ask-composer-inner::after {
   background: linear-gradient(
-    90deg,
-    #2563eb,
-    #7c3aed,
-    #db2777,
-    #ea580c,
-    #ca8a04,
-    #16a34a,
-    #0891b2,
-    #2563eb
+    105deg,
+    transparent 35%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 65%
   );
-  background-size: 400% 100%;
-  animation: ask-border-flow 2.5s linear infinite;
-  box-shadow: none;
+  transform: translateX(-120%);
 }
-@keyframes ask-border-flow {
+[data-theme="dark"] .ask-composer-inner::before {
+  mix-blend-mode: screen;
+  background:
+    radial-gradient(ellipse 90% 70% at 0% 100%, rgba(96, 165, 250, 0.16), transparent 58%),
+    radial-gradient(ellipse 70% 55% at 100% 0%, rgba(192, 132, 252, 0.14), transparent 52%),
+    radial-gradient(ellipse 60% 45% at 50% 100%, rgba(74, 222, 128, 0.1), transparent 48%),
+    radial-gradient(ellipse 55% 40% at 85% 85%, rgba(251, 191, 36, 0.08), transparent 45%);
+}
+.ask-composer-shell--engaged {
+  padding: 1px;
+  background: linear-gradient(
+    120deg,
+    #4285f4,
+    #9b72cb,
+    #d96570,
+    #f4b400,
+    #0f9d58,
+    #4285f4
+  );
+  background-size: 320% 320%;
+  animation: ask-composer-border-drift 10s ease infinite;
+  box-shadow:
+    0 0 0 1px rgba(66, 133, 244, 0.08),
+    0 10px 36px rgba(66, 133, 244, 0.1),
+    0 4px 14px rgba(155, 114, 203, 0.08);
+}
+.ask-composer-shell--engaged .ask-composer-inner::before {
+  opacity: 1;
+  animation: ask-composer-inner-pulse 5s ease-in-out infinite alternate;
+}
+.ask-composer-shell--focused .ask-composer-inner::after {
+  opacity: 0.55;
+  animation: ask-composer-shimmer 2.8s ease-in-out infinite;
+}
+.ask-composer-shell--typing {
+  box-shadow:
+    0 0 0 1px rgba(66, 133, 244, 0.12),
+    0 12px 40px rgba(66, 133, 244, 0.14),
+    0 6px 18px rgba(217, 101, 112, 0.08);
+}
+.ask-composer-shell--typing.ask-composer-shell--engaged {
+  animation: ask-composer-border-drift 7s ease infinite;
+}
+.ask-composer-shell--pending {
+  padding: 1px;
+  border: none;
+  background: linear-gradient(
+    120deg,
+    #4285f4,
+    #9b72cb,
+    #d96570,
+    #f4b400,
+    #0f9d58,
+    #34aadc,
+    #4285f4
+  );
+  background-size: 400% 400%;
+  animation: ask-composer-border-drift 2.2s linear infinite;
+  box-shadow:
+    0 0 0 1px rgba(66, 133, 244, 0.15),
+    0 12px 42px rgba(66, 133, 244, 0.18);
+}
+.ask-composer-shell--pending .ask-composer-inner::before {
+  opacity: 1;
+  animation: ask-composer-inner-pulse 2s ease-in-out infinite alternate;
+}
+@keyframes ask-composer-border-drift {
   0% {
     background-position: 0% 50%;
   }
+  50% {
+    background-position: 100% 50%;
+  }
   100% {
-    background-position: 400% 50%;
+    background-position: 0% 50%;
   }
 }
-.ask-prompt-shell .ask-prompt {
-  @apply w-full;
-  display: block;
+@keyframes ask-composer-inner-pulse {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
 }
-.ask-prompt-shell--active .ask-prompt {
-  border: none;
-  box-shadow: none;
-  border-radius: calc(1.25rem - 1.5px);
-  background: var(--color-surface);
+@keyframes ask-composer-shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(120%);
+  }
 }
-.ask-prompt-shell--active .ask-prompt:focus {
+.ask-composer-attachments,
+.ask-composer-input,
+.ask-composer-toolbar {
+  position: relative;
+  z-index: 1;
+}
+.ask-composer-attachments {
+  @apply flex flex-wrap gap-2 px-4 pt-3;
+}
+.ask-composer-attachment {
+  @apply inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-xs;
+  border-color: var(--color-border);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-muted);
+}
+.ask-composer-attachment-name {
+  @apply truncate;
+  max-width: 12rem;
+}
+.ask-composer-attachment-remove {
+  @apply leading-none text-zinc-400 hover:text-zinc-700;
+}
+.ask-composer-input {
+  @apply block w-full resize-none border-0 bg-transparent px-4 pb-2 pt-4 text-sm leading-relaxed;
+  min-height: 3.25rem;
+  max-height: 10rem;
+  color: var(--color-text);
+  transition: color 0.25s ease;
+}
+.ask-composer-shell--engaged .ask-composer-input::placeholder {
+  color: color-mix(in srgb, var(--color-text-muted) 85%, #4285f4);
+}
+.ask-composer-input::placeholder {
+  color: var(--color-text-faint);
+}
+.ask-composer-input:focus {
   @apply outline-none ring-0;
 }
-.ask-prompt-shell:not(.ask-prompt-shell--active) .ask-prompt {
-  border: 1px solid var(--color-input-border);
-  box-shadow: none;
+.ask-composer-toolbar {
+  @apply flex items-center justify-between gap-3 px-3 pb-3 pt-1;
 }
-.ask-prompt-shell:not(.ask-prompt-shell--active) .ask-prompt:focus {
-  @apply outline-none;
+.ask-composer-toolbar-left {
+  @apply flex min-w-0 items-center gap-2;
+}
+.ask-composer-file-input {
+  @apply sr-only;
+}
+.ask-composer-add-btn {
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors;
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+}
+.ask-composer-add-btn:hover:not(:disabled) {
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+}
+.ask-composer-add-btn:disabled {
+  @apply cursor-not-allowed opacity-50;
+}
+.ask-composer-send-btn {
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all duration-300;
+  background: var(--color-primary);
+  color: #fff;
+}
+.ask-composer-shell--engaged .ask-composer-send-btn:not(:disabled) {
+  background: linear-gradient(135deg, #4285f4 0%, #9b72cb 55%, #d96570 100%);
+  box-shadow: 0 4px 14px rgba(66, 133, 244, 0.28);
+}
+.ask-composer-send-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.ask-composer-send-btn:disabled {
+  @apply cursor-not-allowed opacity-40;
+  background: var(--color-border);
+  color: var(--color-text-muted);
+}
+.ask-composer-options {
+  @apply mt-3 flex flex-wrap items-center gap-2;
+}
+.ask-pipeline-usage-badges {
+  @apply flex flex-wrap gap-1.5;
+}
+.ask-composer-pill {
+  @apply inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+.ask-composer-pill:hover {
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+}
+.ask-composer-pill--active {
   border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
 }
+.ask-composer-pill-icon {
+  @apply inline-flex opacity-80;
+}
+
+.ask-pipeline-panel {
+  @apply mt-3 max-h-[40vh] overflow-y-auto;
+}
+.ask-pipeline-steps {
+  @apply rounded-2xl border border-zinc-200 bg-white text-sm shadow-sm;
+}
+.ask-pipeline-steps-summary {
+  @apply sticky top-0 z-10 flex cursor-pointer list-none items-center gap-2 border-b border-zinc-100 bg-white px-4 py-3 font-medium text-zinc-700;
+}
+.ask-pipeline-steps-summary::-webkit-details-marker {
+  display: none;
+}
+.ask-pipeline-steps-icon {
+  @apply shrink-0 text-zinc-500;
+}
+.ask-pipeline-steps-title {
+  @apply flex-1;
+}
+.ask-pipeline-steps-count {
+  @apply ml-1 font-normal text-zinc-500;
+}
+.ask-pipeline-steps-live {
+  @apply rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800;
+}
+.ask-pipeline-steps-list {
+  @apply m-0 list-none space-y-0 px-4 py-3;
+}
+.ask-pipeline-step {
+  @apply border-b border-zinc-100 py-3 text-zinc-600 last:border-b-0;
+}
+.ask-pipeline-step--active {
+  @apply text-zinc-800;
+}
+.ask-pipeline-step-row {
+  @apply flex gap-2.5;
+}
+.ask-pipeline-step-marker {
+  @apply mt-1 flex h-4 w-4 shrink-0 items-center justify-center;
+}
+.ask-pipeline-step-check {
+  @apply text-xs text-emerald-600;
+}
+.ask-pipeline-step-pulse {
+  @apply block h-2 w-2 rounded-full bg-amber-500;
+  animation: ask-pipeline-pulse 1.2s ease-in-out infinite;
+}
+@keyframes ask-pipeline-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+}
+.ask-pipeline-step-body {
+  @apply min-w-0 flex-1;
+}
+.ask-pipeline-step-text {
+  @apply leading-snug;
+}
+.ask-pipeline-step-num {
+  @apply mr-2 inline-flex rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700;
+}
+.ask-pipeline-phase {
+  @apply mr-2 inline-block rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500;
+}
+.ask-pipeline-detail {
+  @apply mt-2 space-y-2;
+}
+.ask-pipeline-meta {
+  @apply grid gap-1 text-xs;
+}
+.ask-pipeline-meta-row {
+  @apply grid grid-cols-[7rem_1fr] gap-2;
+}
+.ask-pipeline-meta-row dt {
+  @apply font-medium text-zinc-500;
+}
+.ask-pipeline-meta-row dd {
+  @apply m-0 break-all font-mono text-zinc-700;
+}
+.ask-pipeline-sql-block {
+  @apply rounded-lg border border-zinc-200 bg-zinc-50;
+}
+.ask-pipeline-sql-head {
+  @apply flex items-center justify-between gap-2 border-b border-zinc-200 px-2 py-1 text-xs font-medium text-zinc-600;
+}
+.ask-pipeline-sql {
+  @apply m-0 overflow-x-auto p-2 font-mono text-xs leading-relaxed text-zinc-800;
+  white-space: pre-wrap;
+}
+.ask-pipeline-sql--compact {
+  @apply text-[11px];
+}
+.ask-pipeline-copy {
+  @apply rounded border border-zinc-300 bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-600 hover:bg-zinc-100;
+}
+.ask-pipeline-chunks-title {
+  @apply text-xs font-medium text-zinc-600;
+}
+.ask-pipeline-chunks-list {
+  @apply m-0 list-none space-y-2;
+}
+.ask-pipeline-chunk {
+  @apply rounded-lg border border-zinc-200 bg-zinc-50 p-2;
+}
+.ask-pipeline-chunk-head {
+  @apply flex flex-wrap items-center gap-x-3 gap-y-1 text-xs;
+}
+.ask-pipeline-chunk-file {
+  @apply font-medium text-zinc-800;
+}
+.ask-pipeline-chunk-id,
+.ask-pipeline-chunk-dist {
+  @apply font-mono text-zinc-500;
+}
+.ask-pipeline-chunk-ids {
+  @apply mt-1 flex flex-wrap gap-x-3 font-mono text-[10px] text-zinc-500;
+}
+.ask-pipeline-chunk-preview {
+  @apply mt-2 whitespace-pre-wrap text-xs leading-relaxed text-zinc-600;
+}
+
 .output-chip {
   @apply cursor-pointer rounded-full border px-3 py-1 text-xs font-medium transition-colors;
   border-color: var(--color-primary);
@@ -993,6 +1442,20 @@ table.data td {
     max-height: calc(100dvh - 3.5rem);
   }
 }
+@media (min-width: 1024px) {
+  .analytics-page {
+    height: calc(100dvh - 5rem);
+    max-height: calc(100dvh - 5rem);
+    gap: 1rem;
+  }
+}
+@media (min-width: 1280px) {
+  .analytics-page {
+    height: calc(100dvh - 6.25rem);
+    max-height: calc(100dvh - 6.25rem);
+    gap: 1.25rem;
+  }
+}
 .analytics-page .page-header {
   @apply mb-0 shrink-0;
 }
@@ -1001,6 +1464,7 @@ table.data td {
   flex: 1 1 auto;
   overflow: hidden;
   background: var(--color-surface);
+  @apply rounded-3xl;
 }
 .analytics-prompt-bar {
   border-color: var(--color-border-light);

@@ -16,6 +16,7 @@ import { AnalyticsViewControls, type ViewVisibility } from "./AnalyticsViewContr
 interface Props {
   data: AnalyticsResponse | null;
   isRunning?: boolean;
+  activityStatus?: string | null;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
 }
@@ -32,7 +33,13 @@ function AnalyticsLoadingDots() {
   );
 }
 
-export function AnalyticsDashboard({ data, isRunning, isFullscreen, onToggleFullscreen }: Props) {
+export function AnalyticsDashboard({
+  data,
+  isRunning,
+  activityStatus,
+  isFullscreen,
+  onToggleFullscreen,
+}: Props) {
   const [visibility, setVisibility] = useState<ViewVisibility>({
     summary: true,
     kpi: true,
@@ -86,8 +93,16 @@ export function AnalyticsDashboard({ data, isRunning, isFullscreen, onToggleFull
   if (!data) {
     return (
       <div className="analytics-preview-empty">
-        <p className="analytics-preview-placeholder">Ask anything to analyze and preview</p>
-        {isRunning && <AnalyticsLoadingDots />}
+        {isRunning ? (
+          <>
+            <p className="ask-activity mb-0" role="status" aria-live="polite">
+              {activityStatus ?? "Starting…"}
+            </p>
+            <AnalyticsLoadingDots />
+          </>
+        ) : (
+          <p className="analytics-preview-placeholder">Ask anything to analyze and preview</p>
+        )}
       </div>
     );
   }

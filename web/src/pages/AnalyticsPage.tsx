@@ -109,11 +109,6 @@ export function AnalyticsPage() {
               </button>
             )}
           </div>
-          {run.isPending && (
-            <p className="ask-activity mt-2" role="status" aria-live="polite">
-              {activityStatus ?? "Starting…"}
-            </p>
-          )}
           {run.isError && <p className="alert-error mt-2">{String(run.error)}</p>}
         </div>
 
@@ -121,6 +116,7 @@ export function AnalyticsPage() {
           <AnalyticsDashboard
             data={dashboard}
             isRunning={run.isPending}
+            activityStatus={activityStatus}
             isFullscreen={isFullscreen}
             onToggleFullscreen={dashboard ? toggleFullscreen : undefined}
           />

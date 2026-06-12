@@ -84,6 +84,45 @@ export interface AskSource {
   distance?: number;
 }
 
+export interface PipelineChunkRef {
+  source_file: string;
+  chunk_id: string;
+  distance?: number;
+  domain_id?: string;
+  source_id?: string;
+  text_preview?: string;
+  verify_sql: string;
+}
+
+export interface PipelineTraceDetail {
+  question?: string;
+  top_k?: number;
+  domain_override?: string;
+  domain_id?: string;
+  domain_name?: string;
+  routing_method?: string;
+  routing_confidence?: number;
+  execution_kind?: string;
+  source_id?: string;
+  source_name?: string;
+  retrieval?: string;
+  retrieval_query?: string;
+  mcp_url?: string;
+  mcp_tool?: string;
+  mcp_arguments?: Record<string, unknown>;
+  llm_prompt?: string;
+  sql?: string;
+  columns?: string[];
+  row_count?: number;
+  chunks?: PipelineChunkRef[];
+}
+
+export interface PipelineTraceStep {
+  message: string;
+  phase: string;
+  detail?: PipelineTraceDetail;
+}
+
 export interface AskResponse {
   answer: string;
   question?: string;
@@ -91,6 +130,8 @@ export interface AskResponse {
   routing_method?: string;
   routing_confidence?: number;
   query_kind?: string;
+  used_rag?: boolean;
+  used_mcp?: boolean;
   sql?: string;
   columns?: string[];
   rows?: unknown[][];
@@ -139,6 +180,22 @@ export interface AnalyticsResponse {
   query_kind?: string;
   sql?: string;
   notes?: string[];
+}
+
+export interface ReadinessComponent {
+  ok: boolean;
+  message?: string | null;
+}
+
+export interface ReadinessResponse {
+  ok: boolean;
+  components: {
+    rag_database: ReadinessComponent;
+    knowledge_chunks: ReadinessComponent;
+    catalog: ReadinessComponent;
+    metadata: ReadinessComponent;
+  };
+  issues: string[];
 }
 
 export const CONNECTOR_LABELS: Record<string, string> = {

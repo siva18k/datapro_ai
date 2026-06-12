@@ -2,6 +2,8 @@ import type {
   AnalyticsResponse,
   AskExportResponse,
   AskResponse,
+  ReadinessResponse,
+  PipelineTraceStep,
   ColumnMeta,
   SyncColumnsResult,
   Dataset,
@@ -41,6 +43,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string }>("/health"),
+  readiness: () => request<ReadinessResponse>("/readiness"),
   stats: () => request<{ total_chunks: number; ingested_files: number }>("/stats"),
 
   listDomains: () => request<Domain[]>("/domains"),
@@ -133,6 +136,7 @@ export const api = {
       debug?: boolean;
     },
     onStatus: (message: string) => void,
+    onTrace?: (step: PipelineTraceStep) => void,
   ): Promise<AskResponse> => {
     const res = await fetch(`${BASE}/ask/stream`, {
       method: "POST",
@@ -168,8 +172,12 @@ export const api = {
           type: string;
           message?: string;
           data?: AskResponse;
+          step?: PipelineTraceStep;
+          rag?: boolean;
+          mcp?: boolean;
         };
         if (event.type === "status" && event.message) onStatus(event.message);
+        if (event.type === "trace" && event.step) onTrace?.(event.step);
         if (event.type === "result" && event.data) result = event.data;
         if (event.type === "error") throw new Error(event.message || "Ask failed");
       }

@@ -116,7 +116,7 @@ export function McpPage() {
 
   if (!apiOnline && !apiChecking) {
     return (
-      <div className="max-w-4xl space-y-4">
+      <div className="mcp-page space-y-4">
         <PageHeader
           title="MCP Server"
           description="Tools for MCP clients"
@@ -127,7 +127,7 @@ export function McpPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="mcp-page space-y-4">
       <PageHeader
         title="MCP Server"
         description="Server, prompts, and bindings"
@@ -145,137 +145,147 @@ export function McpPage() {
         />
       )}
 
-      <div className="card card-pad space-y-3">
-        <h2 className="font-semibold">Server</h2>
-        {statusLoading && <p className="text-sm text-zinc-500">Checking server…</p>}
-        {status && (
-          <>
-            <div className="flex flex-wrap gap-2">
-              <span className={`badge ${status.reachable ? "badge-ok" : "badge-muted"}`}>
-                {status.reachable ? "Reachable" : "Stopped"}
-              </span>
-              <span className="badge-muted badge">{status.status_label}</span>
-              {status.active_pid != null && <span className="badge-muted badge">PID {status.active_pid}</span>}
-              <span className="badge-muted badge">Port {status.port}</span>
-              {capabilities && (
-                <span className="badge-muted badge">
-                  Live: {capabilities.tools.length} tools · {capabilities.resources.length} resources ·{" "}
-                  {capabilities.prompts.length} prompts
-                </span>
-              )}
-            </div>
-            <p className="text-sm">
-              Endpoint:{" "}
-              <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs">{status.url}</code>
-            </p>
-            <p className="text-xs text-zinc-500">
-              Registry: <code className="text-xs">{registry?.registry_path ?? "mcp_registry.json"}</code> — restart to apply changes.
-            </p>
-            {status.source === "external" && (
-              <p className="text-sm text-zinc-600">External process — Stop kills port {status.port}.</p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={mcpBusy || mcpIsRunning}
-                onClick={() => mcpStart.mutate()}
-              >
-                {mcpStart.isPending ? "Starting…" : "Start"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={mcpBusy || !mcpIsRunning}
-                onClick={() => mcpStop.mutate()}
-              >
-                {mcpStop.isPending ? "Stopping…" : "Stop"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={mcpBusy || !mcpIsRunning}
-                onClick={() => mcpRestart.mutate()}
-              >
-                {mcpRestart.isPending ? "Restarting…" : "Restart"}
-              </button>
-            </div>
-          </>
-        )}
-        {actionNotice && (
-          <p className={actionNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{actionNotice.text}</p>
-        )}
-      </div>
+      <div className="mcp-page-split">
+        <div className="card card-pad space-y-4">
+          <div>
+            <h2 className="font-semibold">Domain bindings</h2>
+            <p className="mt-1 text-sm text-zinc-500">Per-domain access — restart MCP to apply.</p>
+          </div>
+          <div className="field mb-0 max-w-xs">
+            <label className="label">Domain</label>
+            <select className="select" value={activeDomainId} onChange={(e) => setDomainId(e.target.value)}>
+              {domains?.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
-      {registry && (
-        <GlobalPromptsCard prompts={registry.prompts} onEdit={(name) => setEditingPrompt(name)} />
-      )}
-
-      <div className="card card-pad space-y-4">
-        <div>
-          <h2 className="font-semibold">Domain bindings</h2>
-          <p className="mt-1 text-sm text-zinc-500">Per-domain access — restart MCP to apply.</p>
-        </div>
-        <div className="field mb-0 max-w-xs">
-          <label className="label">Domain</label>
-          <select className="select" value={activeDomainId} onChange={(e) => setDomainId(e.target.value)}>
-            {domains?.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
+          <div className="tabs">
+            {(["tools", "resources", "prompts"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                className={`tab capitalize ${bindingTab === tab ? "tab-active" : ""}`}
+                onClick={() => setBindingTab(tab)}
+              >
+                {tab}
+                {bindings && (
+                  <span className="ml-1.5 text-xs opacity-70">
+                    ({bindings.bindings[tab].filter((i) => i.enabled).length}/{bindings.bindings[tab].length})
+                  </span>
+                )}
+              </button>
             ))}
-          </select>
+          </div>
+
+          {bindingTab === "tools" && (
+            <p className="text-xs text-zinc-500">Global handlers — bindings enable per domain.</p>
+          )}
+
+          {bindingTab === "resources" && (
+            <p className="text-xs text-zinc-500">Read-only URIs — use Preview to fetch content.</p>
+          )}
+
+          {bindingTab === "prompts" && (
+            <p className="text-xs text-zinc-500">Edit wording in Global prompts.</p>
+          )}
+
+          {bindings && (
+            <BindingList
+              items={bindings.bindings[bindingTab]}
+              showUri={bindingTab === "resources"}
+              allowToolView={bindingTab === "tools"}
+              allowResourcePreview={bindingTab === "resources"}
+              saving={setBinding.isPending}
+              onViewTool={(name) => setViewingTool(name)}
+              onPreviewResource={(item) => setViewingResource(item)}
+              onToggle={(name, enabled) =>
+                setBinding.mutate({
+                  domain_id: activeDomainId,
+                  capability_type: bindingTab === "tools" ? "tool" : bindingTab === "resources" ? "resource" : "prompt",
+                  capability_name: name,
+                  enabled,
+                })
+              }
+            />
+          )}
         </div>
 
-        <div className="tabs">
-          {(["tools", "resources", "prompts"] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              className={`tab capitalize ${bindingTab === tab ? "tab-active" : ""}`}
-              onClick={() => setBindingTab(tab)}
-            >
-              {tab}
-              {bindings && (
-                <span className="ml-1.5 text-xs opacity-70">
-                  ({bindings.bindings[tab].filter((i) => i.enabled).length}/{bindings.bindings[tab].length})
-                </span>
-              )}
-            </button>
-          ))}
+        <div className="space-y-4">
+          <div className="card card-pad space-y-3">
+            <h2 className="font-semibold">Server</h2>
+            {statusLoading && <p className="text-sm text-zinc-500">Checking server…</p>}
+            {status && (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  <span className={`badge ${status.reachable ? "badge-ok" : "badge-muted"}`}>
+                    {status.reachable ? "Reachable" : "Stopped"}
+                  </span>
+                  <span className="badge-muted badge">{status.status_label}</span>
+                  {status.active_pid != null && <span className="badge-muted badge">PID {status.active_pid}</span>}
+                  <span className="badge-muted badge">Port {status.port}</span>
+                  {capabilities && (
+                    <span className="badge-muted badge">
+                      Live: {capabilities.tools.length} tools · {capabilities.resources.length} resources ·{" "}
+                      {capabilities.prompts.length} prompts
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm">
+                  Endpoint:{" "}
+                  <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs">{status.url}</code>
+                </p>
+                <p className="text-xs text-zinc-500">
+                  Registry: <code className="text-xs">{registry?.registry_path ?? "mcp_registry.json"}</code> — restart to apply changes.
+                </p>
+                {status.source === "external" && (
+                  <p className="text-sm text-zinc-600">External process — Stop kills port {status.port}.</p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={mcpBusy || mcpIsRunning}
+                    onClick={() => mcpStart.mutate()}
+                  >
+                    {mcpStart.isPending ? "Starting…" : "Start"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={mcpBusy || !mcpIsRunning}
+                    onClick={() => mcpStop.mutate()}
+                  >
+                    {mcpStop.isPending ? "Stopping…" : "Stop"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={mcpBusy || !mcpIsRunning}
+                    onClick={() => mcpRestart.mutate()}
+                  >
+                    {mcpRestart.isPending ? "Restarting…" : "Restart"}
+                  </button>
+                </div>
+              </>
+            )}
+            {actionNotice && (
+              <p className={actionNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{actionNotice.text}</p>
+            )}
+          </div>
+
+          <div className="card card-pad space-y-3">
+            <h2 className="font-semibold">Cursor / Claude Desktop</h2>
+            <p className="text-sm text-zinc-500">MCP client config</p>
+            <pre className="overflow-x-auto rounded-lg bg-zinc-900 p-4 text-xs text-zinc-100">{cursorConfig}</pre>
+          </div>
+
+          {registry && (
+            <GlobalPromptsCard prompts={registry.prompts} onEdit={(name) => setEditingPrompt(name)} />
+          )}
         </div>
-
-        {bindingTab === "tools" && (
-          <p className="text-xs text-zinc-500">Global handlers — bindings enable per domain.</p>
-        )}
-
-        {bindingTab === "resources" && (
-          <p className="text-xs text-zinc-500">Read-only URIs — use Preview to fetch content.</p>
-        )}
-
-        {bindingTab === "prompts" && (
-          <p className="text-xs text-zinc-500">Edit wording in Global prompts above.</p>
-        )}
-
-        {bindings && (
-          <BindingList
-            items={bindings.bindings[bindingTab]}
-            showUri={bindingTab === "resources"}
-            allowToolView={bindingTab === "tools"}
-            allowResourcePreview={bindingTab === "resources"}
-            saving={setBinding.isPending}
-            onViewTool={(name) => setViewingTool(name)}
-            onPreviewResource={(item) => setViewingResource(item)}
-            onToggle={(name, enabled) =>
-              setBinding.mutate({
-                domain_id: activeDomainId,
-                capability_type: bindingTab === "tools" ? "tool" : bindingTab === "resources" ? "resource" : "prompt",
-                capability_name: name,
-                enabled,
-              })
-            }
-          />
-        )}
       </div>
 
       {viewingResource && (
@@ -301,12 +311,6 @@ export function McpPage() {
           onSaved={markRestartNeeded}
         />
       )}
-
-      <div className="card card-pad space-y-3">
-        <h2 className="font-semibold">Cursor / Claude Desktop</h2>
-        <p className="text-sm text-zinc-500">MCP client config</p>
-        <pre className="overflow-x-auto rounded-lg bg-zinc-900 p-4 text-xs text-zinc-100">{cursorConfig}</pre>
-      </div>
 
       {log?.log && (
         <details className="card card-pad">
