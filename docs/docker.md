@@ -21,7 +21,7 @@ UI at http://localhost:5173
 
 Postgres data sticks around in the `datapro_pgdata` volume.
 
-## Commands I actually use
+## Common commands
 
 ```bash
 docker compose up --build          # everything

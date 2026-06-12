@@ -16,9 +16,9 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Then open http://localhost:5173
+Then open the UI (default port **5173**). Service URLs and ports are in [docs/installation.md](docs/installation.md).
 
-Prefer running things locally without Docker? See [docs/installation.md](docs/installation.md).
+Prefer running things locally without Docker? Same doc covers local setup.
 
 ## What it does
 
@@ -47,13 +47,11 @@ If RAG or MCP are new to you, [docs/concepts.md](docs/concepts.md) explains both
 
 Demo warehouse SQL: [migrations/finance_data/README.md](migrations/finance_data/README.md)
 
-## Default URLs
+## Keep private
 
-| URL | What |
-|-----|------|
-| http://localhost:5173 | UI |
-| http://localhost:8080/docs | API (OpenAPI) |
-| http://127.0.0.1:8000/mcp | MCP |
+Do **not** commit real API keys, production database hosts, passwords, or TLS certs. Those belong in `.env`, `saved_db_connections.json`, and `certs/` — all gitignored. See [docs/secrets.md](docs/secrets.md).
+
+`localhost` / `127.0.0.1` URLs in docs are local dev defaults only, not secrets.
 
 ## Layout
 

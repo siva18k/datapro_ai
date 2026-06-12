@@ -2,6 +2,8 @@
 
 Start with [installation](installation.md) if you're setting up for the first time.
 
+**Public repo hygiene:** never commit real API keys, production DB hosts, warehouse passwords, or TLS certs — see [secrets](secrets.md).
+
 | Doc | What's in it |
 |-----|----------------|
 | [Installation](installation.md) | Docker or local dev, env vars, scripts |

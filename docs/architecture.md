@@ -204,7 +204,7 @@ Re-ingest from the RAG page or `POST /api/rag/sources/{id}/reingest`.
 
 Dev is usually three processes: API on 8080, Vite on 5173, MCP on 8000.
 
-Production target (not fully there yet): API container with secrets from env/SSM, static `web/dist` behind nginx or a CDN, MCP as its own service, Python/SQL sandbox on something isolated (Fargate was the original idea). Mounting `web/dist` on FastAPI is an easy simplification if you don't need separate scaling.
+Production target (not fully there yet): API container with secrets from env or a secret manager, static `web/dist` behind nginx or a CDN, MCP as its own service, Python/SQL sandbox on isolated compute. Mounting `web/dist` on FastAPI is an easy simplification if you don't need separate scaling.
 
 ## Security
 

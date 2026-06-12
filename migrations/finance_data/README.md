@@ -4,13 +4,13 @@ Loads a fake enterprise warehouse into Postgres schema `finance_data` so you can
 
 ## Run it
 
-**Step 1 — one-time DBA script** if `ragpro_dev` hits `permission denied for database postgres`:
+**Step 1 — one-time DBA script** if your app database user hits `permission denied for database postgres`:
 
 ```bash
 psql "$DATABASE_URL" -f migrations/finance_data/000_master_bootstrap.sql
 ```
 
-Run as RDS master (or superuser), not the app user. Creates schema `finance_data`, grants to `ragpro_dev`, enables `uuid-ossp`.
+Run as a superuser (or RDS master), not the app user. Edit `000_master_bootstrap.sql` first if your app user is not `ragpro` (Docker default). The script creates schema `finance_data`, grants to that user, and enables `uuid-ossp`.
 
 **Step 2 — app user:**
 

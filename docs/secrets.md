@@ -6,8 +6,13 @@ Don't commit real credentials. `.gitignore` already excludes the files below —
 |----------------------|-----------|---------------|
 | `.env` | `.env.example` | Catalog DB, LLM keys, embedding model, MCP URL |
 | `saved_db_connections.json` | `saved_db_connections.json.example` | Named Postgres connections for datasets |
+| `certs/` | — | Local TLS / proxy CA certs (e.g. corporate SSL inspection) |
 
 Log and pid files (`.mcp_server.log`, `.api_server.log`, etc.) are ignored too.
+
+**Safe in the public repo:** `localhost` URLs, Docker dev passwords in `.env.example` (`ragpro`/`ragpro`), placeholder hosts in `saved_db_connections.json.example`, and fictional demo data (`@demo.com`, `@example.com` in seed SQL).
+
+**Never commit:** your real `.env`, warehouse credentials, production RDS/hostnames, internal DB usernames from your org, or TLS/proxy certs in `certs/`.
 
 ## `.env`
 

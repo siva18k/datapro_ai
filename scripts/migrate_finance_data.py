@@ -189,7 +189,7 @@ def run_statement(conn, stmt: str, *, dry_run: bool) -> None:
         if "must be owner of schema" in msg:
             raise RuntimeError(
                 f"Schema owner required for: {preview}...\n"
-                "Re-run 000_master_bootstrap.sql with AUTHORIZATION ragpro_dev, or run as owner."
+                "Re-run 000_master_bootstrap.sql with your app DB user as AUTHORIZATION, or run as owner."
             ) from exc
         if "already exists" in msg and "schema" in msg:
             return
