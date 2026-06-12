@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+# Local TLS / proxy certificates
+certs/
+
 # Secrets and local config — use .env.example and saved_db_connections.json.example
 .env
 .env.*
