@@ -166,6 +166,8 @@ def apply_migrations() -> dict[str, bool]:
             "005_mcp_servers.sql",
             "006_mcp_bindings_legacy_unique.sql",
             "007_mcp_server_opt_out.sql",
+            "008_agents.sql",
+            "009_agent_flows.sql",
         ):
             migration = MIGRATIONS_DIR / migration_name
             if not migration.exists():
@@ -192,7 +194,7 @@ def verify_catalog_schema() -> dict[str, Any]:
     issues: list[str] = []
     info: dict[str, Any] = {}
     try:
-        for table in ("domains", "data_sources", "rag_profiles", "mcp_servers", "mcp_bindings"):
+        for table in ("domains", "data_sources", "rag_profiles", "mcp_servers", "mcp_bindings", "agents"):
             rows = conn.run(
                 """
                 SELECT COUNT(*) FROM information_schema.tables
@@ -1667,3 +1669,351 @@ def sync_columns_from_introspection(
             stats["removed"] += 1
 
     return {"columns": list_column_metadata(table_id), "stats": stats}
+
+
+# --- Agents ---
+
+_DOMAIN_SLUG_RE = re.compile(r"(?<![a-zA-Z0-9:/])\/([a-z][a-z0-9_-]+)", re.I)
+
+
+def parse_domain_slugs_from_instructions(text: str) -> list[str]:
+    """Extract /domain-slug tokens from agent instructions."""
+    seen: list[str] = []
+    for match in _DOMAIN_SLUG_RE.finditer(text or ""):
+        slug = match.group(1).lower()
+        if slug not in seen:
+            seen.append(slug)
+    return seen
+
+
+def _coerce_jsonb_dict(value: Any) -> dict:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        if not value.strip():
+            return {}
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _agent_row_to_dict(row: tuple) -> dict[str, Any]:
+    cols = [
+        "id", "slug", "name", "description", "instructions", "capabilities",
+        "enabled", "created_at", "updated_at",
+    ]
+    data = _row_to_dict(cols, row)
+    data["capabilities"] = _coerce_jsonb_dict(data.get("capabilities"))
+    data["domain_slugs"] = parse_domain_slugs_from_instructions(data.get("instructions") or "")
+    return data
+
+
+def list_agents(*, enabled_only: bool = False) -> list[dict]:
+    conn, schema = connect()
+    try:
+        where = "WHERE enabled = TRUE" if enabled_only else ""
+        rows = conn.run(
+            f"""
+            SELECT id::text, slug, name, description, instructions, capabilities,
+                   enabled, created_at, updated_at
+            FROM {schema}.agents
+            {where}
+            ORDER BY name
+            """
+        )
+    finally:
+        conn.close()
+    return [_agent_row_to_dict(row) for row in rows]
+
+
+def get_agent(agent_id: str) -> dict | None:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            SELECT id::text, slug, name, description, instructions, capabilities,
+                   enabled, created_at, updated_at
+            FROM {schema}.agents
+            WHERE id = :id::uuid
+            """,
+            id=agent_id,
+        )
+        if not rows:
+            return None
+        agent = _agent_row_to_dict(rows[0])
+        tool_rows = conn.run(
+            f"""
+            SELECT t.id::text, t.agent_id::text, t.mcp_server_id::text, t.tool_name,
+                   s.name AS server_name, s.slug AS server_slug
+            FROM {schema}.agent_mcp_tools t
+            JOIN {schema}.mcp_servers s ON s.id = t.mcp_server_id
+            WHERE t.agent_id = :agent_id::uuid
+            ORDER BY s.name, t.tool_name
+            """,
+            agent_id=agent_id,
+        )
+    finally:
+        conn.close()
+    tool_cols = ["id", "agent_id", "mcp_server_id", "tool_name", "server_name", "server_slug"]
+    agent["tools"] = [_row_to_dict(tool_cols, row) for row in tool_rows]
+    return agent
+
+
+def create_agent(
+    name: str,
+    *,
+    description: str = "",
+    instructions: str = "",
+    capabilities: dict | None = None,
+) -> dict:
+    slug = _slugify(name)
+    caps = json.dumps(capabilities or {})
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            INSERT INTO {schema}.agents (slug, name, description, instructions, capabilities)
+            VALUES (:slug, :name, :description, :instructions, :capabilities::jsonb)
+            ON CONFLICT (slug) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                instructions = EXCLUDED.instructions,
+                capabilities = EXCLUDED.capabilities,
+                updated_at = now()
+            RETURNING id::text, slug, name, description, instructions, capabilities,
+                      enabled, created_at, updated_at
+            """,
+            slug=slug,
+            name=name.strip(),
+            description=description,
+            instructions=instructions,
+            capabilities=caps,
+        )
+    finally:
+        conn.close()
+    agent = _agent_row_to_dict(rows[0])
+    agent["tools"] = []
+    return agent
+
+
+def update_agent(agent_id: str, **fields) -> dict | None:
+    allowed = {"name", "description", "instructions", "capabilities", "enabled"}
+    updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not updates:
+        return get_agent(agent_id)
+    if "capabilities" in updates and isinstance(updates["capabilities"], dict):
+        updates["capabilities"] = json.dumps(updates["capabilities"])
+    if "name" in updates:
+        updates["slug"] = _slugify(str(updates["name"]))
+        allowed = allowed | {"slug"}
+    sets = ", ".join(
+        f"{k} = :{k}::jsonb" if k == "capabilities" else f"{k} = :{k}"
+        for k in updates
+    )
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            UPDATE {schema}.agents SET {sets}, updated_at = now()
+            WHERE id = :id::uuid
+            RETURNING id::text, slug, name, description, instructions, capabilities,
+                      enabled, created_at, updated_at
+            """,
+            id=agent_id,
+            **updates,
+        )
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    return get_agent(agent_id)
+
+
+def delete_agent(agent_id: str) -> bool:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"DELETE FROM {schema}.agents WHERE id = :id::uuid RETURNING id::text",
+            id=agent_id,
+        )
+    finally:
+        conn.close()
+    return bool(rows)
+
+
+def set_agent_tools(agent_id: str, tools: list[dict]) -> list[dict]:
+    """Replace MCP tool bindings. Each item: { mcp_server_id, tool_name }."""
+    conn, schema = connect()
+    try:
+        conn.run(
+            f"DELETE FROM {schema}.agent_mcp_tools WHERE agent_id = :agent_id::uuid",
+            agent_id=agent_id,
+        )
+        for item in tools:
+            server_id = item.get("mcp_server_id")
+            tool_name = (item.get("tool_name") or "").strip()
+            if not server_id or not tool_name:
+                continue
+            conn.run(
+                f"""
+                INSERT INTO {schema}.agent_mcp_tools (agent_id, mcp_server_id, tool_name)
+                VALUES (:agent_id::uuid, :mcp_server_id::uuid, :tool_name)
+                ON CONFLICT (agent_id, mcp_server_id, tool_name) DO NOTHING
+                """,
+                agent_id=agent_id,
+                mcp_server_id=server_id,
+                tool_name=tool_name,
+            )
+    finally:
+        conn.close()
+    agent = get_agent(agent_id)
+    return agent["tools"] if agent else []
+
+
+def _flow_row_to_dict(row: tuple) -> dict[str, Any]:
+    cols = [
+        "id", "slug", "name", "description", "instructions", "steps",
+        "enabled", "created_at", "updated_at",
+    ]
+    data = _row_to_dict(cols, row)
+    data["steps"] = _coerce_jsonb_list(data.get("steps"))
+    return data
+
+
+def _enrich_flow_steps(flow: dict) -> dict:
+    """Attach agent name/slug to each step for API responses."""
+    steps = flow.get("steps") or []
+    enriched: list[dict] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        agent_id = step.get("agent_id")
+        item = dict(step)
+        if agent_id:
+            agent = get_agent(agent_id)
+            if agent:
+                item["agent_name"] = agent.get("name")
+                item["agent_slug"] = agent.get("slug")
+        enriched.append(item)
+    flow = dict(flow)
+    flow["steps"] = enriched
+    return flow
+
+
+def list_agent_flows(*, enabled_only: bool = False) -> list[dict]:
+    conn, schema = connect()
+    try:
+        where = "WHERE enabled = TRUE" if enabled_only else ""
+        rows = conn.run(
+            f"""
+            SELECT id::text, slug, name, description, instructions, steps,
+                   enabled, created_at, updated_at
+            FROM {schema}.agent_flows
+            {where}
+            ORDER BY name
+            """
+        )
+    finally:
+        conn.close()
+    return [_enrich_flow_steps(_flow_row_to_dict(row)) for row in rows]
+
+
+def get_agent_flow(flow_id: str) -> dict | None:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            SELECT id::text, slug, name, description, instructions, steps,
+                   enabled, created_at, updated_at
+            FROM {schema}.agent_flows
+            WHERE id = :id::uuid
+            """,
+            id=flow_id,
+        )
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    return _enrich_flow_steps(_flow_row_to_dict(rows[0]))
+
+
+def create_agent_flow(
+    name: str,
+    *,
+    description: str = "",
+    instructions: str = "",
+    steps: list[dict] | None = None,
+) -> dict:
+    slug = _slugify(name)
+    steps_json = json.dumps(steps or [])
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            INSERT INTO {schema}.agent_flows (slug, name, description, instructions, steps)
+            VALUES (:slug, :name, :description, :instructions, :steps::jsonb)
+            ON CONFLICT (slug) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                instructions = EXCLUDED.instructions,
+                steps = EXCLUDED.steps,
+                updated_at = now()
+            RETURNING id::text, slug, name, description, instructions, steps,
+                      enabled, created_at, updated_at
+            """,
+            slug=slug,
+            name=name.strip(),
+            description=description,
+            instructions=instructions,
+            steps=steps_json,
+        )
+    finally:
+        conn.close()
+    return _enrich_flow_steps(_flow_row_to_dict(rows[0]))
+
+
+def update_agent_flow(flow_id: str, **fields) -> dict | None:
+    allowed = {"name", "description", "instructions", "steps", "enabled"}
+    updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not updates:
+        return get_agent_flow(flow_id)
+    if "steps" in updates and isinstance(updates["steps"], list):
+        updates["steps"] = json.dumps(updates["steps"])
+    if "name" in updates:
+        updates["slug"] = _slugify(str(updates["name"]))
+        allowed = allowed | {"slug"}
+    sets = ", ".join(
+        f"{k} = :{k}::jsonb" if k == "steps" else f"{k} = :{k}"
+        for k in updates
+    )
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            UPDATE {schema}.agent_flows SET {sets}, updated_at = now()
+            WHERE id = :id::uuid
+            RETURNING id::text
+            """,
+            id=flow_id,
+            **updates,
+        )
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    return get_agent_flow(flow_id)
+
+
+def delete_agent_flow(flow_id: str) -> bool:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"DELETE FROM {schema}.agent_flows WHERE id = :id::uuid RETURNING id::text",
+            id=flow_id,
+        )
+    finally:
+        conn.close()
+    return bool(rows)
+

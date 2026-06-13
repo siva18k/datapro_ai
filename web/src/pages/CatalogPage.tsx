@@ -59,6 +59,7 @@ export function CatalogPage() {
     mutationFn: (name: string) => api.createDomain(name),
     onSuccess: (d) => {
       qc.invalidateQueries({ queryKey: ["domains"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
       setDomainId(d.id);
       setShowAddDomain(false);
       setNewDomainName("");
@@ -100,6 +101,7 @@ export function CatalogPage() {
     },
     onSuccess: (d) => {
       qc.invalidateQueries({ queryKey: ["datasets", activeDomainId] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
       setOpenDatasetId(d.id);
       setShowAdd(false);
       setNewName("");
@@ -200,7 +202,7 @@ export function CatalogPage() {
       >
         {stats && (
           <p className="text-sm text-zinc-500">
-            <strong>{stats.total_chunks}</strong> chunks · <strong>{stats.ingested_files}</strong> files
+            <strong>{stats.domain_count}</strong> domains · <strong>{stats.dataset_count}</strong> datasets
           </p>
         )}
       </PageHeader>
@@ -249,14 +251,8 @@ export function CatalogPage() {
             <p className="alert-error mx-5 mt-3">{String(deleteDomain.error)}</p>
           )}
 
-          {!canRemoveActiveDomain && !datasetsLoading && (datasets?.length ?? 0) > 0 && (
-            <p className="mx-5 mt-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
-              Delete all {datasets!.length} dataset(s) before removing this domain.
-            </p>
-          )}
-
           {showAdd && (
-            <div className="border-t border-zinc-100 bg-zinc-50 px-5 py-4">
+            <div className="catalog-add-dataset-form">
               <div className="add-dataset-row">
                 <div className="field mb-0">
                   <label className="label">Dataset name</label>
@@ -447,7 +443,7 @@ function DatasetCard({
         </button>
       </div>
       {open && (
-        <div className="border-t border-zinc-100">
+        <div className="catalog-panel-divider">
           <DatasetPanel dataset={dataset} />
         </div>
       )}

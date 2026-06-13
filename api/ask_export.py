@@ -14,6 +14,35 @@ def _esc(text: str) -> str:
     return html.escape(str(text))
 
 
+def _is_markdown_table_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("|"):
+        return True
+    if "|---" in stripped or re.match(r"^[\s|:-]+$", stripped) and "|" in stripped:
+        return True
+    return stripped.count("|") >= 2
+
+
+def _strip_tabular_markdown(answer: str) -> str:
+    """Remove markdown table blocks from an answer; keep narrative prose."""
+    lines: list[str] = []
+    for line in answer.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if _is_markdown_table_line(stripped):
+            continue
+        if re.search(r"\bsorted by\b", stripped, re.I):
+            continue
+        lines.append(line.rstrip())
+    text = "\n".join(lines).strip()
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
 def _answer_to_html(answer: str) -> str:
     """Minimal markdown-ish to HTML for export pages."""
     lines = answer.splitlines()
@@ -77,6 +106,91 @@ def build_csv(
     return buf.getvalue()
 
 
+def _chart_embed_html(
+    *,
+    question: str,
+    answer: str,
+    columns: list[str],
+    rows: list[list[Any]],
+) -> tuple[str, str] | None:
+    """Return (chart section HTML, chart script tags) or None if chart cannot be built."""
+    numeric_idxs = _numeric_columns(columns, rows)
+    numeric_set = set(numeric_idxs)
+    label_idx = _pick_label_column(columns, numeric_set)
+    value_idx = _pick_value_column(columns, numeric_idxs)
+
+    labels: list[str] = []
+    values: list[float] = []
+    for row in rows[:50]:
+        label = str(row[label_idx]) if label_idx < len(row) else ""
+        raw = row[value_idx] if value_idx < len(row) else 0
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        labels.append(label)
+        values.append(val)
+
+    if not values:
+        return None
+
+    chart_title = _build_chart_title(
+        question=question,
+        columns=columns,
+        label_idx=label_idx,
+        value_idx=value_idx,
+        row_count=len(values),
+    )
+    chart_summary = _build_chart_summary(
+        answer=answer,
+        columns=columns,
+        labels=labels,
+        values=values,
+        label_idx=label_idx,
+        value_idx=value_idx,
+    )
+    dataset_label = _humanize_column(columns[value_idx])
+    chart_type = "bar" if len(labels) <= 12 else "line"
+    config = {
+        "type": chart_type,
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": dataset_label,
+                    "data": values,
+                    "backgroundColor": "rgba(37, 99, 235, 0.65)",
+                    "borderColor": "rgb(37, 99, 235)",
+                    "borderWidth": 1,
+                }
+            ],
+        },
+        "options": {
+            "responsive": True,
+            "plugins": {
+                "title": {"display": False},
+                "legend": {"display": False},
+            },
+            "scales": {"y": {"beginAtZero": True}},
+        },
+    }
+    section = f"""
+    <section class="chart-section">
+      <h2>{_esc(chart_title)}</h2>
+      <p class="chart-summary">{_esc(chart_summary)}</p>
+      <div class="chart-box"><canvas id="report-chart"></canvas></div>
+    </section>
+    """
+    script = f"""
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const reportChartConfig = {json.dumps(config)};
+    new Chart(document.getElementById('report-chart'), reportChartConfig);
+  </script>
+"""
+    return section, script
+
+
 def build_html_page(
     *,
     question: str,
@@ -85,6 +199,7 @@ def build_html_page(
     rows: list[list[Any]] | None = None,
     sql: str | None = None,
     domain_name: str | None = None,
+    include_chart: bool = False,
 ) -> str:
     meta = []
     if domain_name:
@@ -95,6 +210,25 @@ def build_html_page(
     sql_block = (
         f'<section class="sql"><h2>SQL</h2><pre>{_esc(sql)}</pre></section>' if sql else ""
     )
+    chart_section = ""
+    chart_script = ""
+    if include_chart and columns and rows:
+        chart_embed = _chart_embed_html(
+            question=question,
+            answer=answer,
+            columns=columns,
+            rows=rows,
+        )
+        if chart_embed:
+            chart_section, chart_script = chart_embed
+    display_answer = _strip_tabular_markdown(answer) if columns and rows else answer
+    answer_section = ""
+    if display_answer:
+        answer_section = f"""
+    <section class="answer">
+      <h2>Answer</h2>
+      {_answer_to_html(display_answer)}
+    </section>"""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -114,19 +248,21 @@ def build_html_page(
     table {{ border-collapse: collapse; width: 100%; font-size: 0.875rem; }}
     th, td {{ border-bottom: 1px solid #e2e8f0; padding: 0.5rem 0.75rem; text-align: left; }}
     th {{ background: #f1f5f9; }}
+    .chart-summary {{ color: #64748b; font-size: 0.875rem; margin: 0 0 1rem; line-height: 1.5; }}
+    .chart-box {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.25rem; }}
+    .chart-box canvas {{ max-height: 420px; }}
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>{_esc(question)}</h1>
     <p class="meta">{meta_html}</p>
-    <section class="answer">
-      <h2>Answer</h2>
-      {_answer_to_html(answer)}
-    </section>
+    {answer_section}
     {_table_html(columns or [], rows or [])}
+    {chart_section}
     {sql_block}
   </div>
+  {chart_script}
 </body>
 </html>"""
 

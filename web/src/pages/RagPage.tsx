@@ -35,7 +35,6 @@ export function RagPage() {
     chunk_size: 300,
     chunk_overlap: 60,
     instructions: "",
-    metadata_text: "",
   });
 
   useEffect(() => {
@@ -44,7 +43,6 @@ export function RagPage() {
         chunk_size: rag.profile.chunk_size,
         chunk_overlap: rag.profile.chunk_overlap,
         instructions: rag.profile.instructions,
-        metadata_text: rag.profile.metadata_text,
       });
     }
   }, [rag?.profile]);
@@ -71,7 +69,7 @@ export function RagPage() {
   const isStructured = rag?.source.source_type === "structured";
 
   return (
-    <div className="max-w-4xl">
+    <div className="rag-page max-w-4xl">
       <PageHeader
         title="RAG Profiles"
         description={
@@ -81,8 +79,8 @@ export function RagPage() {
         }
       />
 
-      <div className="card mb-4 card-pad">
-        <div className="flex flex-wrap gap-4">
+      <div className="card mb-3 card-pad">
+        <div className="rag-selector-row flex flex-wrap">
           <div className="field mb-0 min-w-[160px]">
             <label className="label">Domain</label>
             <select
@@ -116,10 +114,10 @@ export function RagPage() {
       {isLoading && <p className="text-sm text-zinc-500">Loading profile…</p>}
 
       {rag && (
-        <div className="card card-pad space-y-5">
-          <div>
-            <h2 className="font-semibold">{rag.source.name}</h2>
-            <p className="text-sm text-zinc-500">
+        <div className="card rag-profile-card card-pad">
+          <div className="rag-profile-header">
+            <h2>{rag.source.name}</h2>
+            <p>
               {rag.source.domain_name} · {rag.source.connector}
               {isStructured && " · structured"}
             </p>
@@ -127,19 +125,19 @@ export function RagPage() {
 
           {isStructured ? (
             <>
-              <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-4 text-sm dark:border-blue-900 dark:bg-blue-950/30">
-                <p className="text-zinc-600 dark:text-zinc-400">
+              <div className="rag-info-box">
+                <p>
                   Embeds catalog metadata and lookup rows — not full fact tables. Use Ask for SQL analytics.
                 </p>
               </div>
 
               {settings?.embedding_model && (
-                <p className="text-xs text-zinc-500">
+                <p className="rag-embedding-note">
                   Embedding: <code>{settings.embedding_model}</code>
                 </p>
               )}
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rag-fields-grid">
                 <div className="field mb-0">
                   <label className="label">Chunk size (metadata text)</label>
                   <input
@@ -163,26 +161,16 @@ export function RagPage() {
               <div className="field mb-0">
                 <label className="label">Profile instructions</label>
                 <textarea
-                  className="textarea min-h-[80px]"
+                  className="textarea rag-textarea"
                   value={profile.instructions}
                   onChange={(e) => setProfile({ ...profile, instructions: e.target.value })}
                   placeholder="e.g. Finance reference data; prefer catalog labels over guessing column names"
                 />
               </div>
-
-              <div className="field mb-0">
-                <label className="label">Extra glossary (optional)</label>
-                <textarea
-                  className="textarea min-h-[80px]"
-                  value={profile.metadata_text}
-                  onChange={(e) => setProfile({ ...profile, metadata_text: e.target.value })}
-                  placeholder="Additional terms not captured in column labels…"
-                />
-              </div>
             </>
           ) : (
             <>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rag-fields-grid">
                 <div className="field mb-0">
                   <label className="label">Chunk size</label>
                   <input
@@ -203,7 +191,7 @@ export function RagPage() {
                 </div>
               </div>
               {settings?.embedding_model && (
-                <p className="text-xs text-zinc-500">
+                <p className="rag-embedding-note">
                   Embedding: <code>{settings.embedding_model}</code>
                 </p>
               )}
@@ -211,26 +199,16 @@ export function RagPage() {
               <div className="field mb-0">
                 <label className="label">Profile instructions</label>
                 <textarea
-                  className="textarea min-h-[100px]"
+                  className="textarea rag-textarea"
                   value={profile.instructions}
                   onChange={(e) => setProfile({ ...profile, instructions: e.target.value })}
                   placeholder="e.g. HR policy documents; cite section numbers"
                 />
               </div>
-
-              <div className="field mb-0">
-                <label className="label">Metadata text</label>
-                <textarea
-                  className="textarea min-h-[100px]"
-                  value={profile.metadata_text}
-                  onChange={(e) => setProfile({ ...profile, metadata_text: e.target.value })}
-                  placeholder="Glossary, key terms, lookup hints…"
-                />
-              </div>
             </>
           )}
 
-          <div className="flex flex-wrap gap-2">
+          <div className="rag-actions flex flex-wrap">
             <button type="button" className="btn" onClick={() => save.mutate()} disabled={save.isPending}>
               {save.isPending ? "Saving…" : "Save profile"}
             </button>

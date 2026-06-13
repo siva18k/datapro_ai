@@ -311,6 +311,26 @@ button.sidebar-hint {
     padding-right: 1.25rem;
   }
 }
+.page-content:has(.agents-page) {
+  @apply max-w-none px-3 pb-6 sm:px-4;
+  padding-top: 1.25rem;
+}
+.page-content:has(.agent-flows-page) {
+  @apply max-w-none px-3 pb-6 sm:px-4;
+  padding-top: 1.25rem;
+}
+@media (min-width: 1024px) {
+  .page-content:has(.agents-page) {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+@media (min-width: 1280px) {
+  .page-content:has(.agents-page) {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
 .page-content:has(.analytics-page) {
   @apply max-w-none overflow-hidden px-5 pb-3 sm:px-8;
   padding-top: 1.25rem;
@@ -484,7 +504,7 @@ button.sidebar-hint {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.15);
 }
 .sidebar-check {
-  @apply inline-flex cursor-pointer items-center gap-1.5 text-sm;
+  @apply inline-flex cursor-pointer items-center gap-1.5 text-xs;
   color: var(--color-text);
 }
 .sidebar-panel .input,
@@ -540,10 +560,14 @@ button.sidebar-hint {
 }
 
 /* —— Catalog domain wrapper —— */
+.catalog-domain-panel {
+  overflow: hidden;
+}
 .catalog-domain-panel .card-header {
   border-bottom: none;
 }
 .catalog-domain-body {
+  @apply rounded-b-xl;
   border-top: 1px solid var(--color-border-light);
   background: var(--color-bg, #f8fafc);
 }
@@ -554,6 +578,32 @@ button.sidebar-hint {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   @apply rounded-lg overflow-hidden;
+}
+.catalog-panel-divider {
+  border-top: 1px solid var(--color-border-light);
+}
+.catalog-themed-box {
+  @apply rounded-lg p-4;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+}
+.catalog-themed-box--dashed {
+  @apply rounded-lg px-6 py-12 text-center;
+  border: 1px dashed var(--color-border);
+}
+.catalog-add-dataset-form {
+  @apply px-5 py-4;
+  border-top: 1px solid var(--color-border-light);
+  background: var(--color-surface-subtle);
+}
+.catalog-table-chip {
+  @apply flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-sm;
+  border-color: var(--color-border);
+}
+.catalog-table-chip--cataloged {
+  background: var(--color-badge-ok-bg);
+  border-color: color-mix(in srgb, var(--color-badge-ok-text) 35%, var(--color-border));
+  color: var(--color-badge-ok-text);
 }
 
 /* —— Add dataset row —— */
@@ -599,6 +649,177 @@ button.sidebar-hint {
 .mcp-page-split {
   @apply grid gap-4 lg:grid-cols-2 lg:items-start;
 }
+.agents-page-split {
+  @apply grid gap-4 lg:grid-cols-[minmax(11rem,14rem)_1fr] lg:items-start;
+}
+.agents-list-tabs {
+  @apply m-0 list-none space-y-1 p-0;
+}
+.agents-list-tab {
+  @apply flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors;
+  color: var(--color-text-muted);
+}
+.agents-list-tab:hover {
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+}
+.agents-list-tab--active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+  font-weight: 500;
+}
+.agents-list-tab-name {
+  @apply min-w-0 truncate;
+}
+.agents-list-tab-dot {
+  @apply h-2 w-2 shrink-0 rounded-full;
+  background: var(--color-border);
+}
+.agents-list-tab-dot--on {
+  background: var(--color-primary);
+}
+.agent-flow-builder {
+  @apply grid gap-4 lg:grid-cols-[minmax(10rem,12rem)_1fr];
+}
+.agent-flow-palette-list {
+  @apply flex max-h-[22rem] flex-col gap-2 overflow-y-auto pr-1;
+}
+.agent-flow-agent-card {
+  @apply cursor-grab rounded-lg border px-3 py-2 text-sm transition-colors active:cursor-grabbing;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+.agent-flow-agent-card:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.agent-flow-agent-card-name {
+  @apply block font-medium;
+}
+.agent-flow-agent-card-slug {
+  @apply text-xs text-zinc-500;
+}
+.agent-flow-agent-card-desc {
+  @apply mt-1 line-clamp-2 text-xs text-zinc-500;
+}
+.agent-flow-canvas {
+  @apply min-h-[14rem] rounded-lg border border-dashed p-3 transition-colors;
+  border-color: var(--color-border);
+  background: color-mix(in srgb, var(--color-surface-subtle) 50%, var(--color-surface));
+}
+.agent-flow-canvas--drag-over {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.agent-flow-canvas-empty {
+  @apply flex min-h-[10rem] items-center justify-center text-center text-sm text-zinc-500;
+}
+.agent-flow-steps-list {
+  @apply m-0 list-none space-y-3 p-0;
+}
+.agent-flow-step-card {
+  @apply rounded-lg border px-3 py-3;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+.agent-flow-step-header {
+  @apply flex items-start gap-2;
+}
+.agent-flow-step-index {
+  @apply flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+}
+.agent-instructions-input {
+  position: relative;
+}
+.agent-instructions-mirror {
+  @apply pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-sm;
+  visibility: hidden;
+  z-index: 0;
+}
+.agent-instructions-caret {
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+}
+.agent-instructions-textarea {
+  position: relative;
+  z-index: 1;
+}
+.agent-slash-menu {
+  @apply absolute z-30 min-w-[11rem] max-w-[14rem] overflow-hidden rounded-lg border py-1 shadow-lg;
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+.agent-available-domains {
+  @apply rounded-lg border px-3 py-2;
+  border-color: var(--color-border-light);
+  background: color-mix(in srgb, var(--color-surface-muted, #f8fafc) 70%, var(--color-surface));
+}
+.agent-domain-ref-chip {
+  @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+.agent-domain-ref-slug {
+  @apply rounded px-1 py-0.5 text-[0.65rem];
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+}
+.agent-slash-menu-item {
+  @apply flex w-full flex-col gap-0.5 px-3 py-2 text-left text-sm transition-colors;
+  cursor: pointer;
+}
+.agent-slash-menu-item:hover,
+.agent-slash-menu-item--active {
+  background: var(--color-surface-subtle);
+}
+.agent-run-step {
+  @apply rounded-lg border px-3 py-2 text-sm;
+  border-color: var(--color-border-light);
+  background: var(--color-surface-subtle);
+}
+.agent-run-step-id {
+  @apply mr-2 inline-block rounded px-1.5 py-0.5 text-xs font-semibold uppercase;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+.agent-run-step--warn {
+  border-color: color-mix(in srgb, #d97706 35%, var(--color-border));
+}
+.agent-run-step--error {
+  border-color: var(--color-alert-error-text);
+}
+.agent-run-step--display_only {
+  border-color: color-mix(in srgb, var(--color-primary) 25%, var(--color-border));
+}
+.agent-run-plan-details {
+  @apply inline-block align-top;
+  width: calc(100% - 4.5rem);
+}
+.agent-run-plan-summary {
+  @apply cursor-pointer list-none text-sm;
+}
+.agent-run-plan-summary::-webkit-details-marker {
+  display: none;
+}
+.agent-run-plan-summary::before {
+  content: "▸";
+  @apply mr-1.5 inline-block text-xs text-zinc-400 transition-transform;
+}
+.agent-run-plan-details[open] .agent-run-plan-summary::before {
+  transform: rotate(90deg);
+}
+.agent-run-plan-body {
+  @apply mt-2 max-h-64 overflow-y-auto rounded-md border px-2.5 py-2;
+  border-color: var(--color-border-light);
+  background: var(--color-surface);
+}
+.agent-email-preview {
+  background: color-mix(in srgb, var(--color-surface-muted, #f8fafc) 80%, var(--color-surface));
+}
 .saved-connections-list {
   @apply m-0 list-none p-0;
 }
@@ -639,6 +860,12 @@ button.sidebar-hint {
 }
 .textarea {
   @apply min-h-[5rem] resize-y;
+}
+.textarea.agent-instructions-textarea {
+  min-height: 14rem;
+}
+.textarea.dataset-definition-textarea {
+  min-height: 9rem;
 }
 .field {
   @apply mb-4;
@@ -981,6 +1208,7 @@ label.file-upload-btn {
 .ask-chat {
   @apply rounded-3xl;
   min-height: 0;
+  overflow: hidden;
 }
 .ask-messages {
   overscroll-behavior: contain;
@@ -993,6 +1221,7 @@ label.file-upload-btn {
   }
 }
 .ask-status {
+  @apply rounded-b-3xl;
   background: var(--color-surface);
   padding: 0.75rem 1.5rem 0.625rem;
 }
@@ -1003,6 +1232,7 @@ label.file-upload-btn {
   }
 }
 .ask-composer {
+  @apply rounded-b-3xl;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border-light);
   padding: 0.75rem 1.5rem 1.75rem;
@@ -1047,6 +1277,9 @@ label.file-upload-btn {
   background: var(--color-surface);
   isolation: isolate;
   transition: background 0.35s ease;
+}
+.ask-composer-inner--menu-open {
+  overflow: visible;
 }
 .ask-composer-inner::before,
 .ask-composer-inner::after {
@@ -1190,6 +1423,71 @@ label.file-upload-btn {
 }
 .ask-composer-attachment-remove {
   @apply leading-none text-zinc-400 hover:text-zinc-700;
+}
+.ask-composer-agent-chip {
+  @apply inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium;
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-border));
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+}
+.ask-composer-agent-chip-label {
+  @apply truncate;
+  max-width: 14rem;
+}
+.ask-composer-input-wrap {
+  position: relative;
+  z-index: 2;
+  overflow: visible;
+}
+.ask-composer-mirror {
+  @apply pointer-events-none absolute inset-x-0 top-0 overflow-hidden whitespace-pre-wrap break-words px-4 pt-4 text-sm leading-relaxed;
+  visibility: hidden;
+  z-index: 0;
+}
+.ask-composer-at-marker {
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+}
+.ask-composer-caret {
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+}
+.ask-agent-menu {
+  min-width: 13rem;
+  max-width: 18rem;
+  z-index: 40;
+  pointer-events: auto;
+}
+.ask-agent-menu .agent-slash-menu-item--active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+}
+.ask-agent-menu .agent-slash-menu-item--active .text-zinc-500 {
+  color: color-mix(in srgb, var(--color-primary-text) 70%, transparent);
+}
+.ask-user-agent-tag {
+  @apply mr-1.5 inline-block rounded-full px-2 py-0.5 text-xs font-medium;
+  background: color-mix(in srgb, var(--color-primary-soft) 80%, transparent);
+  color: var(--color-primary-text);
+}
+.ask-user-flow-tag {
+  @apply mr-1.5 inline-block rounded-full px-2 py-0.5 text-xs font-medium;
+  background: color-mix(in srgb, #8b5cf6 18%, var(--color-surface));
+  color: #6d28d9;
+}
+.ask-composer-flow-chip {
+  background: color-mix(in srgb, #8b5cf6 14%, var(--color-surface));
+  border-color: color-mix(in srgb, #8b5cf6 35%, var(--color-border));
+}
+.ask-composer-flow-chip .ask-composer-agent-chip-label {
+  color: #6d28d9;
+}
+.ask-agent-run-result {
+  @apply w-full max-w-2xl rounded-2xl border p-4;
+  border-color: var(--color-border);
+  background: var(--color-surface);
 }
 .ask-composer-input {
   @apply block w-full resize-none border-0 bg-transparent px-4 pb-2 pt-4 text-sm leading-relaxed;
@@ -1491,6 +1789,65 @@ table.data td {
 .analytics-page .page-header {
   @apply mb-0 shrink-0;
 }
+
+/* —— RAG profiles page —— */
+.rag-page .page-header {
+  @apply mb-3;
+}
+.rag-page .page-header h1 {
+  @apply text-xl;
+}
+.rag-page .page-header p {
+  @apply mt-0.5;
+}
+.rag-page .card-pad {
+  @apply p-4;
+}
+.rag-page .rag-selector-row {
+  gap: 0.75rem;
+}
+.rag-page .rag-profile-card {
+  @apply space-y-3;
+}
+.rag-page .rag-profile-header h2 {
+  @apply text-base font-semibold leading-snug;
+}
+.rag-page .rag-profile-header p {
+  @apply mt-0.5 text-xs;
+  color: var(--color-text-muted);
+}
+.rag-page .rag-info-box {
+  @apply rounded-lg border p-3 text-sm;
+  border-color: color-mix(in srgb, var(--color-primary) 20%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--color-surface));
+}
+.rag-page .rag-info-box p {
+  color: var(--color-text-muted);
+}
+.rag-page .rag-embedding-note {
+  @apply text-xs;
+  color: var(--color-text-muted);
+}
+.rag-page .rag-fields-grid {
+  @apply grid gap-3 sm:grid-cols-2;
+}
+.rag-page .label {
+  @apply mb-0.5 text-xs;
+}
+.rag-page .input,
+.rag-page .select,
+.rag-page .textarea {
+  @apply px-2.5 py-1.5;
+}
+.rag-page .rag-textarea {
+  min-height: 4.5rem;
+}
+.rag-page .rag-actions {
+  gap: 0.5rem;
+}
+.rag-page .btn {
+  @apply px-3 py-1.5 text-sm;
+}
 .analytics-shell {
   min-height: 0;
   flex: 1 1 auto;
@@ -1500,6 +1857,55 @@ table.data td {
 }
 .analytics-prompt-bar {
   border-color: var(--color-border-light);
+  padding: 1rem 0.875rem 1rem;
+}
+@media (min-width: 640px) {
+  .analytics-prompt-bar {
+    padding: 1.25rem 1.25rem 1.25rem;
+  }
+}
+@media (min-width: 1024px) {
+  .analytics-prompt-bar {
+    padding: 1.25rem 1.5rem 1.25rem;
+  }
+}
+.analytics-prompt-row {
+  @apply flex flex-wrap items-end;
+  gap: 0.625rem;
+}
+@media (min-width: 640px) {
+  .analytics-prompt-row {
+    gap: 0.75rem;
+  }
+}
+.analytics-prompt-bar .ask-composer-options {
+  margin-top: 0.75rem;
+  gap: 0.625rem;
+}
+.analytics-prompt-bar .analytics-prompt {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.analytics-prompt-bar .analytics-prompt:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+.analytics-prompt-bar .ask-composer-pill {
+  border: 1px solid var(--color-input-border);
+  background: var(--color-surface);
+}
+.analytics-prompt-bar .ask-composer-pill:hover {
+  border-color: var(--color-border);
+}
+.analytics-prompt-bar .ask-composer-pill--active {
+  border-color: var(--color-primary);
+}
+[data-theme="dark"] .analytics-prompt-bar .analytics-prompt {
+  box-shadow: none;
+}
+[data-theme="dark"] .analytics-prompt-bar .ask-composer-pill {
+  border-color: var(--color-border);
 }
 .analytics-prompt {
   resize: vertical;

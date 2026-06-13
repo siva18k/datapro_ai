@@ -91,8 +91,8 @@ export function AnalyticsPage() {
       </div>
 
       <div className="card analytics-shell mb-0 flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="analytics-prompt-bar shrink-0 border-b p-5" style={{ borderColor: "var(--color-border-light)" }}>
-          <div className="flex flex-wrap items-end gap-3">
+        <div className="analytics-prompt-bar shrink-0 border-b">
+          <div className="analytics-prompt-row">
             <textarea
               className="ask-prompt analytics-prompt min-h-0 flex-1"
               rows={2}

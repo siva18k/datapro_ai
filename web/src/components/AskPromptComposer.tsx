@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { api } from "../api/client";
+import type { Agent, AgentFlow } from "../types";
 import { DomainScopePromptOptions } from "./DomainScopePromptOptions";
 import { IconDebug } from "./SidebarNavIcons";
 
@@ -9,6 +12,8 @@ export interface AskAttachment {
   name: string;
   text: string;
 }
+
+type MenuPos = { top: number; left: number };
 
 interface AskPromptComposerProps {
   value: string;
@@ -22,6 +27,10 @@ interface AskPromptComposerProps {
   onDebugModeChange: (value: boolean) => void;
   selectedDomains: string[];
   onSelectedDomainsChange: (slugs: string[]) => void;
+  selectedAgent: Agent | null;
+  onSelectedAgentChange: (agent: Agent | null) => void;
+  selectedFlow: AgentFlow | null;
+  onSelectedFlowChange: (flow: AgentFlow | null) => void;
 }
 
 function OptionPill({
@@ -62,13 +71,73 @@ export function AskPromptComposer({
   onDebugModeChange,
   selectedDomains,
   onSelectedDomainsChange,
+  selectedAgent,
+  onSelectedAgentChange,
+  selectedFlow,
+  onSelectedFlowChange,
 }: AskPromptComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
+  const atMarkerRef = useRef<HTMLSpanElement>(null);
+  const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const wasPendingRef = useRef(false);
   const [isFocused, setIsFocused] = useState(false);
-  const canSend = Boolean(value.trim()) && !isPending;
-  const hasContent = value.length > 0 || attachments.length > 0;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuKind, setMenuKind] = useState<"agent" | "flow" | null>(null);
+  const [menuFilter, setMenuFilter] = useState("");
+  const [atStart, setAtStart] = useState<number | null>(null);
+  const [menuPos, setMenuPos] = useState<MenuPos | null>(null);
+  const [menuHighlightIndex, setMenuHighlightIndex] = useState(0);
+
+  const { data: agents } = useQuery({
+    queryKey: ["agents"],
+    queryFn: api.listAgents,
+  });
+
+  const { data: flows } = useQuery({
+    queryKey: ["agent-flows"],
+    queryFn: api.listAgentFlows,
+  });
+
+  const enabledAgents = useMemo(
+    () => (agents ?? []).filter((a) => a.enabled),
+    [agents],
+  );
+
+  const enabledFlows = useMemo(
+    () => (flows ?? []).filter((f) => f.enabled),
+    [flows],
+  );
+
+  const filteredAgents = useMemo(() => {
+    const q = menuFilter.toLowerCase();
+    return enabledAgents.filter(
+      (a) =>
+        !q ||
+        a.slug.toLowerCase().includes(q) ||
+        a.name.toLowerCase().includes(q),
+    );
+  }, [enabledAgents, menuFilter]);
+
+  const filteredFlows = useMemo(() => {
+    const q = menuFilter.toLowerCase();
+    return enabledFlows.filter(
+      (f) =>
+        !q ||
+        f.slug.toLowerCase().includes(q) ||
+        f.name.toLowerCase().includes(q),
+    );
+  }, [enabledFlows, menuFilter]);
+
+  const visibleAgents = useMemo(() => filteredAgents.slice(0, 8), [filteredAgents]);
+  const visibleFlows = useMemo(() => filteredFlows.slice(0, 8), [filteredFlows]);
+  const visibleMenuItems = menuKind === "flow" ? visibleFlows : visibleAgents;
+  const filteredMenuCount = menuKind === "flow" ? filteredFlows.length : filteredAgents.length;
+
+  const canSend = Boolean((value.trim() || selectedAgent || selectedFlow) && !isPending);
+  const hasContent = value.length > 0 || attachments.length > 0 || Boolean(selectedAgent) || Boolean(selectedFlow);
   const showFocusEffects = isFocused && hasContent;
 
   useEffect(() => {
@@ -78,6 +147,92 @@ export function AskPromptComposer({
     }
     wasPendingRef.current = isPending;
   }, [isPending]);
+
+  const syncMenuPosition = useCallback(() => {
+    const marker = atMarkerRef.current;
+    const container = containerRef.current;
+    if (!marker || !container || !menuOpen || atStart === null) return;
+    const markerRect = marker.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const maxLeft = Math.max(0, container.clientWidth - 220);
+    setMenuPos({
+      top: markerRect.bottom - containerRect.top + 2,
+      left: Math.min(Math.max(0, markerRect.left - containerRect.left), maxLeft),
+    });
+  }, [menuOpen, atStart]);
+
+  const detectAtMenu = useCallback((text: string, pos: number) => {
+    const textBefore = text.slice(0, pos);
+    const flowMatch = textBefore.match(/(?:^|\s)@@([a-z0-9_-]*)$/i);
+    if (flowMatch) {
+      setMenuOpen(true);
+      setMenuKind("flow");
+      setMenuFilter((flowMatch[1] || "").toLowerCase());
+      setAtStart(pos - (flowMatch[1]?.length ?? 0) - 2);
+      setMenuHighlightIndex(0);
+      return;
+    }
+    const atMatch = textBefore.match(/(?:^|\s)@(?!@)([a-z0-9_-]*)$/i);
+    if (atMatch) {
+      setMenuOpen(true);
+      setMenuKind("agent");
+      setMenuFilter((atMatch[1] || "").toLowerCase());
+      setAtStart(pos - (atMatch[1]?.length ?? 0) - 1);
+      setMenuHighlightIndex(0);
+    } else {
+      setMenuOpen(false);
+      setMenuKind(null);
+      setAtStart(null);
+      setMenuPos(null);
+      setMenuHighlightIndex(0);
+    }
+  }, []);
+
+  const insertAgent = (agent: Agent) => {
+    const el = textareaRef.current;
+    if (!el || atStart === null) return;
+    const before = value.slice(0, atStart).replace(/\s$/, "");
+    const after = value.slice(el.selectionStart).replace(/^[a-z0-9_-]*/i, "");
+    const spacer = before.length > 0 && !before.endsWith("\n") ? " " : "";
+    const next = `${before}${spacer}${after}`.replace(/^\s+/, "");
+    onChange(next);
+    onSelectedAgentChange(agent);
+    onSelectedFlowChange(null);
+    setMenuOpen(false);
+    setMenuKind(null);
+    setAtStart(null);
+    setMenuFilter("");
+    setMenuPos(null);
+    setMenuHighlightIndex(0);
+    requestAnimationFrame(() => {
+      const pos = before.length + spacer.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
+  const insertFlow = (flow: AgentFlow) => {
+    const el = textareaRef.current;
+    if (!el || atStart === null) return;
+    const before = value.slice(0, atStart).replace(/\s$/, "");
+    const after = value.slice(el.selectionStart).replace(/^[a-z0-9_-]*/i, "");
+    const spacer = before.length > 0 && !before.endsWith("\n") ? " " : "";
+    const next = `${before}${spacer}${after}`.replace(/^\s+/, "");
+    onChange(next);
+    onSelectedFlowChange(flow);
+    onSelectedAgentChange(null);
+    setMenuOpen(false);
+    setMenuKind(null);
+    setAtStart(null);
+    setMenuFilter("");
+    setMenuPos(null);
+    setMenuHighlightIndex(0);
+    requestAnimationFrame(() => {
+      const pos = before.length + spacer.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  };
 
   const shellClass = [
     "ask-composer-shell",
@@ -90,11 +245,108 @@ export function AskPromptComposer({
     .join(" ");
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (menuOpen && visibleMenuItems.length > 0) {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        setMenuKind(null);
+        setAtStart(null);
+        setMenuPos(null);
+        setMenuHighlightIndex(0);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMenuHighlightIndex((i) => Math.min(i + 1, visibleMenuItems.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMenuHighlightIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        if (menuKind === "flow") {
+          insertFlow(visibleFlows[menuHighlightIndex]);
+        } else {
+          insertAgent(visibleAgents[menuHighlightIndex]);
+        }
+        return;
+      }
+    }
+    if (menuOpen) {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        setAtStart(null);
+        setMenuPos(null);
+        setMenuHighlightIndex(0);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (canSend) onSubmit();
     }
   };
+
+  const onInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const next = e.target.value;
+    const pos = e.target.selectionStart;
+    onChange(next);
+    detectAtMenu(next, pos);
+  };
+
+  const onSelect = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    detectAtMenu(value, el.selectionStart);
+  };
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    const mirror = mirrorRef.current;
+    const textarea = textareaRef.current;
+    if (mirror && textarea) {
+      mirror.scrollTop = textarea.scrollTop;
+    }
+    syncMenuPosition();
+  }, [menuOpen, menuFilter, atStart, value, syncMenuPosition]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    if (menuHighlightIndex >= visibleMenuItems.length) {
+      setMenuHighlightIndex(Math.max(0, visibleMenuItems.length - 1));
+    }
+  }, [visibleMenuItems.length, menuHighlightIndex, menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    setMenuHighlightIndex(0);
+  }, [menuFilter, menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuItemRefs.current[menuHighlightIndex]?.scrollIntoView({ block: "nearest" });
+  }, [menuHighlightIndex, menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (containerRef.current?.contains(e.target as Node)) return;
+      setMenuOpen(false);
+      setAtStart(null);
+      setMenuPos(null);
+      setMenuHighlightIndex(0);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [menuOpen]);
 
   const onPickFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -118,6 +370,9 @@ export function AskPromptComposer({
     onAttachmentsChange(attachments.filter((_, i) => i !== index));
   };
 
+  const atMirrorText = atStart !== null ? value.slice(0, atStart) : "";
+  const atMirrorSuffix = menuKind === "flow" ? "@@" : "@";
+
   return (
     <div className="ask-composer-stack">
       <form
@@ -128,9 +383,37 @@ export function AskPromptComposer({
         className="ask-composer-form"
       >
         <div className={shellClass}>
-          <div className="ask-composer-inner">
-          {attachments.length > 0 && (
+          <div className={`ask-composer-inner${menuOpen ? " ask-composer-inner--menu-open" : ""}`}>
+          {(attachments.length > 0 || selectedAgent || selectedFlow) && (
             <div className="ask-composer-attachments">
+              {selectedFlow && (
+                <span className="ask-composer-agent-chip ask-composer-flow-chip">
+                  <span className="ask-composer-agent-chip-label">@@{selectedFlow.name}</span>
+                  <button
+                    type="button"
+                    className="ask-composer-attachment-remove"
+                    onClick={() => onSelectedFlowChange(null)}
+                    disabled={isPending}
+                    aria-label={`Remove flow ${selectedFlow.name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {selectedAgent && (
+                <span className="ask-composer-agent-chip">
+                  <span className="ask-composer-agent-chip-label">@{selectedAgent.name}</span>
+                  <button
+                    type="button"
+                    className="ask-composer-attachment-remove"
+                    onClick={() => onSelectedAgentChange(null)}
+                    disabled={isPending}
+                    aria-label={`Remove agent ${selectedAgent.name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
               {attachments.map((file, i) => (
                 <span key={`${file.name}-${i}`} className="ask-composer-attachment">
                   <span className="ask-composer-attachment-name">{file.name}</span>
@@ -147,19 +430,99 @@ export function AskPromptComposer({
             </div>
           )}
 
-          <textarea
-            ref={textareaRef}
-            className="ask-composer-input"
-            rows={1}
-            placeholder="Ask a question… e.g. travel policy, revenue by region"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            onKeyDown={onKeyDown}
-            disabled={isPending}
-            aria-busy={isPending}
-          />
+          <div ref={containerRef} className="ask-composer-input-wrap relative">
+            <div ref={mirrorRef} className="ask-composer-mirror" aria-hidden>
+              {atMirrorText}
+              <span ref={atMarkerRef} className="ask-composer-at-marker">{atMirrorSuffix}</span>
+            </div>
+            <textarea
+              ref={textareaRef}
+              className="ask-composer-input"
+              rows={1}
+              placeholder={
+                selectedFlow
+                  ? "Add instructions for this flow run…"
+                  : selectedAgent
+                    ? "Add instructions for this agent run…"
+                    : "Ask a question, type @ for an agent, or @@ for a flow…"
+              }
+              value={value}
+              onChange={onInput}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              onKeyDown={onKeyDown}
+              onSelect={onSelect}
+              onScroll={syncMenuPosition}
+              disabled={isPending}
+              aria-busy={isPending}
+              aria-expanded={menuOpen}
+              aria-autocomplete="list"
+              aria-controls={menuOpen ? "ask-agent-menu" : undefined}
+              aria-activedescendant={
+                menuOpen && visibleMenuItems.length > 0
+                  ? `ask-menu-option-${menuKind}-${menuHighlightIndex}`
+                  : undefined
+              }
+            />
+            {menuOpen && visibleMenuItems.length > 0 && menuPos && (
+              <div
+                id="ask-agent-menu"
+                className="agent-slash-menu ask-agent-menu"
+                role="listbox"
+                style={{ top: menuPos.top, left: menuPos.left }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                {menuKind === "flow"
+                  ? visibleFlows.map((f, index) => (
+                      <button
+                        key={f.id}
+                        id={`ask-menu-option-flow-${index}`}
+                        ref={(el) => {
+                          menuItemRefs.current[index] = el;
+                        }}
+                        type="button"
+                        className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
+                        role="option"
+                        aria-selected={index === menuHighlightIndex}
+                        onMouseEnter={() => setMenuHighlightIndex(index)}
+                        onClick={() => insertFlow(f)}
+                      >
+                        <span className="font-medium">@@{f.slug}</span>
+                        <span className="text-zinc-500">{f.name}</span>
+                      </button>
+                    ))
+                  : visibleAgents.map((a, index) => (
+                      <button
+                        key={a.id}
+                        id={`ask-menu-option-agent-${index}`}
+                        ref={(el) => {
+                          menuItemRefs.current[index] = el;
+                        }}
+                        type="button"
+                        className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
+                        role="option"
+                        aria-selected={index === menuHighlightIndex}
+                        onMouseEnter={() => setMenuHighlightIndex(index)}
+                        onClick={() => insertAgent(a)}
+                      >
+                        <span className="font-medium">@{a.slug}</span>
+                        <span className="text-zinc-500">{a.name}</span>
+                      </button>
+                    ))}
+              </div>
+            )}
+            {menuOpen && filteredMenuCount === 0 && menuPos && (
+              <div
+                className="agent-slash-menu ask-agent-menu"
+                style={{ top: menuPos.top, left: menuPos.left }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <p className="px-3 py-2 text-xs text-zinc-500">
+                  {menuKind === "flow" ? "No flows match" : "No agents match"}
+                </p>
+              </div>
+            )}
+          </div>
 
           <div className="ask-composer-toolbar">
             <div className="ask-composer-toolbar-left">
@@ -188,7 +551,7 @@ export function AskPromptComposer({
               type="submit"
               className="ask-composer-send-btn"
               disabled={!canSend}
-              aria-label="Send question"
+              aria-label={selectedFlow ? "Run flow" : selectedAgent ? "Run agent" : "Send question"}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
                 <path d="M12 19V5M5 12l7-7 7 7" />

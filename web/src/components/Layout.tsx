@@ -12,6 +12,8 @@ import { SidebarFooter } from "./SidebarFooter";
 import { ThemeSettings } from "./ThemeSettings";
 import { useResizableSidebar } from "../hooks/useResizableSidebar";
 import {
+  IconAgentFlows,
+  IconAgents,
   IconAnalytics,
   IconAsk,
   IconCatalog,
@@ -37,6 +39,8 @@ const mainNav: NavItemConfig[] = [
 const bottomNav: NavItemConfig[] = [
   { to: "/rag", label: "RAG", Icon: IconRag },
   { to: "/mcp", label: "MCP", Icon: IconMcp },
+  { to: "/agents", label: "Agents", Icon: IconAgents },
+  { to: "/agent-flows", label: "Agent Flows", Icon: IconAgentFlows },
   { to: "/", label: "Data Catalog", end: true, Icon: IconCatalog },
 ];
 

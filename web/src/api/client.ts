@@ -1,4 +1,9 @@
 import type {
+  Agent,
+  AgentFlow,
+  AgentFlowRunResult,
+  AgentRunResult,
+  AgentToolBinding,
   AnalyticsResponse,
   AskExportResponse,
   AskResponse,
@@ -44,7 +49,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string }>("/health"),
   readiness: () => request<ReadinessResponse>("/readiness"),
-  stats: () => request<{ total_chunks: number; ingested_files: number }>("/stats"),
+  stats: () =>
+    request<{
+      total_chunks: number;
+      ingested_files: number;
+      domain_count: number;
+      dataset_count: number;
+    }>("/stats"),
 
   listDomains: () => request<Domain[]>("/domains"),
   createDomain: (name: string, description = "") =>
@@ -266,6 +277,158 @@ export const api = {
       lookup_tables: number;
       removed_chunks: number;
     }>(`/rag/sources/${sourceId}/index-catalog`, { method: "POST" }),
+
+  listAgents: () => request<Agent[]>("/agents"),
+  getAgent: (id: string) => request<Agent>(`/agents/${id}`),
+  createAgent: (data: { name: string; description?: string; instructions?: string; capabilities?: Agent["capabilities"] }) =>
+    request<Agent>("/agents", { method: "POST", body: JSON.stringify(data) }),
+  updateAgent: (id: string, data: Partial<Agent>) =>
+    request<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteAgent: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/agents/${id}`, { method: "DELETE" }),
+  setAgentTools: (id: string, tools: Pick<AgentToolBinding, "mcp_server_id" | "tool_name">[]) =>
+    request<{ ok: boolean; tools: AgentToolBinding[] }>(`/agents/${id}/tools`, {
+      method: "PUT",
+      body: JSON.stringify({ tools }),
+    }),
+  formatAgentInstructions: (id: string, instructions?: string) =>
+    request<{ markdown: string }>(`/agents/${id}/format`, {
+      method: "POST",
+      body: JSON.stringify({ instructions }),
+    }),
+
+  agentRunStream: async (
+    agentId: string,
+    onEvent: (event: {
+      type: string;
+      message?: string;
+      step_id?: string;
+      status?: string;
+      payload?: Record<string, unknown>;
+    }) => void,
+    data?: { extra_instructions?: string; backend?: string; model?: string; ollama_base_url?: string },
+  ): Promise<AgentRunResult> => {
+    const res = await fetch(`${BASE}/agents/${agentId}/run/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data ?? {}),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      try {
+        const body = JSON.parse(text) as { detail?: string };
+        if (typeof body.detail === "string") throw new Error(body.detail);
+      } catch (e) {
+        if (e instanceof Error && e.message !== text) throw e;
+      }
+      throw new Error(text || res.statusText);
+    }
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("No response stream");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result: AgentRunResult | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line) as {
+          type: string;
+          message?: string;
+          step_id?: string;
+          status?: string;
+          payload?: Record<string, unknown>;
+        };
+        onEvent(event);
+        if (event.type === "result" && event.payload) {
+          result = event.payload as unknown as AgentRunResult;
+        }
+        if (event.type === "error") throw new Error(event.message || "Agent run failed");
+      }
+    }
+
+    if (!result) throw new Error("Agent run finished without a result");
+    return result;
+  },
+
+  listAgentFlows: () => request<AgentFlow[]>("/agent-flows"),
+  getAgentFlow: (id: string) => request<AgentFlow>(`/agent-flows/${id}`),
+  createAgentFlow: (data: {
+    name: string;
+    description?: string;
+    instructions?: string;
+    steps?: AgentFlow["steps"];
+  }) => request<AgentFlow>("/agent-flows", { method: "POST", body: JSON.stringify(data) }),
+  updateAgentFlow: (id: string, data: Partial<AgentFlow>) =>
+    request<AgentFlow>(`/agent-flows/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteAgentFlow: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/agent-flows/${id}`, { method: "DELETE" }),
+
+  agentFlowRunStream: async (
+    flowId: string,
+    onEvent: (event: {
+      type: string;
+      message?: string;
+      step_id?: string;
+      status?: string;
+      payload?: Record<string, unknown>;
+    }) => void,
+    data?: { extra_instructions?: string; backend?: string; model?: string; ollama_base_url?: string },
+  ): Promise<AgentFlowRunResult> => {
+    const res = await fetch(`${BASE}/agent-flows/${flowId}/run/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data ?? {}),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      try {
+        const body = JSON.parse(text) as { detail?: string };
+        if (typeof body.detail === "string") throw new Error(body.detail);
+      } catch (e) {
+        if (e instanceof Error && e.message !== text) throw e;
+      }
+      throw new Error(text || res.statusText);
+    }
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("No response stream");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result: AgentFlowRunResult | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line) as {
+          type: string;
+          message?: string;
+          step_id?: string;
+          status?: string;
+          payload?: Record<string, unknown>;
+        };
+        onEvent(event);
+        if (event.type === "result" && event.payload) {
+          result = event.payload as unknown as AgentFlowRunResult;
+        }
+        if (event.type === "error") throw new Error(event.message || "Agent flow run failed");
+      }
+    }
+
+    if (!result) throw new Error("Agent flow run finished without a result");
+    return result;
+  },
 
   mcpStatus: () => request<McpStatusResponse>("/mcp/status"),
 

@@ -163,30 +163,26 @@ def ingest_source_files(
 
 
 def _profile_supplement_items(source: dict, profile: dict) -> list[dict]:
-    """Embed RAG profile instructions and glossary — not raw dataset rows."""
+    """Embed RAG profile instructions — not raw dataset rows."""
     prefix = f"{source['domain_slug']}_{source['slug']}"
     chunk_size = profile["chunk_size"]
     chunk_overlap = profile["chunk_overlap"]
+    body = (profile.get("instructions") or "").strip()
+    if not body:
+        return []
     items: list[dict] = []
-    for name, text, chunk_prefix in (
-        ("instructions", profile.get("instructions") or "", "instr"),
-        ("metadata", profile.get("metadata_text") or "", "meta"),
-    ):
-        body = text.strip()
-        if not body:
-            continue
-        for i, chunk in enumerate(chunk_text(body, chunk_size, chunk_overlap)):
-            items.append(
-                {
-                    "id": f"{prefix}_{name}_{i}",
-                    "source_file": f"{source['slug']}_{name}",
-                    "chunk_id": f"{chunk_prefix}_{i:02d}",
-                    "content": chunk,
-                    "domain_id": source["domain_id"],
-                    "source_id": source["id"],
-                    "rag_profile_id": profile["id"],
-                }
-            )
+    for i, chunk in enumerate(chunk_text(body, chunk_size, chunk_overlap)):
+        items.append(
+            {
+                "id": f"{prefix}_instructions_{i}",
+                "source_file": f"{source['slug']}_instructions",
+                "chunk_id": f"instr_{i:02d}",
+                "content": chunk,
+                "domain_id": source["domain_id"],
+                "source_id": source["id"],
+                "rag_profile_id": profile["id"],
+            }
+        )
     return items
 
 

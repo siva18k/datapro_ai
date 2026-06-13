@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.deps import bootstrap
-from api.routers import analytics, ask, backend, connections, datasets, domains, health, mcp, rag, settings
+from api.routers import agent_flows, agents, analytics, ask, backend, connections, datasets, domains, health, mcp, rag, settings
 
 
 @asynccontextmanager
@@ -44,5 +44,7 @@ app.include_router(ask.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 app.include_router(rag.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")
+app.include_router(agents.router, prefix="/api")
+app.include_router(agent_flows.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(connections.router, prefix="/api")

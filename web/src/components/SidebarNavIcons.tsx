@@ -19,6 +19,28 @@ export function IconAnalytics(props: IconProps) {
   );
 }
 
+export function IconAgents(props: IconProps) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden {...props}>
+      <rect x="5" y="2" width="14" height="10" rx="2" />
+      <path d="M12 12v3M8 22h8M9 15h6" />
+      <circle cx="9" cy="7" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="7" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IconAgentFlows(props: IconProps) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden {...props}>
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="8.5" y="14" width="7" height="7" rx="1.5" />
+      <path d="M6.5 10v2.5M6.5 12.5H12M12 12.5v1.5M17.5 10v2.5M12 12.5h5.5" />
+    </svg>
+  );
+}
+
 export function IconRag(props: IconProps) {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden {...props}>

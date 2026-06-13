@@ -183,6 +183,86 @@ export interface AnalyticsResponse {
   notes?: string[];
 }
 
+export interface AgentCapabilities {
+  kpi_check?: boolean;
+  generate_report?: boolean;
+  send_email?: boolean;
+  email_to?: string;
+}
+
+export interface AgentToolBinding {
+  id?: string;
+  agent_id?: string;
+  mcp_server_id: string;
+  tool_name: string;
+  server_name?: string;
+  server_slug?: string;
+}
+
+export interface Agent {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  instructions: string;
+  capabilities: AgentCapabilities;
+  enabled: boolean;
+  domain_slugs?: string[];
+  domain_warnings?: string[];
+  tools?: AgentToolBinding[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AgentRunStep {
+  step_id: string;
+  message: string;
+  status?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface AgentRunResult {
+  agent_id: string;
+  kpi_passed?: boolean | null;
+  report_generated?: boolean;
+  email_preview?: boolean;
+}
+
+export interface AgentFlowStep {
+  agent_id: string;
+  handoff?: string;
+  agent_name?: string;
+  agent_slug?: string;
+}
+
+export interface AgentFlow {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  instructions: string;
+  steps: AgentFlowStep[];
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AgentFlowRunResult {
+  flow_id: string;
+  completed_steps: number;
+  total_steps: number;
+  failed?: boolean;
+  error?: string;
+  report_html?: string | null;
+  agent_results?: {
+    agent_id: string;
+    agent_name: string;
+    agent_slug: string;
+    step_index: number;
+    summary?: string;
+  }[];
+}
+
 export interface ReadinessComponent {
   ok: boolean;
   message?: string | null;

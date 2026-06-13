@@ -187,7 +187,7 @@ def _lookup_row_chunks(source: dict, table: dict, profile: dict | None) -> list[
 
 
 def build_catalog_rag_items(source: dict, profile: dict | None) -> list[dict[str, Any]]:
-    """Chunks for catalog metadata + optional lookup row data + profile metadata_text."""
+    """Chunks for catalog metadata, optional lookup row data, and profile instructions."""
     profile = profile or get_rag_profile(source["id"]) or {}
     chunk_size = profile.get("chunk_size") or 400
     chunk_overlap = profile.get("chunk_overlap") or 60
@@ -220,21 +220,16 @@ def build_catalog_rag_items(source: dict, profile: dict | None) -> list[dict[str
     for table in list_table_metadata(source["id"]):
         items.extend(_lookup_row_chunks(source, table, profile))
 
-    for name, text, chunk_prefix in (
-        ("instructions", profile.get("instructions") or "", "instr"),
-        ("glossary", profile.get("metadata_text") or "", "gloss"),
-    ):
-        extra = text.strip()
-        if not extra:
-            continue
-        for i, piece in enumerate(chunk_text(extra, chunk_size, chunk_overlap)):
+    instructions = (profile.get("instructions") or "").strip()
+    if instructions:
+        for i, piece in enumerate(chunk_text(instructions, chunk_size, chunk_overlap)):
             items.append(
                 {
-                    "id": f"{prefix}_{name}_{i}",
+                    "id": f"{prefix}_instructions_{i}",
                     "source_file": _scoped_catalog_source_file(
-                        domain_slug, source_slug, name
+                        domain_slug, source_slug, "instructions"
                     ),
-                    "chunk_id": f"{chunk_prefix}_{i:02d}",
+                    "chunk_id": f"instr_{i:02d}",
                     "content": piece,
                     "domain_id": source["domain_id"],
                     "source_id": source["id"],

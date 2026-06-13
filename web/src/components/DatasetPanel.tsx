@@ -149,7 +149,8 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
         <div className="space-y-4">
           <p className="text-sm text-zinc-500">Markdown definition for analysts and LLMs.</p>
           <textarea
-            className="textarea min-h-[220px] font-mono"
+            className="textarea dataset-definition-textarea font-mono"
+            rows={6}
             value={md}
             onChange={(e) => setMd(e.target.value)}
             placeholder="# Dataset definition"
@@ -172,7 +173,7 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
             </a>
           </div>
           {md && (
-            <details className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+            <details className="catalog-themed-box">
               <summary className="cursor-pointer text-sm font-medium">Preview</summary>
               <div className="prose-chat mt-3">
                 <ReactMarkdown>{md}</ReactMarkdown>
@@ -362,7 +363,7 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
       <ErrorNotice error={refresh.isError ? refresh.error : null} />
 
       {refresh.data && (
-        <div className="rounded-lg border border-zinc-200 p-4">
+        <div className="catalog-themed-box">
           <div className="mb-2 flex flex-wrap items-center gap-3">
             <label className="label mb-0 min-w-0 flex-1">
               Tables in schema <strong>{String(pgForm.schema || "public")}</strong> ({remoteTables.length} found
@@ -384,8 +385,8 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
             {filteredRemoteTables.map((t) => (
               <label
                 key={t}
-                className={`flex cursor-pointer items-center gap-1.5 rounded border px-2 py-1 text-sm ${
-                  catalogedNames.has(t) ? "border-emerald-300 bg-emerald-50" : "border-zinc-200"
+                className={`catalog-table-chip ${
+                  catalogedNames.has(t) ? "catalog-table-chip--cataloged" : ""
                 }`}
               >
                 <input
@@ -397,7 +398,7 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
                   }
                 />
                 {t}
-                {catalogedNames.has(t) && <span className="text-xs text-emerald-700">(in catalog)</span>}
+                {catalogedNames.has(t) && <span className="text-xs opacity-80">(in catalog)</span>}
               </label>
             ))}
           </div>
@@ -541,7 +542,7 @@ function TableEditor({ datasetId, tables }: { datasetId: string; tables: TableMe
   };
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-4">
+    <div className="catalog-themed-box">
       <label className="label">Table metadata &amp; columns ({tables.length} tables)</label>
       <div className="mb-3 flex max-w-md flex-wrap items-center gap-2">
         <select className="select min-w-0 flex-1" value={active} onChange={(e) => setActive(e.target.value)}>
@@ -749,9 +750,9 @@ function DataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm }) {
 
 function ConnectorDataPlaceholder({ connector }: { connector: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-zinc-200 px-6 py-12 text-center">
-      <p className="text-sm font-medium text-zinc-700">{CONNECTOR_LABELS[connector] ?? connector} data sources</p>
-      <p className="mt-2 text-sm text-zinc-500">Not wired yet — set endpoint in Connection.</p>
+    <div className="catalog-themed-box--dashed">
+      <p className="text-sm font-medium" style={{ color: "var(--color-text)" }}>{CONNECTOR_LABELS[connector] ?? connector} data sources</p>
+      <p className="mt-2 text-sm" style={{ color: "var(--color-text-muted)" }}>Not wired yet — set endpoint in Connection.</p>
     </div>
   );
 }
@@ -842,7 +843,7 @@ function FileDataTab({ dataset }: { dataset: Dataset }) {
       </div>
 
       {!files?.length ? (
-        <p className="rounded-lg border border-dashed border-zinc-200 py-10 text-center text-sm text-zinc-500">
+        <p className="catalog-themed-box--dashed py-10 text-sm" style={{ color: "var(--color-text-muted)" }}>
           No files yet. Upload documents above, then ingest them into the knowledge base.
         </p>
       ) : (
