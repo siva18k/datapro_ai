@@ -330,14 +330,25 @@ export const api = {
     }),
 
   mcpBindings: (domainId: string) =>
-    request<{
-      domain_id: string;
-      bindings: {
-        tools: McpBindingItem[];
-        resources: McpBindingItem[];
-        prompts: McpBindingItem[];
-      };
-    }>(`/mcp/bindings?domain_id=${encodeURIComponent(domainId)}`),
+    request<McpBindingsResponse>(`/mcp/bindings?domain_id=${encodeURIComponent(domainId)}`),
+
+  mcpBindingCatalog: () => request<McpBindingCatalogResponse>("/mcp/binding-catalog"),
+
+  addMcpBinding: (data: {
+    domain_id: string;
+    mcp_server_id: string;
+    capability_type: "tool" | "resource" | "prompt";
+    capability_name: string;
+  }) =>
+    request<{ ok: boolean; binding: McpBoundCapability }>("/mcp/bindings", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  removeMcpBinding: (bindingId: string) =>
+    request<{ ok: boolean }>(`/mcp/bindings/${encodeURIComponent(bindingId)}`, {
+      method: "DELETE",
+    }),
 
   setMcpBinding: (data: {
     domain_id: string;
@@ -345,11 +356,69 @@ export const api = {
     capability_name: string;
     enabled: boolean;
     source_id?: string | null;
+    mcp_server_id?: string | null;
   }) =>
-    request<{ ok: boolean; requires_restart: boolean }>("/mcp/bindings", {
+    request<{ ok: boolean }>("/mcp/bindings", {
       method: "PUT",
       body: JSON.stringify(data),
     }),
+
+  listMcpServers: () =>
+    request<{ servers: McpServerRecord[]; dismissed_optional?: McpOptionalServerSpec[] }>(
+      "/mcp/servers",
+    ),
+
+  restoreMcpServer: (slug: string) =>
+    request<{ ok: boolean; server: McpServerRecord }>(
+      `/mcp/servers/restore/${encodeURIComponent(slug)}`,
+      { method: "POST" },
+    ),
+
+  createMcpServer: (data: {
+    name: string;
+    url: string;
+    description?: string;
+    server_kind?: "public" | "enterprise";
+    transport?: string;
+  }) =>
+    request<{ ok: boolean; server: McpServerRecord }>("/mcp/servers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateMcpServer: (
+    serverId: string,
+    data: {
+      name?: string;
+      url?: string;
+      description?: string;
+      server_kind?: "public" | "enterprise";
+      transport?: string;
+      enabled?: boolean;
+    },
+  ) =>
+    request<{ ok: boolean; server: McpServerRecord }>(`/mcp/servers/${encodeURIComponent(serverId)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  deleteMcpServer: (serverId: string) =>
+    request<{ ok: boolean }>(`/mcp/servers/${encodeURIComponent(serverId)}`, {
+      method: "DELETE",
+    }),
+
+  startMcpServer: (serverId: string) =>
+    request<McpServerActionResponse>(`/mcp/servers/${encodeURIComponent(serverId)}/start`, {
+      method: "POST",
+    }),
+
+  stopMcpServer: (serverId: string) =>
+    request<McpServerActionResponse>(`/mcp/servers/${encodeURIComponent(serverId)}/stop`, {
+      method: "POST",
+    }),
+
+  mcpServerCapabilities: (serverId: string) =>
+    request<McpServerCapabilitiesResponse>(`/mcp/servers/${encodeURIComponent(serverId)}/capabilities`),
 
   getSettings: () => request<AppSettings>("/settings"),
   saveSettings: (data: {
@@ -434,10 +503,87 @@ export interface McpActionResponse extends McpStatusResponse {
 }
 
 export interface McpBindingItem {
+  id?: string;
   name: string;
   enabled: boolean;
   description?: string;
   uri?: string;
+  mcp_server_id?: string;
+  server_name?: string;
+  server_slug?: string;
+  server_url?: string;
+  server_kind?: string;
+}
+
+export interface McpBoundCapability extends McpBindingItem {
+  id: string;
+  domain_id: string;
+}
+
+export interface McpBindingsResponse {
+  domain_id: string;
+  bindings: {
+    tools: McpBindingItem[];
+    resources: McpBindingItem[];
+    prompts: McpBindingItem[];
+  };
+}
+
+export interface McpServerRecord {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  url: string;
+  server_kind: "builtin" | "public" | "enterprise";
+  transport: string;
+  enabled: boolean;
+  is_builtin: boolean;
+  can_manage?: boolean;
+  reachable?: boolean;
+  running?: boolean;
+  status_label?: string;
+  runtime?: string;
+  port?: number;
+}
+
+export interface McpServerActionResponse {
+  ok: boolean;
+  message: string;
+  server: McpServerRecord;
+}
+
+export interface McpOptionalServerSpec {
+  slug: string;
+  name: string;
+  description: string;
+  default_url: string;
+  server_kind: string;
+}
+
+export interface McpCatalogCapability {
+  name: string;
+  description?: string;
+  uri?: string;
+}
+
+export interface McpBindingCatalogEntry {
+  server: McpServerRecord;
+  reachable: boolean;
+  tools: McpCatalogCapability[];
+  resources: McpCatalogCapability[];
+  prompts: McpCatalogCapability[];
+}
+
+export interface McpBindingCatalogResponse {
+  servers: McpBindingCatalogEntry[];
+}
+
+export interface McpServerCapabilitiesResponse {
+  reachable: boolean;
+  tools: McpCatalogCapability[];
+  resources: McpCatalogCapability[];
+  prompts: McpCatalogCapability[];
 }
 
 export interface McpRegistryPrompt {

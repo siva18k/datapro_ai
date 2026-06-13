@@ -263,7 +263,7 @@ export function AskPage() {
           </div>
         )}
 
-        <div className="ask-composer shrink-0 border-t border-zinc-100">
+        <div className="ask-composer shrink-0">
           <AskPromptComposer
             value={input}
             onChange={setInput}

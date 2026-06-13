@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -54,6 +55,18 @@ def _parse_tool_result(result) -> list[dict]:
         else:
             chunks.append(_normalize_chunk(parsed))
     return chunks
+
+
+async def _call_tool_raw(url: str, tool_name: str, arguments: dict) -> Any:
+    async with streamablehttp_client(url, timeout=30) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.call_tool(tool_name, arguments)
+
+
+def call_tool(url: str, tool_name: str, arguments: dict | None = None) -> Any:
+    """Call any MCP tool and return the raw CallToolResult."""
+    return asyncio.run(_call_tool_raw(url, tool_name, arguments or {}))
 
 
 async def _call_search_documents(

@@ -42,6 +42,7 @@ services:
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       DEFAULT_LLM_BACKEND: ${DEFAULT_LLM_BACKEND:-mistral}
+      EMAIL_MCP_URL: ${EMAIL_MCP_URL:-http://127.0.0.1:8010/mcp}
     restart: "no"
 
   api:
@@ -57,6 +58,7 @@ services:
     environment:
       <<: *app-env
       MCP_URL: http://mcp:8000/mcp
+      EMAIL_MCP_URL: ${EMAIL_MCP_URL:-http://email-mcp:8010/mcp}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     volumes:
       - ./sample_docs:/app/sample_docs:ro
@@ -96,6 +98,29 @@ services:
       MCP_PORT: 8000
       MCP_PATH: /mcp
       MCP_STATELESS: "true"
+
+  # Optional email MCP:
+  #   docker compose --profile integrations up -d email-mcp
+  email-mcp:
+    profiles: [integrations]
+    build:
+      context: .
+      target: email-mcp
+    container_name: datapro-email-mcp
+    ports:
+      - "${EMAIL_MCP_PORT:-8010}:8010"
+    environment:
+      <<: *app-env
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      IMAP_HOST: ${IMAP_HOST:-imap.gmail.com}
+      IMAP_PORT: ${IMAP_PORT:-993}
+      IMAP_USER: ${IMAP_USER:-${SMTP_USER:-}}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-${SMTP_PASSWORD:-}}
+      EMAIL_TO_ALLOWLIST: ${EMAIL_TO_ALLOWLIST:-}
 
 volumes:
   datapro_pgdata:

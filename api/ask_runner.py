@@ -9,8 +9,10 @@ from api.answer_format import build_sql_summary_prompt
 from api.llm import generate_answer, resolve_llm_runtime
 from catalog_service import ensure_catalog_ready, normalize_domain_overrides
 from db import chunk_verify_sql, search_chunks
-from mcp_client import check_mcp_server, get_default_mcp_url
-from mcp_client import search_documents as mcp_search_documents
+from mcp_domain_service import (
+    build_prompt_via_domain_mcp,
+    retrieve_chunks_for_scope,
+)
 from orchestrator import build_domain_rag_prompt, strip_source_citations, _legacy_query_kind
 from query_planner import find_best_rag_domain, resolve_query_plan, structured_fallback_available
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
@@ -454,71 +456,56 @@ def _rag_search_events(
     routing = meta.get("routing") or {}
     domain_ids = routing.get("domain_ids")
     scope_kwargs = _scoped_search_kwargs(meta)
-    url = body.mcp_url or get_default_mcp_url()
-    domain_arg = routing.get("domain_slug") or meta.get("domain_name")
+    domain_id = meta.get("domain_id")
+    domain_slug = routing.get("domain_slug")
     chunks: list[dict] = []
     retrieval = "vector"
-    domain_id = meta.get("domain_id")
-    mcp_eligible = check_mcp_server(url) and len(domain_ids or []) <= 1
+    mcp_meta: dict[str, Any] | None = None
 
-    if mcp_eligible:
+    domain_chunks, mcp_meta = retrieve_chunks_for_scope(
+        body.question,
+        domain_id=domain_id,
+        domain_ids=domain_ids,
+        domain_slug=domain_slug,
+        top_k=body.top_k,
+    )
+    if domain_chunks:
         yield from _mark_mcp(usage)
-        yield _status("Searching documents via MCP server…")
+        yield _status("Searching documents via domain MCP bindings…")
+        url = mcp_meta.get("mcp_url") if mcp_meta else ""
+        tool = mcp_meta.get("mcp_tool", "search_documents") if mcp_meta else "search_documents"
         mcp_args: dict[str, Any] = {"query": body.question, "top_k": body.top_k}
-        if domain_ids and len(domain_ids) == 1 and domain_arg:
-            mcp_args["domain"] = domain_arg
+        if domain_ids and len(domain_ids) == 1 and domain_slug:
+            mcp_args["domain"] = domain_slug
         yield from _maybe_trace(
             body,
-            "MCP session connecting",
+            f"MCP tool call: {tool}",
             "mcp",
             retrieval="mcp",
             mcp_url=url,
-            retrieval_query=body.question,
-            top_k=body.top_k,
-            domain_id=domain_id,
-            domain_name=meta.get("domain_name"),
-        )
-        yield from _maybe_trace(
-            body,
-            "MCP tool call: search_documents",
-            "mcp",
-            retrieval="mcp",
-            mcp_url=url,
-            mcp_tool="search_documents",
+            mcp_tool=tool,
             mcp_arguments=mcp_args,
             retrieval_query=body.question,
             top_k=body.top_k,
             domain_id=domain_id,
             domain_name=meta.get("domain_name"),
         )
-        try:
-            mcp_domain = domain_arg if domain_ids and len(domain_ids) == 1 else None
-            chunks = mcp_search_documents(
-                url,
-                body.question,
-                top_k=body.top_k,
-                domain=mcp_domain,
-            )
-            retrieval = "mcp"
-        except Exception as exc:
-            yield _status(f"MCP search failed ({exc}) — using local index…")
-            chunks = []
-
-        if chunks:
-            yield from _maybe_trace(
-                body,
-                f"MCP tool returned {len(chunks)} chunk(s)",
-                "mcp",
-                retrieval="mcp",
-                mcp_url=url,
-                mcp_tool="search_documents",
-                mcp_arguments=mcp_args,
-                retrieval_query=body.question,
-                top_k=body.top_k,
-                domain_id=domain_id,
-                domain_name=meta.get("domain_name"),
-                chunks=_chunk_refs(chunks),
-            )
+        chunks = domain_chunks
+        retrieval = "mcp"
+        yield from _maybe_trace(
+            body,
+            f"MCP tool returned {len(chunks)} chunk(s)",
+            "mcp",
+            retrieval="mcp",
+            mcp_url=url,
+            mcp_tool=tool,
+            mcp_arguments=mcp_args,
+            retrieval_query=body.question,
+            top_k=body.top_k,
+            domain_id=domain_id,
+            domain_name=meta.get("domain_name"),
+            chunks=_chunk_refs(chunks),
+        )
 
     if not chunks:
         search_msg = f"Searching ingested documents (top {body.top_k} chunks)…"
@@ -652,12 +639,31 @@ def _rag_events(
     gen_msg = "Generating answer from document context…"
     yield _status(gen_msg)
     domain_name = meta.get("domain_name") or domain_name
-    _, prompt = build_domain_rag_prompt(
+    domain_slug = routing.get("domain_slug")
+    mcp_prompt, mcp_prompt_meta = build_prompt_via_domain_mcp(
         body.question,
-        chunks,
-        domain_name=domain_name,
-        cite_sources=body.debug,
+        domain_id=meta.get("domain_id"),
+        domain_slug=domain_slug,
+        top_k=body.top_k,
     )
+    if mcp_prompt:
+        prompt = mcp_prompt
+        if mcp_prompt_meta:
+            yield from _maybe_trace(
+                body,
+                f"Using MCP prompt: {mcp_prompt_meta.get('mcp_prompt')}",
+                "mcp",
+                mcp_url=mcp_prompt_meta.get("mcp_url"),
+                domain_id=meta.get("domain_id"),
+                domain_name=domain_name,
+            )
+    else:
+        _, prompt = build_domain_rag_prompt(
+            body.question,
+            chunks,
+            domain_name=domain_name,
+            cite_sources=body.debug,
+        )
     yield from _maybe_trace(
         body,
         gen_msg,

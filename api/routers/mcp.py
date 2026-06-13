@@ -5,8 +5,22 @@ import re
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from catalog_db import list_domains, list_mcp_bindings, set_mcp_binding
-from mcp_client import get_default_mcp_url, get_prompt_preview, list_server_capabilities, read_resource_preview
+from catalog_db import (
+    add_mcp_binding,
+    create_mcp_server,
+    delete_mcp_server,
+    get_mcp_server,
+    list_domains,
+    list_mcp_bindings,
+    list_mcp_servers,
+    list_dismissed_optional_mcp_servers,
+    remove_mcp_binding,
+    restore_optional_mcp_server,
+    set_mcp_binding,
+    update_mcp_server,
+)
+from mcp_client import check_mcp_server, get_default_mcp_url, get_prompt_preview, list_server_capabilities, read_resource_preview
+from integration_mcp_process import enrich_server_runtime, start_integration, stop_integration
 from mcp_process import get_server_log_tail, get_server_status, restart_server, start_server, stop_server
 from mcp_registry import (
     REGISTRY_DEFAULTS,
@@ -29,6 +43,31 @@ class McpBindingUpdate(BaseModel):
     capability_name: str
     enabled: bool
     source_id: str | None = None
+    mcp_server_id: str | None = None
+
+
+class McpBindingAdd(BaseModel):
+    domain_id: str
+    mcp_server_id: str
+    capability_type: str
+    capability_name: str
+
+
+class McpServerCreate(BaseModel):
+    name: str
+    url: str
+    description: str = ""
+    server_kind: str = "public"
+    transport: str = "streamable-http"
+
+
+class McpServerUpdate(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    description: str | None = None
+    server_kind: str | None = None
+    transport: str | None = None
+    enabled: bool | None = None
 
 
 class McpPromptUpdate(BaseModel):
@@ -79,7 +118,100 @@ def _binding_enabled(
             and row.get("capability_name") == capability_name
         ):
             return bool(row.get("enabled", True))
-    return True
+    return False
+
+
+def _group_bindings(bindings: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {"tools": [], "resources": [], "prompts": []}
+    type_key = {"tool": "tools", "resource": "resources", "prompt": "prompts"}
+    for row in bindings:
+        if row.get("source_id"):
+            continue
+        key = type_key.get(row.get("capability_type", ""))
+        if not key:
+            continue
+        grouped[key].append(
+            {
+                "id": row.get("id"),
+                "name": row.get("capability_name"),
+                "enabled": bool(row.get("enabled", True)),
+                "mcp_server_id": row.get("mcp_server_id"),
+                "server_name": row.get("server_name"),
+                "server_slug": row.get("server_slug"),
+                "server_url": row.get("server_url"),
+                "server_kind": row.get("server_kind"),
+            }
+        )
+    return grouped
+
+
+def _builtin_capabilities(registry: dict) -> dict:
+    tools = []
+    for name in REGISTRY_DEFAULTS["tools"]:
+        tools.append(
+            {
+                "name": name,
+                "description": get_tool_description(name, registry),
+            }
+        )
+    resources = []
+    for uri in REGISTRY_DEFAULTS["resources"]:
+        meta = get_resource_meta(uri, registry)
+        resources.append({"name": meta["name"], "uri": uri, "description": meta["description"]})
+    prompts = []
+    for name in REGISTRY_DEFAULTS["prompts"]:
+        meta = get_prompt_meta(name, registry)
+        prompts.append({"name": name, "description": meta["description"]})
+    return {"tools": tools, "resources": resources, "prompts": prompts}
+
+
+def _live_capabilities_for_server(server: dict, registry: dict | None = None) -> dict:
+    registry = registry or load_registry()
+    reachable = check_mcp_server(server["url"])
+    out = {"reachable": reachable, "tools": [], "resources": [], "prompts": []}
+    if server.get("is_builtin"):
+        builtin = _builtin_capabilities(registry)
+        out["tools"] = builtin["tools"]
+        out["resources"] = builtin["resources"]
+        out["prompts"] = builtin["prompts"]
+    if reachable:
+        try:
+            live = list_server_capabilities(server["url"])
+            if not server.get("is_builtin"):
+                out["tools"] = [
+                    {"name": t.get("name"), "description": t.get("description", "")}
+                    for t in live.get("tools", [])
+                    if t.get("name")
+                ]
+                out["resources"] = [
+                    {"name": r.get("name") or r.get("uri"), "uri": r.get("uri"), "description": r.get("description", "")}
+                    for r in live.get("resources", [])
+                    if r.get("uri")
+                ]
+                out["prompts"] = [
+                    {"name": p.get("name"), "description": p.get("description", "")}
+                    for p in live.get("prompts", [])
+                    if p.get("name")
+                ]
+            else:
+                live_tools = {t.get("name"): t for t in live.get("tools", [])}
+                live_resources = {r.get("uri"): r for r in live.get("resources", [])}
+                live_prompts = {p.get("name"): p for p in live.get("prompts", [])}
+                for tool in out["tools"]:
+                    live = live_tools.get(tool["name"])
+                    if live and live.get("description"):
+                        tool["description"] = live["description"]
+                for resource in out["resources"]:
+                    live = live_resources.get(resource["uri"])
+                    if live and live.get("description"):
+                        resource["description"] = live["description"]
+                for prompt in out["prompts"]:
+                    live = live_prompts.get(prompt["name"])
+                    if live and live.get("description"):
+                        prompt["description"] = live["description"]
+        except Exception:
+            pass
+    return out
 
 
 def _status_payload(registry: dict | None = None) -> dict:
@@ -271,12 +403,124 @@ def preview_prompt(name: str, body: McpPromptPreviewBody | None = None):
 
 @router.get("/binding-catalog")
 def binding_catalog():
-    """Default capability names grouped by type (for domain binding UI)."""
+    """All registered MCP servers and discoverable capabilities for domain binding UI."""
+    registry = load_registry()
+    servers = list_mcp_servers(enabled_only=False)
+    catalog = []
+    for server in servers:
+        caps = _live_capabilities_for_server(server, registry)
+        catalog.append({"server": server, **caps})
+    return {"servers": catalog}
+
+
+@router.get("/servers")
+def mcp_servers_list():
+    servers = list_mcp_servers(enabled_only=False)
+    dismissed = list_dismissed_optional_mcp_servers()
     return {
-        "tools": list(REGISTRY_DEFAULTS["tools"].keys()),
-        "resources": list(REGISTRY_DEFAULTS["resources"].keys()),
-        "prompts": list(REGISTRY_DEFAULTS["prompts"].keys()),
+        "servers": [enrich_server_runtime(server) for server in servers],
+        "dismissed_optional": dismissed,
     }
+
+
+@router.post("/servers/restore/{slug}")
+def mcp_server_restore(slug: str):
+    server = restore_optional_mcp_server(slug)
+    if not server:
+        raise HTTPException(404, "Unknown or unavailable optional MCP server")
+    return {"ok": True, "server": enrich_server_runtime(server)}
+
+
+@router.post("/servers/{server_id}/start")
+def mcp_server_start(server_id: str):
+    server = get_mcp_server(server_id=server_id)
+    if not server:
+        raise HTTPException(404, "MCP server not found")
+    if server.get("is_builtin"):
+        registry = load_registry()
+        ok, message = start_server(registry)
+        return {"ok": ok, "message": message, "server": enrich_server_runtime(server)}
+    ok, message = start_integration(server["slug"], url=server["url"])
+    return {
+        "ok": ok,
+        "message": message,
+        "server": enrich_server_runtime(get_mcp_server(server_id=server_id) or server),
+    }
+
+
+@router.post("/servers/{server_id}/stop")
+def mcp_server_stop(server_id: str):
+    server = get_mcp_server(server_id=server_id)
+    if not server:
+        raise HTTPException(404, "MCP server not found")
+    if server.get("is_builtin"):
+        registry = load_registry()
+        ok, message = stop_server(registry)
+        return {"ok": ok, "message": message, "server": enrich_server_runtime(server)}
+    ok, message = stop_integration(server["slug"], url=server["url"])
+    return {
+        "ok": ok,
+        "message": message,
+        "server": enrich_server_runtime(get_mcp_server(server_id=server_id) or server),
+    }
+
+
+@router.post("/servers")
+def mcp_server_create(body: McpServerCreate):
+    if body.server_kind not in ("public", "enterprise"):
+        raise HTTPException(400, "server_kind must be public or enterprise")
+    server = create_mcp_server(
+        body.name.strip(),
+        body.url.strip(),
+        description=body.description.strip(),
+        server_kind=body.server_kind,
+        transport=body.transport.strip() or "streamable-http",
+    )
+    return {"ok": True, "server": server}
+
+
+@router.put("/servers/{server_id}")
+def mcp_server_update(server_id: str, body: McpServerUpdate):
+    server = get_mcp_server(server_id=server_id)
+    if not server:
+        raise HTTPException(404, "MCP server not found")
+    if server.get("is_builtin"):
+        if body.url is None:
+            raise HTTPException(400, "Built-in MCP server: only url can be updated")
+        updated = update_mcp_server(server_id, url=body.url.strip())
+        return {"ok": True, "server": enrich_server_runtime(updated or server)}
+    if body.server_kind is not None and body.server_kind not in ("public", "enterprise"):
+        raise HTTPException(400, "server_kind must be public or enterprise")
+    updated = update_mcp_server(
+        server_id,
+        name=body.name.strip() if body.name is not None else None,
+        url=body.url.strip() if body.url is not None else None,
+        description=body.description.strip() if body.description is not None else None,
+        server_kind=body.server_kind,
+        transport=body.transport.strip() if body.transport is not None else None,
+        enabled=body.enabled,
+    )
+    return {"ok": True, "server": enrich_server_runtime(updated or server)}
+
+
+@router.delete("/servers/{server_id}")
+def mcp_server_delete(server_id: str):
+    server = get_mcp_server(server_id=server_id)
+    if not server:
+        raise HTTPException(404, "MCP server not found")
+    if server.get("is_builtin"):
+        raise HTTPException(400, "Built-in MCP server cannot be deleted")
+    if not delete_mcp_server(server_id):
+        raise HTTPException(404, "MCP server not found")
+    return {"ok": True}
+
+
+@router.get("/servers/{server_id}/capabilities")
+def mcp_server_capabilities(server_id: str):
+    server = get_mcp_server(server_id=server_id)
+    if not server:
+        raise HTTPException(404, "MCP server not found")
+    return _live_capabilities_for_server(server)
 
 
 @router.get("/bindings")
@@ -284,35 +528,31 @@ def mcp_bindings(domain_id: str):
     if not any(d["id"] == domain_id for d in list_domains(enabled_only=False)):
         raise HTTPException(404, "Domain not found")
     bindings = list_mcp_bindings(domain_id)
-    result: dict[str, list[dict]] = {"tools": [], "resources": [], "prompts": []}
-    for name in REGISTRY_DEFAULTS["tools"]:
-        result["tools"].append(
-            {
-                "name": name,
-                "enabled": _binding_enabled(bindings, domain_id, "tool", name),
-                "description": get_tool_description(name),
-            }
-        )
-    for uri in REGISTRY_DEFAULTS["resources"]:
-        meta = get_resource_meta(uri)
-        result["resources"].append(
-            {
-                "name": meta["name"],
-                "uri": uri,
-                "enabled": _binding_enabled(bindings, domain_id, "resource", meta["name"]),
-                "description": meta["description"],
-            }
-        )
-    for name in REGISTRY_DEFAULTS["prompts"]:
-        meta = get_prompt_meta(name)
-        result["prompts"].append(
-            {
-                "name": name,
-                "enabled": _binding_enabled(bindings, domain_id, "prompt", name),
-                "description": meta["description"],
-            }
-        )
-    return {"domain_id": domain_id, "bindings": result}
+    return {"domain_id": domain_id, "bindings": _group_bindings(bindings)}
+
+
+@router.post("/bindings")
+def add_binding(body: McpBindingAdd):
+    if body.capability_type not in ("tool", "resource", "prompt"):
+        raise HTTPException(400, "capability_type must be tool, resource, or prompt")
+    if not get_mcp_server(server_id=body.mcp_server_id):
+        raise HTTPException(404, "MCP server not found")
+    if not any(d["id"] == body.domain_id for d in list_domains(enabled_only=False)):
+        raise HTTPException(404, "Domain not found")
+    binding = add_mcp_binding(
+        body.domain_id,
+        body.mcp_server_id,
+        body.capability_type,
+        body.capability_name.strip(),
+    )
+    return {"ok": True, "binding": binding}
+
+
+@router.delete("/bindings/{binding_id}")
+def delete_binding(binding_id: str):
+    if not remove_mcp_binding(binding_id):
+        raise HTTPException(404, "Binding not found")
+    return {"ok": True}
 
 
 @router.put("/bindings")
@@ -325,5 +565,6 @@ def update_binding(body: McpBindingUpdate):
         body.capability_name,
         body.enabled,
         source_id=body.source_id,
+        mcp_server_id=body.mcp_server_id,
     )
-    return {"ok": True, "requires_restart": True}
+    return {"ok": True}

@@ -22,6 +22,8 @@ outputs/
 chroma_store/
 .mcp_server.pid
 .mcp_server.log
+.email_mcp.pid
+.email_mcp.log
 .api_server.pid
 .api_server.log
 

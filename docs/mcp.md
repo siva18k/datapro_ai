@@ -24,7 +24,23 @@ Grab the JSON from the **MCP** page, or paste something like:
 }
 ```
 
-Restart MCP after you change prompts or domain bindings.
+Restart MCP after you change **built-in registry prompts**. Domain bindings apply at ask time without a restart.
+
+## MCP servers & domain bindings
+
+Register multiple MCP servers on the **MCP** page (built-in DATA Pro plus public/enterprise endpoints). Per domain, bind **tools**, **resources**, and **prompts** from any server. Ask uses those bindings for retrieval and prompt templates.
+
+### Pre-seeded optional integration
+
+After `python scripts/migrate.py`, the catalog includes one optional **public** server:
+
+| Server | Purpose | Start |
+|--------|---------|--------|
+| **Email (SMTP/IMAP)** | Send mail + search inbox (Gmail app password, etc.) | `python email_mcp_server.py` or `docker compose --profile integrations up -d email-mcp` |
+
+**Email setup:** set `SMTP_*` / `IMAP_*` in `.env` (see `.env.example`). Optional `EMAIL_TO_ALLOWLIST` restricts who can receive mail.
+
+For SQL charts and dashboards, use the in-app **Analytics** page — no separate dashboard MCP server.
 
 **stdio mode** (some clients want this):
 

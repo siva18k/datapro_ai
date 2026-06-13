@@ -50,3 +50,11 @@ ENV MCP_HOST=0.0.0.0
 ENV MCP_PORT=8000
 ENV MCP_PATH=/mcp
 CMD ["python", "mcp_server.py"]
+
+FROM python-base AS email-mcp
+EXPOSE 8010
+ENV EMAIL_MCP_TRANSPORT=streamable-http
+ENV EMAIL_MCP_HOST=0.0.0.0
+ENV EMAIL_MCP_PORT=8010
+ENV EMAIL_MCP_PATH=/mcp
+CMD ["python", "email_mcp_server.py"]

@@ -9,7 +9,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
-from catalog_db import apply_migrations, ensure_catalog_seeded  # noqa: E402
+from catalog_db import apply_migrations, ensure_catalog_seeded, verify_catalog_schema  # noqa: E402
 from db import get_db_config, knowledge_chunks_has_catalog_columns  # noqa: E402
 
 
@@ -53,6 +53,28 @@ def main() -> int:
         print("\nDone — catalog columns already present (002 skipped: not table owner).")
     else:
         print("\nDone — all migrations applied.")
+
+    print("\nVerifying catalog + MCP schema…")
+    check = verify_catalog_schema()
+    info = check.get("info") or {}
+    servers = info.get("mcp_servers") or []
+    if servers:
+        print(f"MCP servers ({len(servers)}):")
+        for s in servers:
+            tag = "built-in" if s.get("builtin") else "external"
+            print(f"  - {s['slug']} ({tag})")
+    optional = [s for s in servers if s.get("slug") == "email_smtp"]
+    if optional:
+        print("Optional integration: email_smtp (see docs/mcp.md)")
+    print(f"Domains: {info.get('domains', '?')}  Domain MCP bindings: {info.get('domain_bindings', '?')}")
+    if check["ok"]:
+        print("Catalog verification: OK")
+    else:
+        print("Catalog verification: ISSUES")
+        for issue in check["issues"]:
+            print(f"  - {issue}")
+        return 1
+
     return 0
 
 

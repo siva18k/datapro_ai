@@ -6,9 +6,10 @@ This database is sometimes called the **catalog database** or **metadata databas
 
 | What | Tables / objects | Used by |
 |------|------------------|---------|
-| **Catalog metadata** | `domains`, `data_sources`, `rag_profiles`, `table_metadata`, `column_metadata`, … | Data Catalog, routing, SQL generation |
+| **Catalog metadata** | `domains`, `data_sources`, `rag_profiles`, `mcp_servers`, `mcp_bindings`, `table_metadata`, `column_metadata`, … | Data Catalog, routing, SQL generation, MCP domain bindings |
 | **RAG embeddings** | `knowledge_chunks` (+ pgvector `embedding` column) | Ask, RAG ingest, MCP search |
-| **Migration state** | `schema_migrations` | `scripts/migrate.py` |
+
+Migrations in `migrations/*.sql` are idempotent (`IF NOT EXISTS` / `IF EXISTS`). Apply them with `scripts/migrate.py` — do not maintain separate DDL scripts for the same objects.
 
 The API, MCP server, and migration script all read the **same connection** from `.env` (`DATABASE_URL` or `PG*` variables).
 
