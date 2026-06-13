@@ -7,7 +7,7 @@ from typing import Any
 
 from api.answer_format import build_sql_summary_prompt
 from api.llm import generate_answer, resolve_llm_runtime
-from catalog_service import ensure_catalog_ready
+from catalog_service import ensure_catalog_ready, normalize_domain_overrides
 from db import chunk_verify_sql, search_chunks
 from mcp_client import check_mcp_server, get_default_mcp_url
 from mcp_client import search_documents as mcp_search_documents
@@ -112,12 +112,39 @@ def _response_from_meta(meta: dict[str, Any], **kwargs: Any) -> AskResponse:
     )
 
 
+def _scoped_search_kwargs(meta: dict[str, Any]) -> dict[str, Any]:
+    routing = meta.get("routing") or {}
+    domain_ids = routing.get("domain_ids")
+    if domain_ids:
+        if len(domain_ids) == 1:
+            return {"domain_id": domain_ids[0]}
+        return {"domain_ids": domain_ids}
+    domain_id = meta.get("domain_id")
+    if domain_id:
+        return {"domain_id": domain_id}
+    return {}
+
+
+def _scope_locked(meta: dict[str, Any]) -> bool:
+    method = (meta.get("routing") or {}).get("method", "")
+    return method in ("override", "override_multi")
+
+
 def _vector_search_chunks(
     body: AskRequest,
     embedder,
     meta: dict[str, Any],
     domain_id: str | None,
 ) -> list[dict]:
+    scope_kwargs = _scoped_search_kwargs(meta)
+    if _scope_locked(meta):
+        return search_chunks(
+            body.question,
+            embedder,
+            top_k=body.top_k,
+            **scope_kwargs,
+        )
+
     chunks = search_chunks(
         body.question,
         embedder,
@@ -149,6 +176,7 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         base_url=body.ollama_base_url,
     )
 
+    selected_domains = normalize_domain_overrides(body.domain_override, body.domain_overrides)
     yield from _maybe_trace(
         body,
         "Question received",
@@ -156,14 +184,23 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         question=body.question,
         top_k=body.top_k,
         domain_override=body.domain_override,
+        domain_overrides=selected_domains or None,
     )
 
     yield _status("Routing question to the best domain and dataset…")
-    plan = resolve_query_plan(body.question, embedder, domain_override=body.domain_override)
+    plan = resolve_query_plan(
+        body.question,
+        embedder,
+        domain_override=body.domain_override,
+        domain_overrides=body.domain_overrides,
+    )
     routing = plan.routing
     method = routing.get("method", "")
 
-    if method == "override" and plan.domain_name:
+    if method == "override_multi" and plan.domain_name:
+        yield _status(f"Using selected domains: {plan.domain_name}.")
+        routing_msg = f"Using selected domains: {plan.domain_name}."
+    elif method == "override" and plan.domain_name:
         yield _status(f"Using {plan.domain_name} domain (your selection).")
         routing_msg = f"Using {plan.domain_name} domain (your selection)."
     elif plan.domain_name:
@@ -414,17 +451,21 @@ def _rag_search_events(
 ) -> Iterator[dict[str, Any]]:
     """Search documents via MCP when the server is reachable, else local vector search."""
     usage = meta.setdefault("usage", {"rag": False, "mcp": False})
-    domain_id = meta.get("domain_id")
+    routing = meta.get("routing") or {}
+    domain_ids = routing.get("domain_ids")
+    scope_kwargs = _scoped_search_kwargs(meta)
     url = body.mcp_url or get_default_mcp_url()
-    domain_arg = meta.get("routing", {}).get("domain_slug") or meta.get("domain_name")
+    domain_arg = routing.get("domain_slug") or meta.get("domain_name")
     chunks: list[dict] = []
     retrieval = "vector"
+    domain_id = meta.get("domain_id")
+    mcp_eligible = check_mcp_server(url) and len(domain_ids or []) <= 1
 
-    if check_mcp_server(url):
+    if mcp_eligible:
         yield from _mark_mcp(usage)
         yield _status("Searching documents via MCP server…")
         mcp_args: dict[str, Any] = {"query": body.question, "top_k": body.top_k}
-        if domain_id and domain_arg:
+        if domain_ids and len(domain_ids) == 1 and domain_arg:
             mcp_args["domain"] = domain_arg
         yield from _maybe_trace(
             body,
@@ -451,11 +492,12 @@ def _rag_search_events(
             domain_name=meta.get("domain_name"),
         )
         try:
+            mcp_domain = domain_arg if domain_ids and len(domain_ids) == 1 else None
             chunks = mcp_search_documents(
                 url,
                 body.question,
                 top_k=body.top_k,
-                domain=domain_arg if domain_id else None,
+                domain=mcp_domain,
             )
             retrieval = "mcp"
         except Exception as exc:
@@ -480,6 +522,8 @@ def _rag_search_events(
 
     if not chunks:
         search_msg = f"Searching ingested documents (top {body.top_k} chunks)…"
+        if len(domain_ids or []) > 1:
+            search_msg = f"Searching selected domains (top {body.top_k} chunks)…"
         yield _status(search_msg)
         yield from _maybe_trace(
             body,
@@ -498,12 +542,14 @@ def _rag_search_events(
             body.question,
             embedder,
             top_k=body.top_k,
-            domain_id=domain_id_before,
+            **scope_kwargs,
         )
-        if not chunks:
+        if not chunks and not _scope_locked(meta):
             if domain_id_before:
                 yield _status("No chunks in this domain — searching other domains…")
             chunks = _vector_search_chunks(body, embedder, meta, domain_id_before)
+        elif not chunks and _scope_locked(meta):
+            yield _status("No matching documents in selected domains.")
         if chunks and meta.get("domain_id") != domain_id_before:
             domain_name = meta.get("domain_name")
             if domain_name:
@@ -547,8 +593,12 @@ def _rag_events(
             chunks = event["chunks"]
 
     if not chunks:
-        fallback = structured_fallback_available(body.question, embedder)
-        if fallback and not body.domain_override:
+        fallback = structured_fallback_available(
+            body.question,
+            embedder,
+            allowed_domain_ids=routing.get("domain_ids") if _scope_locked(meta) else None,
+        )
+        if fallback and not _scope_locked(meta):
             for note in fallback.notes:
                 yield _status(note)
             meta["domain_id"] = fallback.domain_id

@@ -28,9 +28,9 @@ flowchart TB
     end
 
     subgraph data [Data]
-        CatDB[(Catalog Postgres)]
+        CatDB[(Catalog Postgres<br/>metadata + RAG)]
         Files[Files / uploads]
-        SrcDB[(Source DBs)]
+        SrcDB[(Source DBs<br/>optional warehouses)]
     end
 
     Browser --> Web
@@ -42,4 +42,4 @@ flowchart TB
     API --> SrcDB
 ```
 
-Rough order of operations: install → **Settings** (LLM + DB) → catalog domain + dataset → ingest → **Ask** → optionally wire up MCP.
+Rough order of operations: install → **[catalog database](catalog-database.md)** → **Settings** (LLM + DB) → catalog domain + dataset → ingest → **Ask** → optionally wire up MCP.

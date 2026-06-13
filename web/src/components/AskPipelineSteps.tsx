@@ -34,6 +34,9 @@ function TraceDetail({ detail }: { detail: PipelineTraceDetail }) {
       <dl className="ask-pipeline-meta">
         {detail.question && <MetaRow label="Question" value={detail.question} />}
         {detail.top_k != null && <MetaRow label="Top K" value={String(detail.top_k)} />}
+        {detail.domain_overrides && detail.domain_overrides.length > 0 && (
+          <MetaRow label="Domain scope" value={detail.domain_overrides.join(", ")} />
+        )}
         {detail.domain_override && <MetaRow label="Domain override" value={detail.domain_override} />}
         {detail.domain_name && <MetaRow label="Domain" value={detail.domain_name} />}
         {detail.domain_id && <MetaRow label="domain_id" value={detail.domain_id} />}

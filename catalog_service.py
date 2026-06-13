@@ -225,6 +225,34 @@ def resolve_domain(identifier: str) -> dict | None:
     return None
 
 
+def resolve_domains(identifiers: list[str]) -> list[dict]:
+    """Resolve many domain identifiers; unknown entries are skipped."""
+    seen: set[str] = set()
+    resolved: list[dict] = []
+    for identifier in identifiers:
+        key = identifier.strip()
+        if not key:
+            continue
+        domain = resolve_domain(key)
+        if not domain or domain["id"] in seen:
+            continue
+        seen.add(domain["id"])
+        resolved.append(domain)
+    return resolved
+
+
+def normalize_domain_overrides(
+    domain_override: str | None = None,
+    domain_overrides: list[str] | None = None,
+) -> list[str]:
+    """Merge legacy single override with multi-select slugs."""
+    if domain_overrides:
+        return [item.strip() for item in domain_overrides if item and item.strip()]
+    if domain_override and domain_override.strip():
+        return [domain_override.strip()]
+    return []
+
+
 def get_routing_context() -> list[dict]:
     """Domains with sources for question routing."""
     from routing_cache import get_cached_routing_context

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { DomainScopePromptOptions } from "./DomainScopePromptOptions";
 import { IconDebug } from "./SidebarNavIcons";
 
 const TEXT_EXTENSIONS = /\.(txt|md|csv|json|xml|html|htm|log|yaml|yml)$/i;
@@ -19,6 +20,8 @@ interface AskPromptComposerProps {
   onAttachmentsChange: (attachments: AskAttachment[]) => void;
   debugMode: boolean;
   onDebugModeChange: (value: boolean) => void;
+  selectedDomains: string[];
+  onSelectedDomainsChange: (slugs: string[]) => void;
 }
 
 function OptionPill({
@@ -57,6 +60,8 @@ export function AskPromptComposer({
   onAttachmentsChange,
   debugMode,
   onDebugModeChange,
+  selectedDomains,
+  onSelectedDomainsChange,
 }: AskPromptComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -195,6 +200,10 @@ export function AskPromptComposer({
       </form>
 
       <div className="ask-composer-options">
+        <DomainScopePromptOptions
+          selectedSlugs={selectedDomains}
+          onChange={onSelectedDomainsChange}
+        />
         <OptionPill
           active={debugMode}
           onClick={() => onDebugModeChange(!debugMode)}

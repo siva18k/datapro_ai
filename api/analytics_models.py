@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class AnalyticsRequest(BaseModel):
     prompt: str
     domain_override: str | None = None
+    domain_overrides: list[str] | None = None
     backend: str | None = None
     model: str | None = None
     ollama_base_url: str | None = None

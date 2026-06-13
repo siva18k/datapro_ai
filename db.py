@@ -172,6 +172,7 @@ def search_chunks(
     query_vector=None,
     *,
     domain_id: str | None = None,
+    domain_ids: list[str] | None = None,
     source_id: str | None = None,
     source_ids: list[str] | None = None,
 ):
@@ -187,6 +188,11 @@ def search_chunks(
             if domain_id:
                 clauses.append("domain_id = :domain_id::uuid")
                 params["domain_id"] = domain_id
+            elif domain_ids:
+                placeholders = ", ".join(f":did_{i}::uuid" for i in range(len(domain_ids)))
+                clauses.append(f"domain_id IN ({placeholders})")
+                for i, did in enumerate(domain_ids):
+                    params[f"did_{i}"] = did
             if source_id:
                 clauses.append("source_id = :source_id::uuid")
                 params["source_id"] = source_id

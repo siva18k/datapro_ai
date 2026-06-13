@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from catalog_service import get_routing_context, resolve_domain
+from catalog_service import get_routing_context, normalize_domain_overrides, resolve_domains
 
 
 def _domain_routing_text(domain: dict) -> str:
@@ -33,17 +33,26 @@ def route_question(
     embedder=None,
     *,
     domain_override: str | None = None,
+    domain_overrides: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return domain_id, domain_slug, domain_name, confidence, method."""
-    if domain_override:
-        domain = resolve_domain(domain_override)
-        if domain:
+    overrides = normalize_domain_overrides(domain_override, domain_overrides)
+    if overrides:
+        selected = resolve_domains(overrides)
+        if selected:
+            names = ", ".join(domain["name"] for domain in selected)
+            slugs = [domain["slug"] for domain in selected]
+            ids = [domain["id"] for domain in selected]
+            primary = selected[0]
+            method = "override" if len(selected) == 1 else "override_multi"
             return {
-                "domain_id": domain["id"],
-                "domain_slug": domain["slug"],
-                "domain_name": domain["name"],
+                "domain_id": primary["id"],
+                "domain_slug": primary["slug"],
+                "domain_name": names,
+                "domain_ids": ids,
+                "domain_slugs": slugs,
                 "confidence": 1.0,
-                "method": "override",
+                "method": method,
             }
 
     domains = get_routing_context()

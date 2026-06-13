@@ -40,7 +40,7 @@ docker compose run --rm api python scripts/migrate_finance_data.py --fresh
 
 ## Your own Postgres instead of `db`
 
-Point `.env` at it:
+Point `.env` at your catalog database — full steps in **[catalog-database.md](catalog-database.md)**. Summary:
 
 ```bash
 DATABASE_URL="postgresql://user:pass@host:5432/dbname"
@@ -72,3 +72,13 @@ extra_hosts:
 - `docker/init-db.sql` — enables pgvector on first DB start
 
 See [installation.md](installation.md) and [mcp.md](mcp.md) for the rest.
+
+## AWS ECS on AWS (production)
+
+Production deployment is **AWS-only** (ECS Fargate, ECR, RDS). Templates live in **`deploy.example/`** (public, no secrets). Copy locally:
+
+```bash
+./deploy.example/scripts/init-deploy.sh
+```
+
+Edit **`deploy/`** only (gitignored). Full AWS guide: [docs/deploy-ecs.md](../docs/deploy-ecs.md).

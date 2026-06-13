@@ -31,6 +31,13 @@ COPY --from=web-build /app/web/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
 
+# ECS / Cloud Map: set API_UPSTREAM_HOST to the internal API service hostname.
+FROM nginx:alpine AS web-ecs
+COPY --from=web-build /app/web/dist /usr/share/nginx/html
+COPY docker/nginx.ecs.conf.template /etc/nginx/templates/default.conf.template
+ENV API_UPSTREAM_HOST=api
+EXPOSE 80
+
 # --- Default image target: API ---
 FROM python-base AS api
 EXPOSE 8080

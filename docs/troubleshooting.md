@@ -2,7 +2,7 @@
 
 **"API offline" in the UI** — API isn't running. `docker compose up api`, or `uvicorn api.main:app --port 8080`, or **Settings → Start API**.
 
-**Migrate fails** — Postgres not reachable, or `vector` extension missing, or the DB user can't `CREATE` the schema. Run `CREATE EXTENSION IF NOT EXISTS vector;` as a superuser if needed.
+**Migrate fails** — Postgres not reachable, or `vector` extension missing, or the DB user can't `CREATE` the schema. Run `CREATE EXTENSION IF NOT EXISTS vector;` as a superuser if needed. See [catalog-database.md](catalog-database.md).
 
 **`permission denied` on migration 002** — Run the DBA SQL that `migrate.py` prints, as the table owner.
 

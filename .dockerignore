@@ -3,6 +3,7 @@ __pycache__
 *.pyc
 *.pyo
 .git
+.cursor/
 .env
 .env.*
 !.env.example
@@ -11,8 +12,13 @@ saved_db_connections.json
 secrets.toml
 *.log
 *.pid
+*.cer
+certs/
+deploy/
+pages/
 web/node_modules
 web/dist
+*.tsbuildinfo
 outputs
 chroma_store
 .DS_Store

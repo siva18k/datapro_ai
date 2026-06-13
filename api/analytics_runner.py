@@ -9,7 +9,7 @@ from api.analytics_builder import build_dashboard
 from api.analytics_models import AnalyticsRequest, AnalyticsResponse
 from api.answer_format import build_analytics_summary_prompt
 from api.llm import generate_answer, resolve_llm_runtime
-from catalog_service import ensure_catalog_ready
+from catalog_service import ensure_catalog_ready, normalize_domain_overrides
 from query_planner import resolve_query_plan, structured_fallback_available
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
 
@@ -39,9 +39,16 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         return
 
     yield _status("Analyzing prompt across domains and data sources…")
-    plan = resolve_query_plan(prompt, embedder, domain_override=body.domain_override)
+    selected_domains = normalize_domain_overrides(body.domain_override, body.domain_overrides)
+    scope_locked = bool(selected_domains)
+    plan = resolve_query_plan(
+        prompt,
+        embedder,
+        domain_override=body.domain_override,
+        domain_overrides=body.domain_overrides,
+    )
 
-    if plan.execution_kind not in ("sql", "hybrid") and not body.domain_override:
+    if plan.execution_kind not in ("sql", "hybrid") and not scope_locked:
         fallback = structured_fallback_available(prompt, embedder)
         if fallback:
             plan = fallback

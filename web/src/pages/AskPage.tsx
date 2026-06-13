@@ -29,7 +29,7 @@ interface AskMutationInput {
   question: string;
   displayQuestion: string;
   topK: number;
-  domainOverride: string;
+  selectedDomains: string[];
   debug: boolean;
 }
 
@@ -37,7 +37,7 @@ export function AskPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [topK, setTopK] = useState(3);
-  const [domainOverride, setDomainOverride] = useState("");
+  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>([]);
   const [debugMode, setDebugMode] = useState(false);
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
@@ -70,24 +70,24 @@ export function AskPage() {
       <AskRetrievalPanel
         topK={topK}
         onTopKChange={setTopK}
-        domainOverride={domainOverride}
-        onDomainOverrideChange={setDomainOverride}
+        selectedDomains={selectedDomains}
+        onSelectedDomainsChange={setSelectedDomains}
         outputFormats={outputFormats}
         onOutputFormatsChange={setOutputFormats}
         debugMode={debugMode}
       />
     ),
-    [topK, domainOverride, outputFormats, debugMode],
+    [topK, selectedDomains, outputFormats, debugMode],
   );
   useSetSidebarContent(sidebarPanel);
 
   const ask = useMutation({
-    mutationFn: ({ question, topK, domainOverride, debug }: AskMutationInput) =>
+    mutationFn: ({ question, topK, selectedDomains, debug }: AskMutationInput) =>
       api.askStream(
         {
           question,
           top_k: topK,
-          domain_override: domainOverride || undefined,
+          domain_overrides: selectedDomains.length ? selectedDomains : undefined,
           debug,
         },
         (message) => setActivityStatus(message),
@@ -139,7 +139,7 @@ export function AskPage() {
       question: q,
       displayQuestion,
       topK,
-      domainOverride,
+      selectedDomains,
       debug: debugMode,
     });
   };
@@ -176,8 +176,8 @@ export function AskPage() {
         <AskRetrievalPanel
           topK={topK}
           onTopKChange={setTopK}
-          domainOverride={domainOverride}
-          onDomainOverrideChange={setDomainOverride}
+          selectedDomains={selectedDomains}
+          onSelectedDomainsChange={setSelectedDomains}
           outputFormats={outputFormats}
           onOutputFormatsChange={setOutputFormats}
           debugMode={debugMode}
@@ -274,6 +274,8 @@ export function AskPage() {
             onAttachmentsChange={setAttachments}
             debugMode={debugMode}
             onDebugModeChange={handleDebugModeChange}
+            selectedDomains={selectedDomains}
+            onSelectedDomainsChange={setSelectedDomains}
           />
         </div>
       </div>

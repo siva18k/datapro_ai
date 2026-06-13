@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+# Cursor IDE (local agent rules — not part of the project)
+.cursor/
+
 # Local TLS / proxy certificates
 certs/
 
@@ -25,3 +28,16 @@ chroma_store/
 # Frontend build
 web/node_modules/
 web/dist/
+*.tsbuildinfo
+
+# TLS / proxy certs (keep under certs/ locally — never commit)
+*.cer
+*.crt
+!sample_docs/**
+
+# Legacy Streamlit UI (removed)
+pages/
+
+# Personal / production AWS deployment (ECS Fargate, account IDs, ARNs, secrets)
+# Templates live in deploy.example/ — copy locally with: ./deploy.example/scripts/init-deploy.sh
+deploy/

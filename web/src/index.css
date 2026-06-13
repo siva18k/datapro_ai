@@ -700,6 +700,34 @@ label.file-upload-btn {
   color: var(--color-primary);
 }
 
+.domain-scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+.domain-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 9999px;
+  padding: 0.375rem 0.45rem 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+  line-height: 1.4;
+}
+.domain-scope-chip-remove {
+  @apply cursor-pointer border-0 bg-transparent p-0 leading-none opacity-60;
+  color: inherit;
+  font-size: 1rem;
+}
+.domain-scope-chip-remove:hover {
+  opacity: 1;
+}
+
 /* —— Badges —— */
 .badge {
   @apply inline-block rounded-full px-2.5 py-0.5 text-xs font-medium;

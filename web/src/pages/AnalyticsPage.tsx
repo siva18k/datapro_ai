@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnalyticsDashboard } from "../components/AnalyticsDashboard";
 import { AnalyticsPanel } from "../components/AnalyticsPanel";
+import { DomainScopePromptOptions } from "../components/DomainScopePromptOptions";
 import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
@@ -9,7 +10,7 @@ import type { AnalyticsResponse } from "../types";
 
 export function AnalyticsPage() {
   const [prompt, setPrompt] = useState("");
-  const [domainOverride, setDomainOverride] = useState("");
+  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
   const [dashboard, setDashboard] = useState<AnalyticsResponse | null>(null);
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -17,9 +18,12 @@ export function AnalyticsPage() {
 
   const sidebarPanel = useMemo(
     () => (
-      <AnalyticsPanel domainOverride={domainOverride} onDomainOverrideChange={setDomainOverride} />
+      <AnalyticsPanel
+        selectedDomains={selectedDomains}
+        onSelectedDomainsChange={setSelectedDomains}
+      />
     ),
-    [domainOverride],
+    [selectedDomains],
   );
   useSetSidebarContent(sidebarPanel);
 
@@ -48,7 +52,7 @@ export function AnalyticsPage() {
       api.analyticsStream(
         {
           prompt: text,
-          domain_override: domainOverride || undefined,
+          domain_overrides: selectedDomains.length ? selectedDomains : undefined,
         },
         (message) => setActivityStatus(message),
       ),
@@ -80,7 +84,10 @@ export function AnalyticsPage() {
       </div>
 
       <div className="card mb-4 shrink-0 md:hidden">
-        <AnalyticsPanel domainOverride={domainOverride} onDomainOverrideChange={setDomainOverride} />
+        <AnalyticsPanel
+          selectedDomains={selectedDomains}
+          onSelectedDomainsChange={setSelectedDomains}
+        />
       </div>
 
       <div className="card analytics-shell mb-0 flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -108,6 +115,12 @@ export function AnalyticsPage() {
                 Clear
               </button>
             )}
+          </div>
+          <div className="ask-composer-options">
+            <DomainScopePromptOptions
+              selectedSlugs={selectedDomains}
+              onChange={setSelectedDomains}
+            />
           </div>
           {run.isError && <p className="alert-error mt-2">{String(run.error)}</p>}
         </div>

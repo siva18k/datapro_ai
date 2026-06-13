@@ -1,0 +1,32 @@
+{
+  "family": "datapro-migrate",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::__AWS_ACCOUNT_ID__:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::__AWS_ACCOUNT_ID__:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "migrate",
+      "image": "__IMAGE_API__",
+      "essential": true,
+      "command": ["python", "scripts/migrate.py"],
+      "environment": [
+        { "name": "DB_SCHEMA", "value": "__DB_SCHEMA__" },
+        { "name": "PGSSLMODE", "value": "__PGSSLMODE__" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "__SECRET_DATABASE_URL_ARN__" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "__LOG_GROUP_MIGRATE__",
+          "awslogs-region": "__AWS_REGION__",
+          "awslogs-stream-prefix": "migrate"
+        }
+      }
+    }
+  ]
+}

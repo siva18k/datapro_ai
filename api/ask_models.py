@@ -9,6 +9,7 @@ class AskRequest(BaseModel):
     question: str
     top_k: int = Field(default=3, ge=1, le=8)
     domain_override: str | None = None
+    domain_overrides: list[str] | None = None
     mcp_url: str | None = None
     backend: str | None = None
     model: str | None = None
@@ -37,6 +38,7 @@ class PipelineTraceDetail(BaseModel):
     question: str | None = None
     top_k: int | None = None
     domain_override: str | None = None
+    domain_overrides: list[str] | None = None
     domain_id: str | None = None
     domain_name: str | None = None
     routing_method: str | None = None

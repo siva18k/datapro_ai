@@ -140,7 +140,7 @@ Connectors on `data_sources`: `postgres`, `upload`, `file_path`, `api`, `sharepo
 
 Files from upload/path connectors become chunks in `knowledge_chunks`. Postgres connectors introspect live DBs; `table_metadata` / `column_metadata` feed SQL generation.
 
-Migrations in `migrations/`; schema name defaults to `ragpro` (`DB_SCHEMA`).
+Migrations in `migrations/`; schema name defaults to `ragpro` (`DB_SCHEMA`). Connection setup for new clones: [catalog-database.md](catalog-database.md).
 
 ## Ask flow (document RAG today)
 

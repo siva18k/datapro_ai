@@ -121,6 +121,7 @@ export const api = {
     question: string;
     top_k?: number;
     domain_override?: string;
+    domain_overrides?: string[];
     backend?: string;
     model?: string;
     debug?: boolean;
@@ -131,6 +132,7 @@ export const api = {
       question: string;
       top_k?: number;
       domain_override?: string;
+      domain_overrides?: string[];
       backend?: string;
       model?: string;
       debug?: boolean;
@@ -191,6 +193,7 @@ export const api = {
     data: {
       prompt: string;
       domain_override?: string;
+      domain_overrides?: string[];
       backend?: string;
       model?: string;
     },

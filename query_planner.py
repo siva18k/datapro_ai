@@ -11,7 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from catalog_db import get_domain, list_domains
+from catalog_db import get_domain
+from catalog_service import normalize_domain_overrides
 from code_orchestrator import ExecutionKind, classify_execution_kind
 from domain_router import route_question
 from db import search_chunks
@@ -48,17 +49,26 @@ def find_best_rag_domain(
     *,
     top_k: int = 3,
     prefer_domain_id: str | None = None,
+    allowed_domain_ids: list[str] | None = None,
     query_vector=None,
 ) -> tuple[dict | None, list[dict]]:
     """Domain whose ingested chunks best match the question (single vector search)."""
     if query_vector is None:
         query_vector = embedder.encode([question])[0]
 
+    search_kwargs: dict[str, Any] = {}
+    if allowed_domain_ids:
+        if len(allowed_domain_ids) == 1:
+            search_kwargs["domain_id"] = allowed_domain_ids[0]
+        else:
+            search_kwargs["domain_ids"] = allowed_domain_ids
+
     chunks = search_chunks(
         question,
         embedder,
         top_k=max(top_k * 3, 12),
         query_vector=query_vector,
+        **search_kwargs,
     )
     if not chunks:
         return None, []
@@ -107,6 +117,7 @@ def resolve_query_plan(
     embedder=None,
     *,
     domain_override: str | None = None,
+    domain_overrides: list[str] | None = None,
 ) -> QueryPlan:
     """
     Auto-detect domain and execution path across all catalog domains.
@@ -114,16 +125,38 @@ def resolve_query_plan(
     Priority for analytical / table-aware questions: structured SQL in the best-matching
     domain. Otherwise: RAG in the domain with the strongest chunk match, falling back to
     the keyword/embedding domain router.
+
+    When domain_overrides is set, search is limited to those domains and cross-domain
+    auto-routing is skipped.
     """
     query_vector = embedder.encode([question])[0] if embedder is not None else None
+    selected_overrides = normalize_domain_overrides(domain_override, domain_overrides)
+    scope_locked = bool(selected_overrides)
 
-    routing = route_question(question, embedder, domain_override=domain_override)
+    routing = route_question(
+        question,
+        embedder,
+        domain_override=domain_override,
+        domain_overrides=domain_overrides,
+    )
+    allowed_domain_ids = routing.get("domain_ids")
     routed_domain_id = routing.get("domain_id")
     routed_domain = _domain_row(routed_domain_id)
 
     notes: list[str] = []
+    if scope_locked and routing.get("domain_name"):
+        if len(selected_overrides) == 1:
+            notes.append(f"Searching only in {routing['domain_name']} (your selection).")
+        else:
+            notes.append(
+                f"Searching only in selected domains: {routing['domain_name']}."
+            )
+
     structured_domain = find_best_structured_domain(
-        question, embedder, prefer_domain_id=routed_domain_id
+        question,
+        embedder,
+        prefer_domain_id=routed_domain_id,
+        allowed_domain_ids=allowed_domain_ids if scope_locked else None,
     )
     structured_score = (
         score_structured_domain_fit(question, structured_domain["id"], embedder)
@@ -146,7 +179,7 @@ def resolve_query_plan(
         and should_use_structured_sql(question, structured_domain["id"])
     )
 
-    if use_structured and not domain_override:
+    if use_structured and not scope_locked:
         if structured_domain and structured_domain["id"] != routed_domain_id:
             routed_label = domain_name or "the keyword match"
             notes.append(
@@ -164,7 +197,7 @@ def resolve_query_plan(
             "method": f"{routing.get('method', 'none')}+structured_catalog",
             "structured_score": structured_score,
         }
-    elif use_structured and domain_override and structured_domain:
+    elif use_structured and scope_locked and structured_domain:
         domain_id = structured_domain["id"]
         domain_name = structured_domain["name"]
         domain_slug = structured_domain.get("slug")
@@ -199,12 +232,13 @@ def resolve_query_plan(
                 question,
                 embedder,
                 prefer_domain_id=domain_id,
+                allowed_domain_ids=allowed_domain_ids if scope_locked else None,
                 query_vector=query_vector,
             )
             if rag_domain and rag_chunks:
                 rag_domain_id = rag_domain["id"]
                 rag_domain_name = rag_domain["name"]
-                if rag_domain_id != domain_id and not domain_override:
+                if rag_domain_id != domain_id and not scope_locked:
                     notes.append(
                         f"Best document match is in {rag_domain_name} "
                         f"(keyword router chose {domain_name or 'all domains'})."
@@ -240,9 +274,18 @@ def resolve_query_plan(
     )
 
 
-def structured_fallback_available(question: str, embedder=None) -> QueryPlan | None:
+def structured_fallback_available(
+    question: str,
+    embedder=None,
+    *,
+    allowed_domain_ids: list[str] | None = None,
+) -> QueryPlan | None:
     """When RAG finds nothing, return a SQL plan if any domain has matching structured data."""
-    structured_domain = find_best_structured_domain(question, embedder)
+    structured_domain = find_best_structured_domain(
+        question,
+        embedder,
+        allowed_domain_ids=allowed_domain_ids,
+    )
     if not structured_domain or not should_use_structured_sql(question, structured_domain["id"]):
         return None
     dataset = pick_structured_dataset(question, structured_domain["id"], embedder)

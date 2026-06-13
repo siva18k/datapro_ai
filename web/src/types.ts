@@ -98,6 +98,7 @@ export interface PipelineTraceDetail {
   question?: string;
   top_k?: number;
   domain_override?: string;
+  domain_overrides?: string[];
   domain_id?: string;
   domain_name?: string;
   routing_method?: string;

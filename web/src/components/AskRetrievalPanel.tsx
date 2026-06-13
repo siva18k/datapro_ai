@@ -1,23 +1,25 @@
+import { AskOutputOptions, type OutputFormat } from "./AskOutputOptions";
+import { DomainScopePicker } from "./DomainScopePicker";
+import { SidebarHint } from "./SidebarHint";
+import { IconDebug, IconGlobe, IconSearch } from "./SidebarNavIcons";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useSidebarCollapsed } from "../context/SidebarContext";
-import { AskOutputOptions, type OutputFormat } from "./AskOutputOptions";
-import { SidebarHint } from "./SidebarHint";
-import { IconDebug, IconGlobe, IconSearch } from "./SidebarNavIcons";
+import { domainScopeLabel } from "./DomainScopeChips";
 
 export function AskRetrievalPanel({
   topK,
   onTopKChange,
-  domainOverride,
-  onDomainOverrideChange,
+  selectedDomains,
+  onSelectedDomainsChange,
   outputFormats,
   onOutputFormatsChange,
   debugMode,
 }: {
   topK: number;
   onTopKChange: (value: number) => void;
-  domainOverride: string;
-  onDomainOverrideChange: (value: string) => void;
+  selectedDomains: string[];
+  onSelectedDomainsChange: (value: string[]) => void;
   outputFormats: OutputFormat[];
   onOutputFormatsChange: (value: OutputFormat[]) => void;
   debugMode?: boolean;
@@ -28,10 +30,7 @@ export function AskRetrievalPanel({
     queryFn: () => api.listDomains(),
   });
 
-  const domainLabel =
-    domainOverride
-      ? domains?.find((d) => d.slug === domainOverride)?.name ?? domainOverride
-      : "Auto";
+  const domainLabel = domainScopeLabel(selectedDomains, domains);
 
   if (collapsed) {
     return (
@@ -81,17 +80,11 @@ export function AskRetrievalPanel({
             aria-valuenow={topK}
           />
         </div>
-        <div className="sidebar-field mb-0">
-          <label className="sidebar-label">Domain</label>
-          <select className="select" value={domainOverride} onChange={(e) => onDomainOverrideChange(e.target.value)}>
-            <option value="">Auto</option>
-            {domains?.map((d) => (
-              <option key={d.id} value={d.slug}>
-                {d.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        <DomainScopePicker
+          selectedSlugs={selectedDomains}
+          onChange={onSelectedDomainsChange}
+          hint="Auto-detect when none selected"
+        />
       </div>
       <AskOutputOptions selected={outputFormats} onChange={onOutputFormatsChange} />
     </>

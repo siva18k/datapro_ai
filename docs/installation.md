@@ -1,6 +1,8 @@
 # Installation
 
-You need either Docker Desktop (easiest) or Python 3.11+ and Node 20+ for local dev. Either way you need an LLM — Mistral API key by default, or Ollama running on your machine. Postgres with the `vector` extension holds the catalog and embeddings; Docker bundles that for you.
+You need either Docker Desktop (easiest) or Python 3.11+ and Node 20+ for local dev. Either way you need an LLM — Mistral API key by default, or Ollama running on your machine.
+
+**Catalog database:** one PostgreSQL instance holds all catalog metadata and RAG vectors. Docker bundles Postgres for local dev; otherwise point `.env` at your own database. Full guide: **[catalog-database.md](catalog-database.md)**.
 
 ## Docker
 
@@ -39,7 +41,7 @@ cd web && npm install && cd ..
 cp .env.example .env
 ```
 
-Set `DATABASE_URL` (or the `PG*` vars) and `MISTRAL_API_KEY`. On your Postgres instance:
+Configure the **catalog database** connection — see **[catalog-database.md](catalog-database.md)** for creating Postgres, enabling pgvector, and `DATABASE_URL` / `PG*` settings. Also set `MISTRAL_API_KEY` (or Ollama). Minimum on your Postgres instance:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -76,7 +78,7 @@ Secrets go in `.env` (you can also edit many of them from **Settings**). Don't c
 | Variable | Required? | Notes |
 |----------|-----------|-------|
 | `MISTRAL_API_KEY` | Usually | Skip if `DEFAULT_LLM_BACKEND=ollama` |
-| `DATABASE_URL` | Yes | Catalog + vectors |
+| `DATABASE_URL` | Yes | **Catalog DB** — metadata + RAG vectors ([catalog-database.md](catalog-database.md)) |
 | `DB_SCHEMA` | No | Defaults to `ragpro` |
 | `PGSSLMODE` | No | `require` for RDS, `disable` for local Docker |
 | `EMBEDDING_MODEL` | No | Default `all-MiniLM-L6-v2` |
@@ -84,7 +86,7 @@ Secrets go in `.env` (you can also edit many of them from **Settings**). Don't c
 | `OLLAMA_BASE_URL` | If Ollama | e.g. `http://localhost:11434` |
 | `MCP_URL` | No | Default `http://127.0.0.1:8000/mcp` |
 
-Warehouse Postgres connections (the databases you query in Ask) live in `saved_db_connections.json` or **Settings → Dataset connections**, not in `.env`.
+Warehouse Postgres connections (the databases you query in Ask) live in `saved_db_connections.json` or **Settings → Dataset connections**, not in `.env`. They are **separate** from the catalog database — see [catalog-database.md](catalog-database.md).
 
 ## Handy scripts
 

@@ -1,0 +1,48 @@
+{
+  "family": "datapro-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "__TASK_CPU__",
+  "memory": "__TASK_MEMORY__",
+  "executionRoleArn": "arn:aws:iam::__AWS_ACCOUNT_ID__:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::__AWS_ACCOUNT_ID__:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "__IMAGE_API__",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "DB_SCHEMA", "value": "__DB_SCHEMA__" },
+        { "name": "EMBEDDING_MODEL", "value": "__EMBEDDING_MODEL__" },
+        { "name": "DEFAULT_LLM_BACKEND", "value": "__DEFAULT_LLM_BACKEND__" },
+        { "name": "PGSSLMODE", "value": "__PGSSLMODE__" },
+        { "name": "MCP_URL", "value": "__MCP_URL__" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "__SECRET_DATABASE_URL_ARN__" },
+        { "name": "MISTRAL_API_KEY", "valueFrom": "__SECRET_MISTRAL_API_KEY_ARN__" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "__LOG_GROUP_API__",
+          "awslogs-region": "__AWS_REGION__",
+          "awslogs-stream-prefix": "api"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 120
+      }
+    }
+  ]
+}

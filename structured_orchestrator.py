@@ -101,6 +101,7 @@ def find_best_structured_domain(
     embedder=None,
     *,
     prefer_domain_id: str | None = None,
+    allowed_domain_ids: list[str] | None = None,
 ) -> dict | None:
     """Return the domain with the strongest structured postgres match for this question."""
     from catalog_db import get_domain
@@ -121,6 +122,11 @@ def find_best_structured_domain(
     best: dict | None = None
     best_score = 0
     domains = get_cached_routing_context()
+    if allowed_domain_ids:
+        allowed = set(allowed_domain_ids)
+        domains = [domain for domain in domains if domain["id"] in allowed]
+    if not domains:
+        return None
     ordered = sorted(
         domains,
         key=lambda d: (
