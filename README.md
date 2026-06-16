@@ -53,6 +53,7 @@ If RAG or MCP are new to you, [docs/concepts.md](docs/concepts.md) explains both
 ## Docs
 
 - [docs/README.md](docs/README.md) — index
+- **[Contributing & conventions](docs/contributing.md)** — themes, secrets, docs, UI consistency
 - **[Catalog database](docs/catalog-database.md)** — metadata + RAG Postgres setup (required)
 - [Installation](docs/installation.md) — setup and scripts
 - [Secrets](docs/secrets.md) — `.env` and saved connections (templates only in git)

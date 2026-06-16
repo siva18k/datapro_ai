@@ -649,6 +649,77 @@ button.sidebar-hint {
 .mcp-page-split {
   @apply grid gap-4 lg:grid-cols-2 lg:items-start;
 }
+.mcp-list-item {
+  @apply flex gap-3 rounded-lg border px-3 py-2.5 text-sm;
+  background: var(--color-surface-subtle);
+  border-color: var(--color-border);
+}
+.mcp-list-item--row {
+  @apply flex-wrap items-start justify-between;
+}
+.mcp-list-item--interactive:hover {
+  background: color-mix(in srgb, var(--color-surface-muted) 55%, var(--color-surface-subtle));
+}
+.mcp-server-card {
+  @apply rounded-lg border px-3 py-2.5 text-sm;
+  background: var(--color-surface-subtle);
+  border-color: var(--color-border);
+}
+.mcp-server-card--builtin {
+  background: color-mix(in srgb, var(--color-primary-soft) 35%, var(--color-surface-subtle));
+  border-color: color-mix(in srgb, var(--color-primary) 20%, var(--color-border));
+}
+.mcp-server-card--email {
+  background: color-mix(in srgb, #a78bfa 14%, var(--color-surface-subtle));
+  border-color: color-mix(in srgb, #a78bfa 28%, var(--color-border));
+}
+.mcp-server-card--enterprise {
+  background: color-mix(in srgb, #818cf8 14%, var(--color-surface-subtle));
+  border-color: color-mix(in srgb, #818cf8 28%, var(--color-border));
+}
+.mcp-server-card--public {
+  background: color-mix(in srgb, #38bdf8 14%, var(--color-surface-subtle));
+  border-color: color-mix(in srgb, #38bdf8 28%, var(--color-border));
+}
+.mcp-themed-box {
+  @apply rounded-lg border p-3;
+  background: var(--color-surface-subtle);
+  border-color: var(--color-border);
+}
+.mcp-themed-box--dashed {
+  @apply rounded-lg border border-dashed px-3 py-3 text-sm;
+  background: color-mix(in srgb, var(--color-surface-subtle) 60%, transparent);
+  border-color: var(--color-border);
+}
+.mcp-builtin-card {
+  @apply rounded-lg border px-3 py-2.5 space-y-3;
+  background: color-mix(in srgb, var(--color-primary-soft) 35%, var(--color-surface-subtle));
+  border-color: color-mix(in srgb, var(--color-primary) 20%, var(--color-border));
+}
+.mcp-code-inline {
+  @apply rounded px-1.5 py-0.5 text-xs;
+  background: var(--color-code-bg);
+  color: var(--color-text);
+}
+.mcp-restart-banner {
+  @apply rounded-xl border px-4 py-3 text-sm;
+  background: color-mix(in srgb, #f59e0b 14%, var(--color-surface-subtle));
+  border-color: color-mix(in srgb, #f59e0b 35%, var(--color-border));
+  color: var(--color-text);
+}
+.mcp-text-muted {
+  @apply text-sm;
+  color: var(--color-text-muted);
+}
+.mcp-text-faint {
+  @apply text-xs;
+  color: var(--color-text-faint);
+}
+.mcp-code-block {
+  @apply overflow-x-auto rounded-lg p-4 text-xs;
+  background: var(--color-code-bg);
+  color: var(--color-text);
+}
 .agents-page-split {
   @apply grid gap-4 lg:grid-cols-[minmax(11rem,14rem)_1fr] lg:items-start;
 }

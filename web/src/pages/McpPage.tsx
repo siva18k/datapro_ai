@@ -292,7 +292,7 @@ export function McpPage() {
           <div className="card card-pad space-y-3">
             <h2 className="font-semibold">Cursor / Claude Desktop</h2>
             <p className="text-sm text-zinc-500">MCP client config for all enabled servers</p>
-            <pre className="overflow-x-auto rounded-lg bg-zinc-900 p-4 text-xs text-zinc-100">{cursorConfig}</pre>
+            <pre className="mcp-code-block">{cursorConfig}</pre>
           </div>
 
           {registry && (
@@ -345,7 +345,7 @@ export function McpPage() {
       {log?.log && (
         <details className="card card-pad">
           <summary className="cursor-pointer font-medium">Recent server log</summary>
-          <pre className="mt-3 max-h-64 overflow-auto text-xs text-zinc-600">{log.log}</pre>
+          <pre className="mt-3 max-h-64 overflow-auto mcp-text-faint">{log.log}</pre>
         </details>
       )}
     </div>
@@ -388,14 +388,14 @@ function BuiltInServerCard({
   actionNotice: { ok: boolean; text: string } | null;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/90 px-3 py-2.5 space-y-3">
+    <div className="mcp-builtin-card">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="font-semibold">Built-in server</h2>
-          <p className="mt-0.5 text-sm text-zinc-600">Knowledge base search, tools & prompts</p>
-          {statusLoading && <p className="mt-1 text-xs text-zinc-500">Checking…</p>}
+          <p className="mt-0.5 mcp-text-muted">Knowledge base search, tools & prompts</p>
+          {statusLoading && <p className="mt-1 mcp-text-faint">Checking…</p>}
           {status && !statusLoading && (
-            <p className={`mt-1 text-xs ${status.reachable ? "text-emerald-700" : "text-zinc-500"}`}>
+            <p className={`mt-1 text-xs ${status.reachable ? "text-emerald-600" : ""}`} style={status.reachable ? undefined : { color: "var(--color-text-muted)" }}>
               {status.reachable ? "Running" : "Stopped"}
             </p>
           )}
@@ -420,13 +420,13 @@ function BuiltInServerCard({
 
       {status && (
         <details className="text-sm">
-          <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-700">
+          <summary className="mcp-text-faint cursor-pointer hover:opacity-80">
             Endpoint, registry & diagnostics
           </summary>
-          <div className="mt-2 space-y-2 text-xs text-zinc-600">
+          <div className="mt-2 space-y-2 mcp-text-faint">
             <p>
               Endpoint:{" "}
-              <code className="rounded bg-white/80 px-1.5 py-0.5">{status.url}</code>
+              <code className="mcp-code-inline">{status.url}</code>
             </p>
             <p>
               Port {status.port}
@@ -443,7 +443,7 @@ function BuiltInServerCard({
               Registry: <code>{registryPath ?? "mcp_registry.json"}</code> — restart after prompt edits.
             </p>
             {status.source === "external" && (
-              <p className="text-zinc-700">External process — Stop kills port {status.port}.</p>
+              <p style={{ color: "var(--color-text-muted)" }}>External process — Stop kills port {status.port}.</p>
             )}
           </div>
         </details>
@@ -466,7 +466,7 @@ function RestartBanner({
   onRestart: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+    <div className="mcp-restart-banner">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p>
           <strong>Restart required.</strong> Built-in registry prompt changes need an MCP restart.
@@ -503,11 +503,11 @@ function GlobalPromptsCard({
         {prompts.map((p) => (
           <div
             key={p.name}
-            className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-200 px-3 py-2.5"
+            className="mcp-list-item mcp-list-item--row"
           >
             <div className="min-w-0 flex-1">
               <p className="font-medium text-sm">{p.name}</p>
-              <p className="mt-0.5 text-sm text-zinc-600">{p.description}</p>
+              <p className="mt-0.5 mcp-text-muted">{p.description}</p>
               {!p.enabled && <span className="badge-muted badge mt-1 text-xs">Disabled in registry</span>}
             </div>
             <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={() => onEdit(p.name)}>
@@ -555,7 +555,7 @@ function BindingList({
       {items.map((item) => (
         <div
           key={item.id ?? `${item.mcp_server_id}-${item.name}`}
-          className="flex gap-3 rounded-lg border border-zinc-200 px-3 py-2.5 text-sm hover:bg-zinc-50"
+          className="mcp-list-item mcp-list-item--interactive"
         >
           <input
             type="checkbox"
@@ -567,18 +567,20 @@ function BindingList({
           />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium text-zinc-900">{item.name}</span>
+              <span className="font-medium">{item.name}</span>
               {item.server_name && (
                 <span className="badge-muted badge text-xs">{item.server_name}</span>
               )}
             </div>
             {showUri && (
-              <span className="mt-0.5 block truncate font-mono text-xs text-zinc-500">
+              <span className="mt-0.5 block truncate font-mono mcp-text-faint">
                 {item.uri ?? item.name}
               </span>
             )}
             {item.server_url && (
-              <span className="mt-0.5 block truncate font-mono text-xs text-zinc-400">{item.server_url}</span>
+              <span className="mt-0.5 block truncate font-mono mcp-text-faint">
+                {item.server_url}
+              </span>
             )}
           </div>
           {allowToolView && onViewTool && item.server_slug === "datapro" && (

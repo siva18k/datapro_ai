@@ -131,9 +131,9 @@ export function McpServersPanel() {
       </div>
 
       {dismissed.length > 0 && (
-        <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-3 text-sm">
-          <p className="font-medium text-zinc-800">Removed integrations</p>
-          <p className="mt-1 text-zinc-600">These were removed earlier and can be added back:</p>
+        <div className="mcp-themed-box--dashed">
+          <p className="font-medium" style={{ color: "var(--color-text)" }}>Removed integrations</p>
+          <p className="mt-1 mcp-text-muted">These were removed earlier and can be added back:</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {dismissed.map((spec) => (
               <DismissedServerChip
@@ -149,7 +149,7 @@ export function McpServersPanel() {
 
       {showForm && (
         <form
-          className="space-y-3 rounded-lg border border-zinc-200 p-3"
+          className="mcp-themed-box space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
             if (!name.trim() || !url.trim()) {
@@ -276,7 +276,7 @@ function ServerRow({
   const isRunning = Boolean(server.running || server.reachable);
 
   return (
-    <div className={`rounded-lg border px-3 py-2.5 text-sm ${mcpServerCardClass(server)}`}>
+    <div className={mcpServerCardClass(server)}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -288,7 +288,7 @@ function ServerRow({
               </span>
             )}
           </div>
-          <p className="mt-0.5 text-sm text-zinc-600">{mcpServerTagline(server)}</p>
+          <p className="mt-0.5 mcp-text-muted">{mcpServerTagline(server)}</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onEdit}>

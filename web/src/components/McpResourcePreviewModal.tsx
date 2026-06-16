@@ -80,7 +80,7 @@ export function McpResourcePreviewModal({
         <div className="mt-3 space-y-2 text-sm">
           <p>
             <span className="font-medium text-zinc-700">URI template:</span>{" "}
-            <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs">{uri}</code>
+            <code className="mcp-code-inline">{uri}</code>
           </p>
           {resource.description && <p className="text-zinc-600">{resource.description}</p>}
           {meta?.mime_type && (

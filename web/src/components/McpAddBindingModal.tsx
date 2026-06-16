@@ -129,7 +129,7 @@ export function McpAddBindingModal({
             return (
               <div
                 key={`${activeServerId}-${capName}`}
-                className="flex items-start justify-between gap-3 rounded-lg border border-zinc-200 px-3 py-2.5"
+                className="mcp-list-item mcp-list-item--row"
               >
                 <div className="min-w-0">
                   <p className="font-medium text-sm">{item.name}</p>

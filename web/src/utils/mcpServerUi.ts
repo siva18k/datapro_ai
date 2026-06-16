@@ -1,18 +1,18 @@
 import type { McpServerRecord } from "../api/client";
 
-/** Light card tint by server type. */
+/** Theme-aware card tint by server type. */
 export function mcpServerCardClass(server: McpServerRecord): string {
   if (server.is_builtin || server.slug === "datapro") {
-    return "border-slate-200 bg-slate-50/90";
+    return "mcp-server-card mcp-server-card--builtin";
   }
   switch (server.slug) {
     case "email_smtp":
-      return "border-violet-200 bg-violet-50/80";
+      return "mcp-server-card mcp-server-card--email";
     default:
       if (server.server_kind === "enterprise") {
-        return "border-indigo-200 bg-indigo-50/80";
+        return "mcp-server-card mcp-server-card--enterprise";
       }
-      return "border-sky-200 bg-sky-50/80";
+      return "mcp-server-card mcp-server-card--public";
   }
 }
 

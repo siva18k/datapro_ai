@@ -84,7 +84,7 @@ export function McpEditServerModal({
         )}
 
         {setupNotes && (
-          <div className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-sm text-zinc-700 whitespace-pre-wrap">
+          <div className="mb-4 mcp-themed-box text-sm whitespace-pre-wrap" style={{ color: "var(--color-text-muted)" }}>
             {setupNotes}
           </div>
         )}

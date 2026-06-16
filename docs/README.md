@@ -6,6 +6,7 @@ Start with [installation](installation.md) if you're setting up for the first ti
 
 | Doc | What's in it |
 |-----|----------------|
+| **[Contributing & conventions](contributing.md)** | **Themes, gitignore/secrets, doc updates, UI consistency** |
 | **[Catalog database](catalog-database.md)** | **Required Postgres for metadata + RAG** — connection, pgvector, migrations |
 | [Installation](installation.md) | Docker or local dev, env vars, scripts |
 | [Secrets](secrets.md) | `.env` and `saved_db_connections.json` — keep these local |
