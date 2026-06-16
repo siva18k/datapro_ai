@@ -32,14 +32,16 @@ def _cosine_sim(a, b) -> float:
 
 def build_dataset_routing_text(source: dict, *, include_definition: bool = True) -> str:
     """Text for routing: name, description, definition, tables, columns, RAG instructions."""
+    cached_text = source.get("routing_text")
+    if cached_text:
+        # routing_cache already includes definitions, tables, columns, and RAG profile.
+        return cached_text
+
     parts = [
         source.get("name") or "",
         source.get("description") or "",
         source.get("slug") or "",
     ]
-    cached_text = source.get("routing_text")
-    if cached_text and not include_definition:
-        return cached_text
 
     if include_definition:
         try:
@@ -199,9 +201,24 @@ def pick_dataset_in_domain(
         enriched.append(merged)
 
     scored: list[tuple[float, dict, float, float, float]] = []
-    for source in enriched:
+    emb_scores: list[float] = [0.0] * len(enriched)
+    if embedder is not None:
+        texts = [build_dataset_routing_text(source)[:12_000] for source in enriched]
+        non_empty = [(i, text) for i, text in enumerate(texts) if text.strip()]
+        if non_empty:
+            try:
+                routing_question, _ = correct_query_spelling(question, build_vocabulary())
+                if query_vector is None:
+                    query_vector = embedder.encode([routing_question])[0]
+                doc_vecs = embedder.encode([text for _, text in non_empty])
+                for (idx, _), doc_vec in zip(non_empty, doc_vecs):
+                    emb_scores[idx] = max(0.0, _cosine_sim(query_vector, doc_vec))
+            except Exception:
+                pass
+
+    for i, source in enumerate(enriched):
         kw = score_dataset_keyword_fit(question, source)
-        emb = score_dataset_embedding_fit(question, source, embedder, query_vector=query_vector)
+        emb = emb_scores[i]
         chunk = score_dataset_chunk_fit(chunks or [], source["id"])
         total = kw + emb * 4.0 + chunk * 6.0
         scored.append((total, source, kw, emb, chunk))

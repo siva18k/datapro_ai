@@ -21,7 +21,6 @@ from query_fuzzy import correct_query_spelling, encode_search_queries
 from structured_orchestrator import (
     find_best_structured_domain,
     pick_structured_dataset,
-    score_structured_domain_fit,
     should_use_structured_sql,
 )
 
@@ -164,16 +163,11 @@ def resolve_query_plan(
                 f"Searching only in selected domains: {routing['domain_name']}."
             )
 
-    structured_domain = find_best_structured_domain(
+    structured_domain, structured_score, structured_dataset = find_best_structured_domain(
         question,
         embedder,
         prefer_domain_id=routed_domain_id,
         allowed_domain_ids=allowed_domain_ids if scope_locked else None,
-    )
-    structured_score = (
-        score_structured_domain_fit(question, structured_domain["id"], embedder)
-        if structured_domain
-        else 0
     )
 
     domain_id = routed_domain_id
@@ -222,7 +216,11 @@ def resolve_query_plan(
         )
         if execution_kind == "rag":
             execution_kind = "sql"
-        dataset = pick_structured_dataset(question, domain_id, embedder, query_vector=query_vector) if domain_id else None
+        dataset = structured_dataset
+        if not dataset and domain_id:
+            dataset = pick_structured_dataset(
+                question, domain_id, embedder, query_vector=query_vector
+            )
         if dataset:
             source_id = dataset["id"]
             source_name = dataset["name"]
@@ -334,14 +332,14 @@ def structured_fallback_available(
     allowed_domain_ids: list[str] | None = None,
 ) -> QueryPlan | None:
     """When RAG finds nothing, return a SQL plan if any domain has matching structured data."""
-    structured_domain = find_best_structured_domain(
+    structured_domain, _score, structured_dataset = find_best_structured_domain(
         question,
         embedder,
         allowed_domain_ids=allowed_domain_ids,
     )
     if not structured_domain or not should_use_structured_sql(question, structured_domain["id"]):
         return None
-    dataset = pick_structured_dataset(
+    dataset = structured_dataset or pick_structured_dataset(
         question, structured_domain["id"], embedder, query_vector=embedder.encode([question])[0] if embedder else None
     )
     if not dataset:

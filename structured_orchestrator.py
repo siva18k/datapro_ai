@@ -63,6 +63,19 @@ def table_mentioned_in_question(table_name: str, question: str) -> bool:
 
 def question_references_catalog_tables(question: str, domain_id: str) -> bool:
     """True when the question mentions a postgres table cataloged in this domain."""
+    from routing_cache import get_cached_routing_context
+
+    for domain in get_cached_routing_context():
+        if domain["id"] != domain_id:
+            continue
+        for source in domain.get("sources") or []:
+            if source.get("connector") != "postgres":
+                continue
+            for table_name in source.get("table_names") or []:
+                if table_mentioned_in_question(table_name, question):
+                    return True
+        return False
+
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
         if source.get("connector") != "postgres":
             continue
@@ -72,13 +85,42 @@ def question_references_catalog_tables(question: str, domain_id: str) -> bool:
     return False
 
 
-def score_structured_domain_fit(question: str, domain_id: str, embedder=None) -> int:
-    """Higher = better structured postgres match for this question in this domain."""
+@dataclass
+class StructuredDomainMatch:
+    """Best structured postgres domain for a question (dict-like for legacy callers)."""
+
+    domain: dict | None
+    score: int = 0
+    dataset: dict | None = None
+
+    def __bool__(self) -> bool:
+        return self.domain is not None
+
+    def __getitem__(self, key: str) -> Any:
+        if self.domain is None:
+            raise KeyError(key)
+        return self.domain[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if self.domain is None:
+            return default
+        return self.domain.get(key, default)
+
+    def __iter__(self):
+        yield self.domain
+        yield self.score
+        yield self.dataset
+
+
+def score_structured_domain_fit(
+    question: str, domain_id: str, embedder=None
+) -> tuple[int, dict | None]:
+    """Higher score = better structured postgres match. Returns (score, best dataset)."""
     if not should_use_structured_sql(question, domain_id):
-        return 0
+        return 0, None
     dataset = pick_structured_dataset(question, domain_id, embedder)
     if not dataset:
-        return 0
+        return 0, None
 
     score = 1
     q_lower = question.lower()
@@ -87,14 +129,28 @@ def score_structured_domain_fit(question: str, domain_id: str, embedder=None) ->
     for tok in q_tokens:
         if tok in dname:
             score += 3
-    for table in list_table_metadata(dataset["id"]):
-        tname = table["table_name"].lower()
+
+    from routing_cache import get_cached_routing_context
+
+    table_names: list[str] = []
+    for domain in get_cached_routing_context():
+        if domain["id"] != domain_id:
+            continue
+        for source in domain.get("sources") or []:
+            if source["id"] == dataset["id"]:
+                table_names = source.get("table_names") or []
+                break
+    if not table_names:
+        for table in list_table_metadata(dataset["id"]):
+            table_names.append(table["table_name"])
+    for tname in table_names:
+        tname = tname.lower()
         if tname in q_lower or tname.replace("_", " ") in q_lower:
             score += 5
         for part in tname.split("_"):
             if len(part) > 2 and part in q_tokens:
                 score += 2
-    return score
+    return score, dataset
 
 
 def find_best_structured_domain(
@@ -103,31 +159,33 @@ def find_best_structured_domain(
     *,
     prefer_domain_id: str | None = None,
     allowed_domain_ids: list[str] | None = None,
-) -> dict | None:
-    """Return the domain with the strongest structured postgres match for this question."""
+) -> StructuredDomainMatch:
+    """Return the best structured postgres domain, score, and dataset for this question."""
     from catalog_db import get_domain
     from routing_cache import get_cached_routing_context
 
     q_tokens = {t for t in re.findall(r"[a-z0-9]+", question.lower()) if len(t) > 2}
 
-    def _score_domain(domain_id: str, boost: int = 0) -> int:
-        return score_structured_domain_fit(question, domain_id, embedder) + boost
+    def _score_domain(domain_id: str, boost: int = 0) -> tuple[int, dict | None]:
+        score, dataset = score_structured_domain_fit(question, domain_id, embedder)
+        return score + boost, dataset
 
     # Fast path: keyword-routed domain with a strong table/name match.
     if prefer_domain_id:
-        prefer_score = _score_domain(prefer_domain_id, boost=1)
+        prefer_score, prefer_dataset = _score_domain(prefer_domain_id, boost=1)
         if prefer_score >= 5:
             domain = get_domain(domain_id=prefer_domain_id)
-            return domain
+            return StructuredDomainMatch(domain, prefer_score, prefer_dataset)
 
     best: dict | None = None
+    best_dataset: dict | None = None
     best_score = 0
     domains = get_cached_routing_context()
     if allowed_domain_ids:
         allowed = set(allowed_domain_ids)
         domains = [domain for domain in domains if domain["id"] in allowed]
     if not domains:
-        return None
+        return StructuredDomainMatch(None)
     ordered = sorted(
         domains,
         key=lambda d: (
@@ -140,13 +198,18 @@ def find_best_structured_domain(
     )
     for domain in ordered:
         boost = 1 if domain["id"] == prefer_domain_id else 0
-        score = _score_domain(domain["id"], boost=boost)
+        score, dataset = _score_domain(domain["id"], boost=boost)
         if score > best_score:
             best_score = score
             best = domain
+            best_dataset = dataset
         if score >= 8 and domain["id"] == prefer_domain_id:
             break
-    return best if best_score > 0 else None
+        if best_score >= 10:
+            break
+    if best_score > 0:
+        return StructuredDomainMatch(best, best_score, best_dataset)
+    return StructuredDomainMatch(None)
 
 
 def _tokenize_domain(domain: dict) -> set[str]:

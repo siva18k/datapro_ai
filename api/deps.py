@@ -26,3 +26,7 @@ def clear_embedder_cache() -> None:
 def bootstrap() -> None:
     scrub_invalid_managed_settings()
     ensure_catalog_ready()
+    # Warm routing metadata so first Ask/Analytics request does not block on catalog scans.
+    from routing_cache import get_cached_routing_context
+
+    get_cached_routing_context()
