@@ -2,18 +2,15 @@ import type { McpServerRecord } from "../api/client";
 
 /** Theme-aware card tint by server type. */
 export function mcpServerCardClass(server: McpServerRecord): string {
-  if (server.is_builtin || server.slug === "datapro") {
-    return "mcp-server-card mcp-server-card--builtin";
-  }
-  switch (server.slug) {
-    case "email_smtp":
-      return "mcp-server-card mcp-server-card--email";
-    default:
-      if (server.server_kind === "enterprise") {
-        return "mcp-server-card mcp-server-card--enterprise";
-      }
-      return "mcp-server-card mcp-server-card--public";
-  }
+  const variant =
+    server.is_builtin || server.slug === "datapro"
+      ? "mcp-server-card--builtin"
+      : server.slug === "email_smtp"
+        ? "mcp-server-card--email"
+        : server.server_kind === "enterprise"
+          ? "mcp-server-card--enterprise"
+          : "mcp-server-card--public";
+  return `card card-pad mcp-server-card ${variant}`;
 }
 
 export function mcpServerTagline(server: McpServerRecord): string {

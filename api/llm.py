@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
 import requests
 
 from llm_providers import API_KEY_ENV, DEFAULT_MODELS
-from settings_service import get_llm_settings
+from settings_service import get_api_key, get_llm_settings
 
 
 def resolve_llm_runtime(
@@ -190,7 +188,7 @@ def generate_answer(
         return r.json()["response"]
 
     if resolved_backend == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        api_key = get_api_key("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set (Settings → LLM)")
         r = requests.post(
@@ -213,7 +211,7 @@ def generate_answer(
         return "".join(p.get("text", "") for p in parts if p.get("type") == "text")
 
     if resolved_backend == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = get_api_key("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is not set (Settings → LLM)")
         r = requests.post(
@@ -231,7 +229,7 @@ def generate_answer(
         return "".join(p.get("text", "") for p in parts)
 
     env_key = API_KEY_ENV.get(resolved_backend, "MISTRAL_API_KEY")
-    api_key = os.getenv(env_key)
+    api_key = get_api_key(env_key)
     if not api_key:
         raise RuntimeError(f"{env_key} is not set (Settings → LLM)")
 

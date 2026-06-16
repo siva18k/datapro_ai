@@ -30,10 +30,14 @@ def build_sql_summary_prompt(
     columns: list[str],
     rows: list[list[Any]],
     max_sample_rows: int = 15,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
+    from conversation_context import format_conversation_block
+
     row_count = len(rows)
     sample = rows[:max_sample_rows]
     large = row_count > 10
+    history_block = format_conversation_block(conversation_history)
 
     extra = ""
     if large:
@@ -43,9 +47,15 @@ def build_sql_summary_prompt(
             "for the complete data.\n"
         )
 
+    follow_up_line = ""
+    if history_block:
+        follow_up_line = (
+            "The latest user message may be a follow-up — use prior conversation only to interpret it.\n\n"
+        )
+
     return f"""You are a business analyst answering in a chat UI.
 
-User question:
+{history_block}{follow_up_line}User question:
 {question}
 
 Query returned {row_count} row(s).

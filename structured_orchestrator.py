@@ -29,6 +29,7 @@ from catalog_db import (
     list_table_metadata,
 )
 from catalog_service import load_dataset_definition
+from dataset_router import pick_structured_dataset as _pick_structured_dataset
 from domain_router import route_question
 from api.answer_format import build_sql_summary_prompt
 from serde import coerce_json_rows
@@ -294,36 +295,18 @@ def pick_structured_dataset(
     question: str,
     domain_id: str,
     embedder=None,
+    *,
+    query_vector=None,
+    chunks: list[dict] | None = None,
 ) -> dict | None:
-    """Choose the best postgres dataset in a domain by table/name relevance."""
-    candidates = [
-        s
-        for s in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True)
-        if s.get("connector") == "postgres"
-    ]
-    if not candidates:
-        return None
-    if len(candidates) == 1:
-        return candidates[0]
-
-    q_lower = question.lower()
-    q_tokens = {t for t in re.findall(r"[a-z0-9]+", q_lower) if len(t) > 2}
-    scored: list[tuple[int, dict]] = []
-    for source in candidates:
-        score = 0
-        name = source.get("name", "").lower()
-        if any(tok in name for tok in q_tokens):
-            score += 2
-        for table in list_table_metadata(source["id"]):
-            tname = table["table_name"].lower()
-            if tname in q_lower:
-                score += 4
-            for part in tname.split("_"):
-                if len(part) > 2 and part in q_tokens:
-                    score += 2
-        scored.append((score, source))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1] if scored[0][0] > 0 else candidates[0]
+    """Choose the best postgres dataset in a domain by metadata + optional chunk signals."""
+    return _pick_structured_dataset(
+        question,
+        domain_id,
+        embedder,
+        query_vector=query_vector,
+        chunks=chunks,
+    )
 
 
 def build_schema_context(source_id: str) -> StructuredSchemaContext:

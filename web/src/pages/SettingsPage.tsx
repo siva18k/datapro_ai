@@ -6,6 +6,7 @@ import { SavedConnectionsPanel } from "../components/SavedConnectionsPanel";
 import { useApiConnection } from "../context/ApiConnectionContext";
 import { api, type DatabaseSettingsPayload, type LlmSettingsPayload } from "../api/client";
 
+const MISTRAL_CUSTOM_MODEL = "__custom__";
 const LLM_KEY_BACKENDS = ["mistral", "openai", "anthropic", "gemini", "openrouter"] as const;
 type LlmKeyBackend = (typeof LLM_KEY_BACKENDS)[number];
 
@@ -16,6 +17,18 @@ const LLM_KEY_LABELS: Record<LlmKeyBackend, string> = {
   gemini: "Gemini API key",
   openrouter: "OpenRouter API key",
 };
+
+function sanitizeModelOverride(value: string | undefined): string {
+  const cleaned = (value ?? "").trim();
+  if (!cleaned || cleaned.includes("@")) {
+    return "";
+  }
+  return cleaned;
+}
+
+function setModelOverride(value: string): string {
+  return sanitizeModelOverride(value);
+}
 
 const emptyDb = (): DatabaseSettingsPayload => ({
   use_database_url: false,
@@ -41,6 +54,7 @@ export function SettingsPage() {
   const [db, setDb] = useState<DatabaseSettingsPayload>(emptyDb);
   const [mcpUrl, setMcpUrl] = useState("http://127.0.0.1:8000/mcp");
   const [embeddingModel, setEmbeddingModel] = useState("all-MiniLM-L6-v2");
+  const [conversationTurns, setConversationTurns] = useState(5);
   const [llm, setLlm] = useState<LlmSettingsPayload>({
     default_backend: "mistral",
     default_model: "",
@@ -53,6 +67,7 @@ export function SettingsPage() {
     gemini: "",
     openrouter: "",
   });
+  const [mistralCustomMode, setMistralCustomMode] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mcpNotice, setMcpNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -164,32 +179,44 @@ export function SettingsPage() {
     });
     setMcpUrl(data.mcp_url);
     setEmbeddingModel(data.embedding_model);
+    setConversationTurns(data.ask?.conversation_turns ?? 5);
     setLlm({
       default_backend: data.llm.default_backend,
-      default_model: data.llm.default_model,
+      default_model: sanitizeModelOverride(data.llm.default_model),
       ollama_base_url: data.llm.ollama_base_url,
     });
+    const model = sanitizeModelOverride(data.llm.default_model);
+    const knownMistralIds = new Set((data.mistral_model_options ?? []).map((option) => option.id));
+    setMistralCustomMode(
+      data.llm.default_backend === "mistral" && model !== "" && !knownMistralIds.has(model),
+    );
     setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
   }, [data]);
 
   const save = useMutation({
-    mutationFn: () =>
-      api.saveSettings({
+    mutationFn: () => {
+      const keyPayload: Record<string, string> = {};
+      for (const backend of LLM_KEY_BACKENDS) {
+        const value = apiKeys[backend].trim();
+        if (value.length >= 20) {
+          keyPayload[`${backend}_api_key`] = value;
+        }
+      }
+      return api.saveSettings({
         database: {
           ...db,
           password: db.password || undefined,
         },
         mcp_url: mcpUrl,
         embedding_model: embeddingModel,
+        ask: { conversation_turns: conversationTurns },
         llm: {
           ...llm,
-          mistral_api_key: apiKeys.mistral || undefined,
-          openai_api_key: apiKeys.openai || undefined,
-          anthropic_api_key: apiKeys.anthropic || undefined,
-          gemini_api_key: apiKeys.gemini || undefined,
-          openrouter_api_key: apiKeys.openrouter || undefined,
+          default_model: sanitizeModelOverride(llm.default_model),
+          ...keyPayload,
         },
-      }),
+      });
+    },
     onSuccess: (res) => {
       qc.setQueryData(["settings"], res);
       setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
@@ -223,6 +250,12 @@ export function SettingsPage() {
 
   const selectedBackend = llm.default_backend ?? "mistral";
   const selectedBackendMeta = data?.llm_backends.find((b) => b.id === selectedBackend);
+  const mistralModelOptions = data?.mistral_model_options ?? [];
+  const mistralProviderDefault = selectedBackendMeta?.default_model ?? "codestral-2508";
+  const mistralModelValue = llm.default_model ?? "";
+  const mistralSelectValue = mistralCustomMode
+    ? MISTRAL_CUSTOM_MODEL
+    : mistralModelValue || mistralProviderDefault;
   const needsApiKey = LLM_KEY_BACKENDS.includes(selectedBackend as LlmKeyBackend);
   const apiKeySet = needsApiKey
     ? data?.llm[`${selectedBackend}_api_key_set` as `${LlmKeyBackend}_api_key_set`]
@@ -344,74 +377,164 @@ export function SettingsPage() {
                   <h2 className="font-semibold">LLM</h2>
                   <p className="mt-1 text-sm text-zinc-500">Default for Ask &amp; Analytics</p>
                 </div>
-                <div className="field mb-0">
-                  <label className="label">Provider</label>
-                  <select
-                    className="select"
-                    value={selectedBackend}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      const backend = data.llm_backends.find((b) => b.id === id);
-                      setLlm((prev) => ({
-                        ...prev,
-                        default_backend: id,
-                        default_model: backend?.default_model ?? prev.default_model,
-                      }));
-                    }}
-                  >
-                    {data.llm_backends.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field mb-0">
-                  <label className="label">Model (optional override)</label>
-                  <input
-                    className="input font-mono text-xs"
-                    placeholder={selectedBackendMeta?.default_model ?? "Provider default"}
-                    value={llm.default_model ?? ""}
-                    onChange={(e) => setLlm((prev) => ({ ...prev, default_model: e.target.value }))}
-                  />
-                </div>
-                {needsApiKey && (
+                <form className="settings-llm-row" autoComplete="off" onSubmit={(e) => e.preventDefault()}>
                   <div className="field mb-0">
-                    <label className="label">{LLM_KEY_LABELS[selectedBackend as LlmKeyBackend]}</label>
-                    <input
-                      className="input font-mono text-xs"
-                      type="password"
-                      placeholder={apiKeySet ? "Leave blank to keep current key" : "API key"}
-                      value={apiKeys[selectedBackend as LlmKeyBackend]}
-                      onChange={(e) =>
-                        setApiKeys((prev) => ({ ...prev, [selectedBackend as LlmKeyBackend]: e.target.value }))
-                      }
-                    />
+                    <label className="label" htmlFor="datapro-llm-provider">
+                      Provider
+                    </label>
+                    <select
+                      id="datapro-llm-provider"
+                      className="select"
+                      autoComplete="off"
+                      value={selectedBackend}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        const backend = data.llm_backends.find((b) => b.id === id);
+                        setLlm((prev) => ({
+                          ...prev,
+                          default_backend: id,
+                          default_model: sanitizeModelOverride(backend?.default_model ?? prev.default_model),
+                        }));
+                        setMistralCustomMode(false);
+                      }}
+                    >
+                      {data.llm_backends.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                )}
-                {selectedBackend === "ollama" && (
                   <div className="field mb-0">
-                    <label className="label">Ollama base URL</label>
-                    <input
-                      className="input font-mono text-xs"
-                      value={llm.ollama_base_url ?? "http://localhost:11434"}
-                      onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
-                    />
+                    <label className="label" htmlFor="datapro-llm-model-override">
+                      Model
+                    </label>
+                    {selectedBackend === "mistral" ? (
+                      <>
+                        <select
+                          id="datapro-llm-model-override"
+                          className="select font-mono text-xs"
+                          autoComplete="off"
+                          value={mistralSelectValue}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            if (value === MISTRAL_CUSTOM_MODEL) {
+                              setMistralCustomMode(true);
+                              return;
+                            }
+                            setMistralCustomMode(false);
+                            setLlm((prev) => ({ ...prev, default_model: value }));
+                          }}
+                        >
+                          {mistralModelOptions.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                              {option.hint ? ` — ${option.hint}` : ""}
+                            </option>
+                          ))}
+                          <option value={MISTRAL_CUSTOM_MODEL}>Custom model ID…</option>
+                        </select>
+                        {mistralCustomMode && (
+                          <input
+                            className="input mt-2 font-mono text-xs"
+                            name="datapro-llm-model-custom"
+                            type="search"
+                            autoComplete="off"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            spellCheck={false}
+                            data-lpignore="true"
+                            data-1p-ignore
+                            data-form-type="other"
+                            placeholder="e.g. mistral-medium-latest"
+                            value={mistralModelValue}
+                            onChange={(e) =>
+                              setLlm((prev) => ({
+                                ...prev,
+                                default_model: setModelOverride(e.target.value),
+                              }))
+                            }
+                          />
+                        )}
+                        <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                          Free tier on La Plateforme includes these models with per-model rate limits.
+                          Default <code className="text-xs">codestral-2508</code> is best for SQL and code;
+                          use Ministral 3B for fast general Q&amp;A.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <input
+                          id="datapro-llm-model-override"
+                          className="input font-mono text-xs"
+                          name="datapro-llm-model-override"
+                          type="search"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
+                          data-lpignore="true"
+                          data-1p-ignore
+                          data-form-type="other"
+                          readOnly
+                          onFocus={(e) => e.currentTarget.removeAttribute("readonly")}
+                          onBlur={(e) => {
+                            e.currentTarget.setAttribute("readonly", "");
+                            const cleaned = sanitizeModelOverride(e.currentTarget.value);
+                            if (cleaned !== e.currentTarget.value) {
+                              setLlm((prev) => ({ ...prev, default_model: cleaned }));
+                            }
+                          }}
+                          placeholder={selectedBackendMeta?.default_model ?? "Provider default"}
+                          value={llm.default_model ?? ""}
+                          onChange={(e) =>
+                            setLlm((prev) => ({ ...prev, default_model: setModelOverride(e.target.value) }))
+                          }
+                        />
+                        <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                          Leave blank for the provider default.
+                        </p>
+                      </>
+                    )}
                   </div>
-                )}
+                  {needsApiKey ? (
+                    <div className="field mb-0">
+                      <label className="label">{LLM_KEY_LABELS[selectedBackend as LlmKeyBackend]}</label>
+                      <input
+                        className="input font-mono text-xs"
+                        type="password"
+                        autoComplete="new-password"
+                        name={`datapro-${selectedBackend}-api-key`}
+                        placeholder={apiKeySet ? "Leave blank to keep current key" : "API key"}
+                        value={apiKeys[selectedBackend as LlmKeyBackend]}
+                        onChange={(e) =>
+                          setApiKeys((prev) => ({ ...prev, [selectedBackend as LlmKeyBackend]: e.target.value }))
+                        }
+                      />
+                    </div>
+                  ) : selectedBackend === "ollama" ? (
+                    <div className="field mb-0">
+                      <label className="label">Ollama URL</label>
+                      <input
+                        className="input font-mono text-xs"
+                        value={llm.ollama_base_url ?? "http://localhost:11434"}
+                        onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
+                      />
+                    </div>
+                  ) : null}
+                </form>
               </div>
 
               <div className="space-y-4 md:border-l md:border-zinc-200 md:pl-8">
                 <div>
                   <h2 className="font-semibold">Embedding model</h2>
-                  <p className="mt-1 text-sm text-zinc-500">Global — re-ingest after change</p>
                 </div>
                 <div className="field mb-0">
-                  <label className="label">Model</label>
                   <select
                     className="select"
                     value={embeddingModel}
                     onChange={(e) => setEmbeddingModel(e.target.value)}
+                    aria-label="Embedding model"
                   >
                     {data.embedding_model_options.map((m) => (
                       <option key={m} value={m}>
@@ -425,127 +548,163 @@ export function SettingsPage() {
           </div>
 
           <div className="card card-pad">
-            <div className="grid gap-6 md:grid-cols-2 md:gap-8">
-              <div className="space-y-4">
-                <div>
-                  <h2 className="font-semibold">MCP server</h2>
-                  <p className="mt-1 text-sm text-zinc-500">Local MCP process</p>
-                </div>
+            <div className="space-y-4">
+              <div>
+                <h2 className="font-semibold">Ask</h2>
+                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                  Follow-up context for the chat prompt until you press New chat
+                </p>
+              </div>
+              <div className="field mb-0 max-w-md">
+                <label className="label" htmlFor="ask-conversation-turns">
+                  Conversation turns to remember
+                </label>
+                <input
+                  id="ask-conversation-turns"
+                  type="number"
+                  className="input"
+                  min={0}
+                  max={data.ask?.max_conversation_turns ?? 20}
+                  value={conversationTurns}
+                  onChange={(e) => setConversationTurns(Number(e.target.value))}
+                />
+                <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                  Number of prior Q&amp;A exchanges included in each follow-up (0 = disabled). Cleared when you start a new chat.
+                </p>
+              </div>
+            </div>
+          </div>
 
-                {mcpStatus && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`badge ${mcpStatus.reachable ? "badge-ok" : "badge-muted"}`}>
-                      {mcpStatus.reachable ? "Reachable" : "Stopped"}
-                    </span>
-                    <span className="badge-muted badge">{mcpStatus.status_label}</span>
-                    {mcpStatus.active_pid != null && (
-                      <span className="badge-muted badge">PID {mcpStatus.active_pid}</span>
-                    )}
-                  </div>
-                )}
-
-                <div className="field mb-0">
-                  <label className="label">MCP URL</label>
-                  <input className="input font-mono text-xs" value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} />
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={mcpBusy || mcpIsRunning}
-                    onClick={() => mcpStart.mutate()}
-                  >
-                    {mcpStart.isPending ? "Starting…" : "Start"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    disabled={mcpBusy || !mcpIsRunning}
-                    onClick={() => mcpStop.mutate()}
-                  >
-                    {mcpStop.isPending ? "Stopping…" : "Stop"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    disabled={mcpBusy || !mcpIsRunning}
-                    onClick={() => mcpRestart.mutate()}
-                  >
-                    {mcpRestart.isPending ? "Restarting…" : "Restart"}
-                  </button>
-                </div>
-
-                {mcpStatus?.source === "external" && (
-                  <p className="text-xs text-zinc-500">External process — Stop kills port {mcpStatus.port}.</p>
-                )}
-
-                {mcpNotice && (
-                  <p className={mcpNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{mcpNotice.text}</p>
-                )}
+          <div className="settings-servers-stack">
+            <div className="card card-pad space-y-4">
+              <div>
+                <h2 className="font-semibold">MCP server</h2>
+                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                  Local MCP process
+                </p>
               </div>
 
-              <div className="space-y-4 md:border-l md:border-zinc-200 md:pl-8">
-                <div>
-                  <h2 className="font-semibold">API server</h2>
-                  <p className="mt-1 text-sm text-zinc-500">FastAPI backend</p>
+              {mcpStatus && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`badge ${mcpStatus.reachable ? "badge-ok" : "badge-muted"}`}>
+                    {mcpStatus.reachable ? "Reachable" : "Stopped"}
+                  </span>
+                  <span className="badge-muted badge">{mcpStatus.status_label}</span>
+                  {mcpStatus.active_pid != null && (
+                    <span className="badge-muted badge">PID {mcpStatus.active_pid}</span>
+                  )}
                 </div>
+              )}
 
-                {backendStatus && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`badge ${backendStatus.reachable ? "badge-ok" : "badge-muted"}`}>
-                      {backendStatus.reachable ? "Reachable" : "Stopped"}
-                    </span>
-                    <span className="badge-muted badge">{backendStatus.status_label}</span>
-                    {backendStatus.active_pid != null && (
-                      <span className="badge-muted badge">PID {backendStatus.active_pid}</span>
-                    )}
-                    <span className="badge-muted badge">Port {backendStatus.port}</span>
-                  </div>
-                )}
-
-                {backendStatus && (
-                  <p className="text-sm">
-                    URL:{" "}
-                    <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs">{backendStatus.url}</code>
-                  </p>
-                )}
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={backendBusy || backendIsRunning}
-                    onClick={() => backendStart.mutate()}
-                  >
-                    {backendStart.isPending ? "Starting…" : "Start"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    disabled={backendBusy || !backendIsRunning}
-                    onClick={() => backendStop.mutate()}
-                  >
-                    {backendStop.isPending ? "Stopping…" : "Stop"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    disabled={backendBusy || !backendIsRunning}
-                    onClick={() => backendRestart.mutate()}
-                  >
-                    {backendRestart.isPending ? "Restarting…" : "Restart"}
-                  </button>
-                </div>
-
-                {backendStatus?.stopping_self && backendIsRunning && (
-                  <p className="text-xs text-zinc-500">Restart may disconnect this page briefly.</p>
-                )}
-
-                {backendNotice && (
-                  <p className={backendNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{backendNotice.text}</p>
-                )}
+              <div className="field mb-0">
+                <label className="label">MCP URL</label>
+                <input className="input font-mono text-xs" value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} />
               </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={mcpBusy || mcpIsRunning}
+                  onClick={() => mcpStart.mutate()}
+                >
+                  {mcpStart.isPending ? "Starting…" : "Start"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={mcpBusy || !mcpIsRunning}
+                  onClick={() => mcpStop.mutate()}
+                >
+                  {mcpStop.isPending ? "Stopping…" : "Stop"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={mcpBusy || !mcpIsRunning}
+                  onClick={() => mcpRestart.mutate()}
+                >
+                  {mcpRestart.isPending ? "Restarting…" : "Restart"}
+                </button>
+              </div>
+
+              {mcpStatus?.source === "external" && (
+                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                  External process — Stop kills port {mcpStatus.port}.
+                </p>
+              )}
+
+              {mcpNotice && (
+                <p className={mcpNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{mcpNotice.text}</p>
+              )}
+            </div>
+
+            <div className="card card-pad space-y-4">
+              <div>
+                <h2 className="font-semibold">API server</h2>
+                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                  FastAPI backend
+                </p>
+              </div>
+
+              {backendStatus && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`badge ${backendStatus.reachable ? "badge-ok" : "badge-muted"}`}>
+                    {backendStatus.reachable ? "Reachable" : "Stopped"}
+                  </span>
+                  <span className="badge-muted badge">{backendStatus.status_label}</span>
+                  {backendStatus.active_pid != null && (
+                    <span className="badge-muted badge">PID {backendStatus.active_pid}</span>
+                  )}
+                  <span className="badge-muted badge">Port {backendStatus.port}</span>
+                </div>
+              )}
+
+              {backendStatus && (
+                <p className="text-sm">
+                  URL:{" "}
+                  <code className="rounded px-1.5 py-0.5 text-xs" style={{ background: "var(--color-surface-subtle)" }}>
+                    {backendStatus.url}
+                  </code>
+                </p>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={backendBusy || backendIsRunning}
+                  onClick={() => backendStart.mutate()}
+                >
+                  {backendStart.isPending ? "Starting…" : "Start"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={backendBusy || !backendIsRunning}
+                  onClick={() => backendStop.mutate()}
+                >
+                  {backendStop.isPending ? "Stopping…" : "Stop"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={backendBusy || !backendIsRunning}
+                  onClick={() => backendRestart.mutate()}
+                >
+                  {backendRestart.isPending ? "Restarting…" : "Restart"}
+                </button>
+              </div>
+
+              {backendStatus?.stopping_self && backendIsRunning && (
+                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                  Restart may disconnect this page briefly.
+                </p>
+              )}
+
+              {backendNotice && (
+                <p className={backendNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{backendNotice.text}</p>
+              )}
             </div>
           </div>
 

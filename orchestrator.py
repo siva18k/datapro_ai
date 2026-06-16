@@ -127,7 +127,10 @@ def build_domain_rag_prompt(
     *,
     domain_name: str | None = None,
     cite_sources: bool = False,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> tuple[str, str]:
+    from conversation_context import format_conversation_block
+
     context = "\n\n".join(
         [f"[{c['source']} - {c['chunk_id']}]\n{c['text']}" for c in chunks]
     )
@@ -137,14 +140,20 @@ def build_domain_rag_prompt(
         if cite_sources
         else "Do not include source paths or chunk IDs in your answer; sources are tracked separately.\n"
     )
+    history_block = format_conversation_block(conversation_history)
+    follow_up_line = (
+        "The latest user message may be a follow-up — use prior conversation only to interpret it, "
+        "but answer from the document context below.\n"
+        if history_block
+        else ""
+    )
     llm_prompt = f"""You are an internal knowledge assistant in a chat conversation.
 {domain_line}Answer only from the provided context.
 If the answer is not supported by the context, say:
 "I do not know based on the provided documents."
-{citation_line}
-{CHAT_RESPONSE_FORMAT}
+{citation_line}{follow_up_line}{CHAT_RESPONSE_FORMAT}
 
-User question:
+{history_block}User question:
 {user_question}
 
 Context:

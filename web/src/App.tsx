@@ -7,6 +7,7 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { AgentsPage } from "./pages/AgentsPage";
 import { AgentFlowsPage } from "./pages/AgentFlowsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { AskDebugPage } from "./pages/AskDebugPage";
 import { AskPage } from "./pages/AskPage";
 import { CatalogPage } from "./pages/CatalogPage";
 import { McpPage } from "./pages/McpPage";
@@ -31,6 +32,7 @@ export default function App() {
       <BrowserRouter>
         <SidebarProvider>
         <Routes>
+          <Route path="ask/debug" element={<AskDebugPage />} />
           <Route element={<Layout />}>
             <Route index element={<CatalogPage />} />
             <Route path="ask" element={<AskPage />} />

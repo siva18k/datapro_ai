@@ -175,9 +175,49 @@ def search_chunks(
     domain_ids: list[str] | None = None,
     source_id: str | None = None,
     source_ids: list[str] | None = None,
+    fuzzy: bool = True,
 ):
+    from query_fuzzy import encode_search_queries, get_search_query_variants, merge_ranked_chunks
+
+    if fuzzy and question:
+        variants = get_search_query_variants(question)
+        if len(variants) > 1:
+            per_variant_k = max(top_k * 2, min(top_k + 4, 12))
+            vectors = encode_search_queries(embedder, question)
+            result_lists = [
+                _search_chunks_with_vector(
+                    vector,
+                    top_k=per_variant_k,
+                    domain_id=domain_id,
+                    domain_ids=domain_ids,
+                    source_id=source_id,
+                    source_ids=source_ids,
+                )
+                for vector in vectors
+            ]
+            return merge_ranked_chunks(result_lists, top_k)
+
     if query_vector is None:
         query_vector = embedder.encode([question])[0]
+    return _search_chunks_with_vector(
+        query_vector,
+        top_k=top_k,
+        domain_id=domain_id,
+        domain_ids=domain_ids,
+        source_id=source_id,
+        source_ids=source_ids,
+    )
+
+
+def _search_chunks_with_vector(
+    query_vector,
+    *,
+    top_k=3,
+    domain_id: str | None = None,
+    domain_ids: list[str] | None = None,
+    source_id: str | None = None,
+    source_ids: list[str] | None = None,
+):
     embedding = vector_literal(query_vector)
     conn, schema = connect()
     try:

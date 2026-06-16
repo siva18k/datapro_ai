@@ -14,8 +14,10 @@ from typing import Any
 from catalog_db import get_domain
 from catalog_service import normalize_domain_overrides
 from code_orchestrator import ExecutionKind, classify_execution_kind
+from dataset_router import pick_rag_dataset
 from domain_router import route_question
 from db import search_chunks
+from query_fuzzy import correct_query_spelling, encode_search_queries
 from structured_orchestrator import (
     find_best_structured_domain,
     pick_structured_dataset,
@@ -38,6 +40,8 @@ class QueryPlan:
     routing: dict[str, Any]
     source_id: str | None = None
     source_name: str | None = None
+    rag_source_id: str | None = None
+    rag_source_name: str | None = None
     rag_domain_id: str | None = None
     rag_domain_name: str | None = None
     notes: list[str] = field(default_factory=list)
@@ -129,7 +133,12 @@ def resolve_query_plan(
     When domain_overrides is set, search is limited to those domains and cross-domain
     auto-routing is skipped.
     """
-    query_vector = embedder.encode([question])[0] if embedder is not None else None
+    _, spelling_fixes = correct_query_spelling(question)
+    query_vector = (
+        encode_search_queries(embedder, question)[0]
+        if embedder is not None
+        else None
+    )
     selected_overrides = normalize_domain_overrides(domain_override, domain_overrides)
     scope_locked = bool(selected_overrides)
 
@@ -144,6 +153,9 @@ def resolve_query_plan(
     routed_domain = _domain_row(routed_domain_id)
 
     notes: list[str] = []
+    if spelling_fixes:
+        fixes = ", ".join(f"{a}→{b}" for a, b in spelling_fixes[:3])
+        notes.append(f"Adjusted query spelling for search ({fixes}).")
     if scope_locked and routing.get("domain_name"):
         if len(selected_overrides) == 1:
             notes.append(f"Searching only in {routing['domain_name']} (your selection).")
@@ -170,6 +182,8 @@ def resolve_query_plan(
     execution_kind: ExecutionPath = "rag"
     source_id: str | None = None
     source_name: str | None = None
+    rag_source_id: str | None = None
+    rag_source_name: str | None = None
     rag_domain_id: str | None = routed_domain_id
     rag_domain_name: str | None = domain_name
 
@@ -208,7 +222,7 @@ def resolve_query_plan(
         )
         if execution_kind == "rag":
             execution_kind = "sql"
-        dataset = pick_structured_dataset(question, domain_id, embedder) if domain_id else None
+        dataset = pick_structured_dataset(question, domain_id, embedder, query_vector=query_vector) if domain_id else None
         if dataset:
             source_id = dataset["id"]
             source_name = dataset["name"]
@@ -217,7 +231,9 @@ def resolve_query_plan(
             question, domain_id=domain_id, routing=routing
         )
         if execution_kind in ("sql", "hybrid") and domain_id:
-            dataset = pick_structured_dataset(question, domain_id, embedder)
+            dataset = pick_structured_dataset(
+                question, domain_id, embedder, query_vector=query_vector
+            )
             if dataset:
                 source_id = dataset["id"]
                 source_name = dataset["name"]
@@ -254,6 +270,41 @@ def resolve_query_plan(
                         "method": f"{routing.get('method', 'none')}+rag_catalog",
                     }
 
+    if embedder is not None and domain_id and execution_kind in ("rag", "hybrid"):
+        rag_dataset, rag_conf, rag_method, rag_pick_chunks = pick_rag_dataset(
+            question,
+            domain_id,
+            embedder,
+            query_vector=query_vector,
+            allowed_domain_ids=allowed_domain_ids if scope_locked else None,
+        )
+        if rag_dataset and (rag_conf >= 0.12 or rag_method in ("rag_metadata", "embedding_metadata", "keyword_metadata")):
+            rag_source_id = rag_dataset["id"]
+            rag_source_name = rag_dataset["name"]
+            routing = {
+                **routing,
+                "dataset_method": rag_method,
+                "dataset_confidence": round(rag_conf, 3),
+            }
+            if execution_kind == "rag":
+                source_id = rag_source_id
+                source_name = rag_source_name
+            notes.append(
+                f"Auto-selected dataset «{rag_source_name}» "
+                f"(matched via {rag_method.replace('_', ' ')})."
+            )
+        elif execution_kind == "hybrid" and rag_pick_chunks:
+            sql_dataset = pick_structured_dataset(
+                question,
+                domain_id,
+                embedder,
+                query_vector=query_vector,
+                chunks=rag_pick_chunks,
+            )
+            if sql_dataset:
+                source_id = sql_dataset["id"]
+                source_name = sql_dataset["name"]
+
     if not domain_id and structured_domain and use_structured:
         domain_id = structured_domain["id"]
         domain_name = structured_domain["name"]
@@ -268,6 +319,8 @@ def resolve_query_plan(
         routing=routing,
         source_id=source_id,
         source_name=source_name,
+        rag_source_id=rag_source_id,
+        rag_source_name=rag_source_name,
         rag_domain_id=rag_domain_id,
         rag_domain_name=rag_domain_name,
         notes=notes,
@@ -288,7 +341,9 @@ def structured_fallback_available(
     )
     if not structured_domain or not should_use_structured_sql(question, structured_domain["id"]):
         return None
-    dataset = pick_structured_dataset(question, structured_domain["id"], embedder)
+    dataset = pick_structured_dataset(
+        question, structured_domain["id"], embedder, query_vector=embedder.encode([question])[0] if embedder else None
+    )
     if not dataset:
         return None
     return QueryPlan(

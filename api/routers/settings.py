@@ -31,10 +31,15 @@ class LlmSettings(BaseModel):
     openrouter_api_key: str | None = None
 
 
+class AskSettings(BaseModel):
+    conversation_turns: int | None = Field(default=None, ge=0, le=20)
+
+
 class SettingsUpdate(BaseModel):
     database: DatabaseSettings | None = None
     mcp_url: str | None = None
     embedding_model: str | None = None
+    ask: AskSettings | None = None
     llm: LlmSettings | None = None
     # Legacy top-level key
     mistral_api_key: str | None = None

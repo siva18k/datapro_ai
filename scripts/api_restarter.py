@@ -10,6 +10,9 @@ import time
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
+
+from settings_service import apply_managed_settings_to_env
 
 
 def _port_in_use(port: int) -> bool:
@@ -38,7 +41,7 @@ def main() -> int:
         print(f"Port {port} did not become free in time.", file=sys.stderr)
         return 1
 
-    env = os.environ.copy()
+    env = apply_managed_settings_to_env()
     env["API_HOST"] = host
     env["API_PORT"] = str(port)
     log_path = PROJECT_DIR / ".api_server.log"

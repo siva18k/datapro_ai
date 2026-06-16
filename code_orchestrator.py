@@ -28,6 +28,7 @@ from typing import Any, Literal
 
 from catalog_db import get_source, list_sources
 from catalog_service import get_source_data_path, list_source_files, load_dataset_definition
+from dataset_router import pick_file_dataset
 from domain_router import route_question
 from structured_orchestrator import _ANALYTICAL_PATTERNS, should_use_structured_sql
 
@@ -161,18 +162,6 @@ def classify_execution_kind(
     if file_sources and (wants_curation or wants_analytics):
         return "python"
     return "rag"
-
-
-def pick_file_dataset(question: str, domain_id: str, embedder=None) -> dict | None:
-    candidates = [
-        s
-        for s in list_sources(domain_id=domain_id, enabled_only=True)
-        if s.get("connector") in ("upload", "file_path")
-    ]
-    if not candidates:
-        return None
-    # Future: rank by file names / definition relevance
-    return candidates[0]
 
 
 def build_file_dataset_context(source_id: str) -> FileDatasetContext:

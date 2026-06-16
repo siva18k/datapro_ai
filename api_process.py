@@ -13,6 +13,7 @@ from pathlib import Path
 import requests
 
 from mcp_registry import PROJECT_DIR
+from settings_service import apply_managed_settings_to_env
 
 PID_PATH = PROJECT_DIR / ".api_server.pid"
 LOG_PATH = PROJECT_DIR / ".api_server.log"
@@ -232,7 +233,7 @@ def start_server(*, host: str | None = None, port: int | None = None) -> tuple[b
             "Stop that process before starting the API server."
         )
 
-    env = os.environ.copy()
+    env = apply_managed_settings_to_env()
     env["API_HOST"] = host
     env["API_PORT"] = str(port)
 

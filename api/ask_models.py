@@ -5,11 +5,17 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class ConversationTurn(BaseModel):
+    role: str
+    content: str
+
+
 class AskRequest(BaseModel):
     question: str
     top_k: int = Field(default=3, ge=1, le=8)
     domain_override: str | None = None
     domain_overrides: list[str] | None = None
+    conversation_history: list[ConversationTurn] = Field(default_factory=list)
     mcp_url: str | None = None
     backend: str | None = None
     model: str | None = None

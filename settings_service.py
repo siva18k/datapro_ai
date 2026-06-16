@@ -34,6 +34,7 @@ MANAGED_KEYS = (
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
     "OPENROUTER_API_KEY",
+    "ASK_CONVERSATION_TURNS",
 )
 
 SECRET_KEYS = frozenset(
@@ -47,6 +48,23 @@ SECRET_KEYS = frozenset(
         "DATABASE_URL",
     }
 )
+
+MIN_API_KEY_LENGTH = 20
+
+
+def _looks_like_api_key(value: str) -> bool:
+    cleaned = (value or "").strip()
+    return len(cleaned) >= MIN_API_KEY_LENGTH and "@" not in cleaned
+
+
+def _sanitize_llm_model_override(value: str) -> str:
+    """Reject email/autofill junk stored in the model override slot."""
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+    if "@" in cleaned:
+        return ""
+    return cleaned
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -91,7 +109,13 @@ def _write_env_file(path: Path, updates: dict[str, str]) -> None:
         if key in updates:
             if updates[key]:
                 out.append(f"{key}={_quote_env_value(updates[key])}")
-            seen.add(key)
+                seen.add(key)
+            elif key in SECRET_KEYS:
+                # Keep existing secrets when save did not supply a new value.
+                out.append(raw)
+                seen.add(key)
+            else:
+                seen.add(key)
         else:
             out.append(raw)
 
@@ -108,13 +132,64 @@ def _reload_env() -> None:
         load_dotenv(ENV_PATH, override=True)
 
 
+def _purge_invalid_default_llm_model_from_file() -> bool:
+    """Drop autofill junk (e.g. email) from DEFAULT_LLM_MODEL in .env."""
+    file_vals = _parse_env_file(ENV_PATH)
+    raw = (file_vals.get("DEFAULT_LLM_MODEL") or "").strip()
+    if not raw or _sanitize_llm_model_override(raw) == raw:
+        return False
+    _write_env_file(ENV_PATH, {"DEFAULT_LLM_MODEL": ""})
+    os.environ.pop("DEFAULT_LLM_MODEL", None)
+    return True
+
+
+def scrub_invalid_managed_settings() -> None:
+    """One-time cleanup for bad values saved by browser autofill."""
+    if _purge_invalid_default_llm_model_from_file():
+        _reload_env()
+    if not _sanitize_llm_model_override(os.environ.get("DEFAULT_LLM_MODEL", "")):
+        os.environ.pop("DEFAULT_LLM_MODEL", None)
+
+
 def get_raw_settings() -> dict[str, str]:
     file_vals = _parse_env_file(ENV_PATH)
-    merged = {k: os.environ.get(k, file_vals.get(k, "")) for k in MANAGED_KEYS}
-    for k, v in file_vals.items():
-        if k not in merged and k in MANAGED_KEYS:
-            merged[k] = v
+    merged: dict[str, str] = {}
+    for k in MANAGED_KEYS:
+        file_v = (file_vals.get(k) or "").strip()
+        env_v = (os.environ.get(k) or "").strip()
+        if k in SECRET_KEYS:
+            file_ok = _looks_like_api_key(file_v)
+            env_ok = _looks_like_api_key(env_v)
+            if file_ok:
+                value = file_v
+            elif env_ok:
+                value = env_v
+            else:
+                value = file_v or env_v
+        else:
+            # Prefer .env so manual edits and Settings saves apply without restarting the API.
+            value = file_v or env_v
+        if k == "DEFAULT_LLM_MODEL":
+            value = _sanitize_llm_model_override(value)
+        merged[k] = value
     return {k: (merged.get(k) or "") for k in MANAGED_KEYS}
+
+
+def get_api_key(env_key: str) -> str:
+    """Resolve a provider API key from managed settings (.env with env fallback)."""
+    return (get_raw_settings().get(env_key) or "").strip()
+
+
+def apply_managed_settings_to_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Overlay managed settings onto a subprocess env (fresh .env wins over stale exports)."""
+    out = dict(env or os.environ)
+    raw = get_raw_settings()
+    for key, value in raw.items():
+        if value:
+            out[key] = value
+        elif key == "DEFAULT_LLM_MODEL":
+            out.pop(key, None)
+    return out
 
 
 def get_embedding_model() -> str:
@@ -125,6 +200,19 @@ def get_embedding_model() -> str:
     return model or DEFAULT_EMBEDDING_MODEL
 
 
+def get_ask_conversation_turns() -> int:
+    from conversation_context import DEFAULT_ASK_CONVERSATION_TURNS, MAX_ASK_CONVERSATION_TURNS
+
+    raw = get_raw_settings().get("ASK_CONVERSATION_TURNS", "").strip()
+    if not raw:
+        return DEFAULT_ASK_CONVERSATION_TURNS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_ASK_CONVERSATION_TURNS
+    return max(0, min(value, MAX_ASK_CONVERSATION_TURNS))
+
+
 def get_llm_settings() -> dict[str, str]:
     from llm_providers import DEFAULT_LLM_BACKEND
 
@@ -132,7 +220,7 @@ def get_llm_settings() -> dict[str, str]:
     return {
         "default_backend": (raw.get("DEFAULT_LLM_BACKEND") or DEFAULT_LLM_BACKEND).strip()
         or DEFAULT_LLM_BACKEND,
-        "default_model": (raw.get("DEFAULT_LLM_MODEL") or "").strip(),
+        "default_model": _sanitize_llm_model_override(raw.get("DEFAULT_LLM_MODEL") or ""),
         "ollama_base_url": (raw.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
         or "http://localhost:11434",
     }
@@ -144,6 +232,7 @@ def get_public_settings() -> dict[str, Any]:
         DEFAULT_LLM_BACKEND,
         EMBEDDING_MODEL_OPTIONS,
         LLM_BACKENDS,
+        MISTRAL_MODEL_OPTIONS,
     )
 
     raw = get_raw_settings()
@@ -163,10 +252,11 @@ def get_public_settings() -> dict[str, Any]:
         "embedding_model": get_embedding_model(),
         "embedding_model_options": list(EMBEDDING_MODEL_OPTIONS),
         "llm_backends": LLM_BACKENDS,
+        "mistral_model_options": list(MISTRAL_MODEL_OPTIONS),
         "llm": {
             "default_backend": (raw.get("DEFAULT_LLM_BACKEND") or DEFAULT_LLM_BACKEND).strip()
             or DEFAULT_LLM_BACKEND,
-            "default_model": (raw.get("DEFAULT_LLM_MODEL") or "").strip(),
+            "default_model": _sanitize_llm_model_override(raw.get("DEFAULT_LLM_MODEL") or ""),
             "ollama_base_url": (raw.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
             or "http://localhost:11434",
             "mistral_api_key_set": bool(raw.get("MISTRAL_API_KEY")),
@@ -177,6 +267,10 @@ def get_public_settings() -> dict[str, Any]:
         },
         # Legacy field for older clients
         "mistral_api_key_set": bool(raw.get("MISTRAL_API_KEY")),
+        "ask": {
+            "conversation_turns": get_ask_conversation_turns(),
+            "max_conversation_turns": 20,
+        },
     }
     if raw.get("DATABASE_URL"):
         public["database"]["database_url"] = "***"
@@ -226,11 +320,21 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("embedding_model") is not None:
         updates["EMBEDDING_MODEL"] = str(payload.get("embedding_model", "")).strip()
 
+    ask = payload.get("ask") or {}
+    if ask.get("conversation_turns") is not None:
+        from conversation_context import MAX_ASK_CONVERSATION_TURNS
+
+        try:
+            turns = int(ask.get("conversation_turns"))
+        except (TypeError, ValueError):
+            turns = 0
+        updates["ASK_CONVERSATION_TURNS"] = str(max(0, min(turns, MAX_ASK_CONVERSATION_TURNS)))
+
     llm = payload.get("llm") or {}
     if llm.get("default_backend") is not None:
         updates["DEFAULT_LLM_BACKEND"] = str(llm.get("default_backend", "")).strip()
     if llm.get("default_model") is not None:
-        updates["DEFAULT_LLM_MODEL"] = str(llm.get("default_model", "")).strip()
+        updates["DEFAULT_LLM_MODEL"] = _sanitize_llm_model_override(str(llm.get("default_model", "")))
     if llm.get("ollama_base_url") is not None:
         updates["OLLAMA_BASE_URL"] = str(llm.get("ollama_base_url", "")).strip()
 
@@ -242,15 +346,25 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
         ("openrouter_api_key", "OPENROUTER_API_KEY"),
     ):
         api_key = payload.get(key_field) or llm.get(key_field)
-        if api_key:
-            updates[env_key] = str(api_key).strip()
+        if not api_key:
+            continue
+        cleaned = str(api_key).strip()
+        if len(cleaned) < MIN_API_KEY_LENGTH:
+            continue
+        updates[env_key] = cleaned
 
     prev_embedding = current.get("EMBEDDING_MODEL", "")
-    _write_env_file(ENV_PATH, {k: updates[k] for k in MANAGED_KEYS if updates.get(k) is not None})
+    write_payload = {k: updates[k] for k in MANAGED_KEYS if updates.get(k) is not None}
+    if "DEFAULT_LLM_MODEL" in updates and not updates["DEFAULT_LLM_MODEL"]:
+        write_payload["DEFAULT_LLM_MODEL"] = ""
+    _write_env_file(ENV_PATH, write_payload)
     _reload_env()
     for key in MANAGED_KEYS:
-        if updates.get(key):
-            os.environ[key] = updates[key]
+        value = updates.get(key, "")
+        if value:
+            os.environ[key] = value
+        elif key in updates and not value:
+            os.environ.pop(key, None)
     if updates.get("EMBEDDING_MODEL") and updates.get("EMBEDDING_MODEL") != prev_embedding:
         try:
             from api.deps import clear_embedder_cache

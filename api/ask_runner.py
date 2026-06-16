@@ -25,6 +25,16 @@ from api.ask_models import (
     PipelineTraceStep,
     SourceChunk,
 )
+from conversation_context import retrieval_query_with_history, truncate_history
+
+
+def _conversation_history(body: AskRequest) -> list[dict[str, str]]:
+    raw = [{"role": t.role, "content": t.content} for t in body.conversation_history]
+    return truncate_history(raw)
+
+
+def _retrieval_query(body: AskRequest) -> str:
+    return retrieval_query_with_history(body.question, _conversation_history(body))
 
 
 def _status(message: str) -> dict[str, Any]:
@@ -119,12 +129,19 @@ def _scoped_search_kwargs(meta: dict[str, Any]) -> dict[str, Any]:
     domain_ids = routing.get("domain_ids")
     if domain_ids:
         if len(domain_ids) == 1:
-            return {"domain_id": domain_ids[0]}
-        return {"domain_ids": domain_ids}
-    domain_id = meta.get("domain_id")
-    if domain_id:
-        return {"domain_id": domain_id}
-    return {}
+            out: dict[str, Any] = {"domain_id": domain_ids[0]}
+        else:
+            out = {"domain_ids": domain_ids}
+    else:
+        domain_id = meta.get("domain_id")
+        out = {"domain_id": domain_id} if domain_id else {}
+
+    rag_source = meta.get("rag_source_id")
+    if not rag_source and meta.get("execution_kind") == "rag":
+        rag_source = meta.get("source_id")
+    if rag_source:
+        out["source_id"] = rag_source
+    return out
 
 
 def _scope_locked(meta: dict[str, Any]) -> bool:
@@ -138,24 +155,25 @@ def _vector_search_chunks(
     meta: dict[str, Any],
     domain_id: str | None,
 ) -> list[dict]:
+    search_query = _retrieval_query(body)
     scope_kwargs = _scoped_search_kwargs(meta)
     if _scope_locked(meta):
         return search_chunks(
-            body.question,
+            search_query,
             embedder,
             top_k=body.top_k,
             **scope_kwargs,
         )
 
     chunks = search_chunks(
-        body.question,
+        search_query,
         embedder,
         top_k=body.top_k,
         domain_id=domain_id,
     )
     if not chunks:
         best_domain, chunks = find_best_rag_domain(
-            body.question, embedder, top_k=body.top_k, prefer_domain_id=domain_id
+            search_query, embedder, top_k=body.top_k, prefer_domain_id=domain_id
         )
         if best_domain and best_domain["id"] != domain_id:
             meta["domain_id"] = best_domain["id"]
@@ -188,6 +206,10 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         domain_override=body.domain_override,
         domain_overrides=selected_domains or None,
     )
+    history = _conversation_history(body)
+    if history:
+        turn_count = sum(1 for turn in history if turn["role"] == "user")
+        yield _status(f"Using {turn_count} prior turn(s) for follow-up context…")
 
     yield _status("Routing question to the best domain and dataset…")
     plan = resolve_query_plan(
@@ -242,6 +264,20 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
             domain_name=plan.domain_name,
             execution_kind=plan.execution_kind,
         )
+    elif plan.source_name and plan.execution_kind == "rag":
+        dataset_msg = f"Narrowed search to dataset «{plan.source_name}»."
+        yield _status(dataset_msg)
+        yield from _maybe_trace(
+            body,
+            dataset_msg,
+            "routing",
+            source_id=plan.source_id,
+            source_name=plan.source_name,
+            domain_id=plan.domain_id,
+            domain_name=plan.domain_name,
+            execution_kind=plan.execution_kind,
+            routing_method=routing.get("dataset_method"),
+        )
 
     meta: dict[str, Any] = {
         "routing": routing,
@@ -251,6 +287,8 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         "query_kind": _legacy_query_kind(plan.execution_kind),
         "source_id": plan.source_id,
         "source_name": plan.source_name,
+        "rag_source_id": plan.rag_source_id,
+        "rag_source_name": plan.rag_source_name,
         "usage": {"rag": False, "mcp": False},
     }
 
@@ -362,6 +400,7 @@ def _structured_events(
         question=body.question,
         columns=columns,
         rows=rows,
+        conversation_history=_conversation_history(body),
     )
     answer = generate_answer(
         summary_prompt,
@@ -395,6 +434,7 @@ def _structured_events(
                         chunks,
                         domain_name=domain_name,
                         cite_sources=body.debug,
+                        conversation_history=_conversation_history(body),
                     )
                     yield _status("Blending database results with document context…")
                     answer = generate_answer(
@@ -461,9 +501,10 @@ def _rag_search_events(
     chunks: list[dict] = []
     retrieval = "vector"
     mcp_meta: dict[str, Any] | None = None
+    search_query = _retrieval_query(body)
 
     domain_chunks, mcp_meta = retrieve_chunks_for_scope(
-        body.question,
+        search_query,
         domain_id=domain_id,
         domain_ids=domain_ids,
         domain_slug=domain_slug,
@@ -474,7 +515,7 @@ def _rag_search_events(
         yield _status("Searching documents via domain MCP bindings…")
         url = mcp_meta.get("mcp_url") if mcp_meta else ""
         tool = mcp_meta.get("mcp_tool", "search_documents") if mcp_meta else "search_documents"
-        mcp_args: dict[str, Any] = {"query": body.question, "top_k": body.top_k}
+        mcp_args: dict[str, Any] = {"query": search_query, "top_k": body.top_k}
         if domain_ids and len(domain_ids) == 1 and domain_slug:
             mcp_args["domain"] = domain_slug
         yield from _maybe_trace(
@@ -485,7 +526,7 @@ def _rag_search_events(
             mcp_url=url,
             mcp_tool=tool,
             mcp_arguments=mcp_args,
-            retrieval_query=body.question,
+            retrieval_query=search_query,
             top_k=body.top_k,
             domain_id=domain_id,
             domain_name=meta.get("domain_name"),
@@ -500,7 +541,7 @@ def _rag_search_events(
             mcp_url=url,
             mcp_tool=tool,
             mcp_arguments=mcp_args,
-            retrieval_query=body.question,
+            retrieval_query=search_query,
             top_k=body.top_k,
             domain_id=domain_id,
             domain_name=meta.get("domain_name"),
@@ -517,20 +558,31 @@ def _rag_search_events(
             search_msg,
             "rag",
             retrieval="vector",
-            retrieval_query=body.question,
+            retrieval_query=search_query,
             top_k=body.top_k,
             domain_id=domain_id,
             domain_name=meta.get("domain_name"),
+            source_id=scope_kwargs.get("source_id"),
+            source_name=meta.get("rag_source_name") or meta.get("source_name"),
         )
         domain_id_before = meta.get("domain_id")
         if retrieval == "mcp":
             yield _status("No MCP results — searching local index…")
         chunks = search_chunks(
-            body.question,
+            search_query,
             embedder,
             top_k=body.top_k,
             **scope_kwargs,
         )
+        if not chunks and scope_kwargs.get("source_id"):
+            yield _status("No chunks in selected dataset — searching full domain…")
+            domain_only = {k: v for k, v in scope_kwargs.items() if k != "source_id"}
+            chunks = search_chunks(
+                search_query,
+                embedder,
+                top_k=body.top_k,
+                **domain_only,
+            )
         if not chunks and not _scope_locked(meta):
             if domain_id_before:
                 yield _status("No chunks in this domain — searching other domains…")
@@ -640,13 +692,14 @@ def _rag_events(
     yield _status(gen_msg)
     domain_name = meta.get("domain_name") or domain_name
     domain_slug = routing.get("domain_slug")
+    history = _conversation_history(body)
     mcp_prompt, mcp_prompt_meta = build_prompt_via_domain_mcp(
         body.question,
         domain_id=meta.get("domain_id"),
         domain_slug=domain_slug,
         top_k=body.top_k,
     )
-    if mcp_prompt:
+    if mcp_prompt and not history:
         prompt = mcp_prompt
         if mcp_prompt_meta:
             yield from _maybe_trace(
@@ -663,6 +716,7 @@ def _rag_events(
             chunks,
             domain_name=domain_name,
             cite_sources=body.debug,
+            conversation_history=history,
         )
     yield from _maybe_trace(
         body,
@@ -670,7 +724,7 @@ def _rag_events(
         "llm",
         domain_id=meta.get("domain_id"),
         domain_name=domain_name,
-        retrieval_query=body.question,
+        retrieval_query=_retrieval_query(body),
         llm_prompt=_truncate_debug_text(prompt) if body.debug else None,
         chunks=_chunk_refs(chunks),
     )

@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AskAgentFlowRunResult } from "../components/AskAgentFlowRunResult";
 import { AskAgentRunResult } from "../components/AskAgentRunResult";
@@ -13,6 +13,12 @@ import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
 import type { Agent, AgentFlow, AgentRunStep, AskSource, PipelineTraceStep } from "../types";
 import { stripSourceCitations } from "../utils/answerDisplay";
+import {
+  clearPipelineTraceSession,
+  openPipelineTraceTab,
+  savePipelineTraceSession,
+} from "../utils/pipelineTraceSession";
+import { buildAskConversationHistory } from "../utils/askConversation";
 
 interface Message {
   role: "user" | "assistant";
@@ -45,6 +51,7 @@ interface AskMutationInput {
   topK: number;
   selectedDomains: string[];
   debug: boolean;
+  conversationHistory: { role: string; content: string }[];
 }
 
 interface AgentMutationInput {
@@ -74,6 +81,12 @@ export function AskPage() {
   const [pipelineTrace, setPipelineTrace] = useState<PipelineTraceStep[]>([]);
   const pipelineTraceRef = useRef<PipelineTraceStep[]>([]);
 
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+  });
+  const conversationTurns = settings?.ask?.conversation_turns ?? 5;
+
   const appendPipelineTrace = (step: PipelineTraceStep) => {
     const prev = pipelineTraceRef.current;
     const last = prev[prev.length - 1];
@@ -86,6 +99,7 @@ export function AskPage() {
   const resetPipelineTrace = () => {
     pipelineTraceRef.current = [];
     setPipelineTrace([]);
+    clearPipelineTraceSession();
   };
 
   const handleDebugModeChange = (enabled: boolean) => {
@@ -110,12 +124,13 @@ export function AskPage() {
   useSetSidebarContent(sidebarPanel);
 
   const ask = useMutation({
-    mutationFn: ({ question, topK, selectedDomains, debug }: AskMutationInput) =>
+    mutationFn: ({ question, topK, selectedDomains, debug, conversationHistory }: AskMutationInput) =>
       api.askStream(
         {
           question,
           top_k: topK,
           domain_overrides: selectedDomains.length ? selectedDomains : undefined,
+          conversation_history: conversationHistory.length ? conversationHistory : undefined,
           debug,
         },
         (message) => setActivityStatus(message),
@@ -304,6 +319,7 @@ export function AskPage() {
     if (!q) return;
     if (debugMode) resetPipelineTrace();
     const displayQuestion = input.trim();
+    const conversationHistory = buildAskConversationHistory(messages, conversationTurns);
     setMessages((prev) => [...prev, { role: "user", content: displayQuestion }]);
     setInput("");
     setAttachments([]);
@@ -313,6 +329,7 @@ export function AskPage() {
       topK,
       selectedDomains,
       debug: debugMode,
+      conversationHistory,
     });
   };
 
@@ -325,6 +342,20 @@ export function AskPage() {
   }, [messages]);
 
   const visiblePipelineTrace = ask.isPending ? pipelineTrace : lastAssistantTrace;
+
+  useEffect(() => {
+    if (!debugMode) {
+      clearPipelineTraceSession();
+      return;
+    }
+    if (visiblePipelineTrace.length > 0 || ask.isPending) {
+      savePipelineTraceSession({
+        steps: visiblePipelineTrace,
+        isActive: ask.isPending,
+        updatedAt: Date.now(),
+      });
+    }
+  }, [debugMode, visiblePipelineTrace, ask.isPending]);
 
   return (
     <div className="ask-page">
@@ -485,7 +516,11 @@ export function AskPage() {
 
       {debugMode && visiblePipelineTrace.length > 0 && (
         <div className="ask-pipeline-panel shrink-0">
-          <AskPipelineSteps steps={visiblePipelineTrace} isActive={ask.isPending} />
+          <AskPipelineSteps
+            steps={visiblePipelineTrace}
+            isActive={ask.isPending}
+            onOpenInTab={() => openPipelineTraceTab(visiblePipelineTrace, ask.isPending)}
+          />
         </div>
       )}
     </div>

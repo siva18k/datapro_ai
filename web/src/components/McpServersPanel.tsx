@@ -117,115 +117,114 @@ export function McpServersPanel() {
   const dismissed = data?.dismissed_optional ?? [];
 
   return (
-    <div className="card card-pad space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-semibold">MCP servers</h2>
-          <p className="mt-1 text-sm text-zinc-500">
-            Start, edit, or remove servers. Use the in-app Analytics page for SQL dashboards.
-          </p>
-        </div>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowForm((v) => !v)}>
-          {showForm ? "Cancel" : "Add server"}
-        </button>
-      </div>
-
-      {dismissed.length > 0 && (
-        <div className="mcp-themed-box--dashed">
-          <p className="font-medium" style={{ color: "var(--color-text)" }}>Removed integrations</p>
-          <p className="mt-1 mcp-text-muted">These were removed earlier and can be added back:</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {dismissed.map((spec) => (
-              <DismissedServerChip
-                key={spec.slug}
-                spec={spec}
-                busy={restoreServer.isPending}
-                onRestore={() => restoreServer.mutate(spec.slug)}
-              />
-            ))}
+    <div className="space-y-3">
+      <div className="card card-pad space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">MCP servers</h2>
+            <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+              Start, edit, or remove servers. Use the in-app Analytics page for SQL dashboards.
+            </p>
           </div>
-        </div>
-      )}
-
-      {showForm && (
-        <form
-          className="mcp-themed-box space-y-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!name.trim() || !url.trim()) {
-              setError("Name and URL are required.");
-              return;
-            }
-            createServer.mutate({
-              name: name.trim(),
-              url: url.trim(),
-              description: description.trim(),
-              server_kind: serverKind,
-            });
-          }}
-        >
-          <div className="field mb-0">
-            <label className="label">Name</label>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div className="field mb-0">
-            <label className="label">URL</label>
-            <input
-              className="input font-mono text-sm"
-              placeholder="https://mcp.example.com/mcp"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-            />
-          </div>
-          <div className="field mb-0">
-            <label className="label">Description</label>
-            <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
-          </div>
-          <div className="field mb-0">
-            <label className="label">Kind</label>
-            <select
-              className="select"
-              value={serverKind}
-              onChange={(e) => setServerKind(e.target.value as "public" | "enterprise")}
-            >
-              <option value="public">Public</option>
-              <option value="enterprise">Enterprise</option>
-            </select>
-          </div>
-          {error && <p className="alert-error text-sm">{error}</p>}
-          <button type="submit" className="btn btn-sm" disabled={createServer.isPending}>
-            {createServer.isPending ? "Saving…" : "Save server"}
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowForm((v) => !v)}>
+            {showForm ? "Cancel" : "Add server"}
           </button>
-        </form>
-      )}
+        </div>
 
-      {notice && !showForm && <p className="alert-ok text-sm whitespace-pre-wrap">{notice}</p>}
-      {error && !showForm && !editingServer && <p className="alert-error text-sm whitespace-pre-wrap">{error}</p>}
+        {dismissed.length > 0 && (
+          <div className="mcp-themed-box--dashed">
+            <p className="font-medium" style={{ color: "var(--color-text)" }}>Removed integrations</p>
+            <p className="mt-1 mcp-text-muted">These were removed earlier and can be added back:</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {dismissed.map((spec) => (
+                <DismissedServerChip
+                  key={spec.slug}
+                  spec={spec}
+                  busy={restoreServer.isPending}
+                  onRestore={() => restoreServer.mutate(spec.slug)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
-      {isLoading && <p className="text-sm text-zinc-500">Loading servers…</p>}
-
-      <div className="space-y-2">
-        {servers.map((server) => (
-          <ServerRow
-            key={server.id}
-            server={server}
-            busy={actionBusy}
-            onEdit={() => setEditingServer(server)}
-            onStart={() => startServer.mutate(server.id)}
-            onStop={() => stopServer.mutate(server.id)}
-            onDelete={() => {
-              if (
-                !server.is_builtin &&
-                window.confirm(
-                  `Remove MCP server "${server.name}"?\n\nDomain bindings that use this server will also be deleted.`,
-                )
-              ) {
-                deleteServer.mutate(server.id);
+        {showForm && (
+          <form
+            className="mcp-themed-box space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!name.trim() || !url.trim()) {
+                setError("Name and URL are required.");
+                return;
               }
+              createServer.mutate({
+                name: name.trim(),
+                url: url.trim(),
+                description: description.trim(),
+                server_kind: serverKind,
+              });
             }}
-          />
-        ))}
+          >
+            <div className="field mb-0">
+              <label className="label">Name</label>
+              <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="field mb-0">
+              <label className="label">URL</label>
+              <input
+                className="input font-mono text-sm"
+                placeholder="https://mcp.example.com/mcp"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+            </div>
+            <div className="field mb-0">
+              <label className="label">Description</label>
+              <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
+            <div className="field mb-0">
+              <label className="label">Kind</label>
+              <select
+                className="select"
+                value={serverKind}
+                onChange={(e) => setServerKind(e.target.value as "public" | "enterprise")}
+              >
+                <option value="public">Public</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
+            {error && <p className="alert-error text-sm">{error}</p>}
+            <button type="submit" className="btn btn-sm" disabled={createServer.isPending}>
+              {createServer.isPending ? "Saving…" : "Save server"}
+            </button>
+          </form>
+        )}
+
+        {notice && !showForm && <p className="alert-ok text-sm whitespace-pre-wrap">{notice}</p>}
+        {error && !showForm && !editingServer && <p className="alert-error text-sm whitespace-pre-wrap">{error}</p>}
+        {isLoading && <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Loading servers…</p>}
       </div>
+
+      {servers.map((server) => (
+        <ServerRow
+          key={server.id}
+          server={server}
+          busy={actionBusy}
+          onEdit={() => setEditingServer(server)}
+          onStart={() => startServer.mutate(server.id)}
+          onStop={() => stopServer.mutate(server.id)}
+          onDelete={() => {
+            if (
+              !server.is_builtin &&
+              window.confirm(
+                `Remove MCP server "${server.name}"?\n\nDomain bindings that use this server will also be deleted.`,
+              )
+            ) {
+              deleteServer.mutate(server.id);
+            }
+          }}
+        />
+      ))}
 
       <McpEditServerModal
         open={editingServer != null}

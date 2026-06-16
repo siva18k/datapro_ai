@@ -7,7 +7,7 @@ from functools import lru_cache
 from sentence_transformers import SentenceTransformer
 
 from catalog_service import ensure_catalog_ready
-from settings_service import get_embedding_model
+from settings_service import get_embedding_model, scrub_invalid_managed_settings
 
 
 @lru_cache(maxsize=4)
@@ -24,4 +24,5 @@ def clear_embedder_cache() -> None:
 
 
 def bootstrap() -> None:
+    scrub_invalid_managed_settings()
     ensure_catalog_ready()

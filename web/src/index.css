@@ -643,6 +643,26 @@ button.sidebar-hint {
   @apply mt-5 flex flex-wrap justify-end gap-2;
 }
 
+.settings-llm-row {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+  align-items: end;
+}
+@media (min-width: 768px) {
+  .settings-llm-row {
+    grid-template-columns: minmax(8rem, 0.85fr) minmax(10rem, 1fr) minmax(12rem, 1.35fr);
+  }
+}
+.settings-servers-stack {
+  display: grid;
+  gap: 1rem;
+}
+@media (min-width: 768px) {
+  .settings-servers-stack {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .settings-db-split {
   @apply grid gap-4 lg:grid-cols-2 lg:items-start;
 }
@@ -661,8 +681,6 @@ button.sidebar-hint {
   background: color-mix(in srgb, var(--color-surface-muted) 55%, var(--color-surface-subtle));
 }
 .mcp-server-card {
-  @apply rounded-lg border px-3 py-2.5 text-sm;
-  background: var(--color-surface-subtle);
   border-color: var(--color-border);
 }
 .mcp-server-card--builtin {
@@ -1643,35 +1661,88 @@ label.file-upload-btn {
 .ask-pipeline-panel {
   @apply mt-3 max-h-[40vh] overflow-y-auto;
 }
+.ask-pipeline-open-tab {
+  @apply ml-auto shrink-0;
+}
+.ask-pipeline-steps-summary--static {
+  cursor: default;
+}
+.ask-pipeline-steps--standalone {
+  @apply max-h-none;
+}
+.ask-pipeline-steps--standalone .ask-pipeline-steps-list {
+  @apply max-h-none;
+}
+
+.ask-debug-page {
+  @apply min-h-screen px-4 py-6 sm:px-8;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+.ask-debug-header {
+  @apply mb-6 flex flex-wrap items-start justify-between gap-4;
+}
+.ask-debug-title {
+  @apply text-xl font-semibold;
+}
+.ask-debug-subtitle {
+  @apply mt-1 text-sm;
+  color: var(--color-text-muted);
+}
+.ask-debug-empty {
+  @apply max-w-lg;
+}
+.ask-debug-panel {
+  @apply min-h-0;
+}
+.ask-debug-panel .ask-pipeline-steps {
+  @apply max-h-none shadow-none;
+}
+.ask-debug-updated {
+  @apply mt-4 text-center text-xs;
+  color: var(--color-text-faint);
+}
 .ask-pipeline-steps {
-  @apply rounded-2xl border border-zinc-200 bg-white text-sm shadow-sm;
+  @apply rounded-2xl border text-sm shadow-sm;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 .ask-pipeline-steps-summary {
-  @apply sticky top-0 z-10 flex cursor-pointer list-none items-center gap-2 border-b border-zinc-100 bg-white px-4 py-3 font-medium text-zinc-700;
+  @apply sticky top-0 z-10 flex cursor-pointer list-none items-center gap-2 border-b px-4 py-3 font-medium;
+  border-color: var(--color-border-light);
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 .ask-pipeline-steps-summary::-webkit-details-marker {
   display: none;
 }
 .ask-pipeline-steps-icon {
-  @apply shrink-0 text-zinc-500;
+  @apply shrink-0;
+  color: var(--color-text-muted);
 }
 .ask-pipeline-steps-title {
   @apply flex-1;
 }
 .ask-pipeline-steps-count {
-  @apply ml-1 font-normal text-zinc-500;
+  @apply ml-1 font-normal;
+  color: var(--color-text-muted);
 }
 .ask-pipeline-steps-live {
-  @apply rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800;
+  @apply rounded-full px-2 py-0.5 text-xs font-medium;
+  background: color-mix(in srgb, #f59e0b 22%, var(--color-surface));
+  color: color-mix(in srgb, #f59e0b 85%, var(--color-text));
 }
 .ask-pipeline-steps-list {
   @apply m-0 list-none space-y-0 px-4 py-3;
 }
 .ask-pipeline-step {
-  @apply border-b border-zinc-100 py-3 text-zinc-600 last:border-b-0;
+  @apply border-b py-3 last:border-b-0;
+  border-color: var(--color-border-light);
+  color: var(--color-text-muted);
 }
 .ask-pipeline-step--active {
-  @apply text-zinc-800;
+  color: var(--color-text);
 }
 .ask-pipeline-step-row {
   @apply flex gap-2.5;
@@ -1680,7 +1751,8 @@ label.file-upload-btn {
   @apply mt-1 flex h-4 w-4 shrink-0 items-center justify-center;
 }
 .ask-pipeline-step-check {
-  @apply text-xs text-emerald-600;
+  @apply text-xs;
+  color: var(--color-badge-ok-text);
 }
 .ask-pipeline-step-pulse {
   @apply block h-2 w-2 rounded-full bg-amber-500;
@@ -1704,10 +1776,14 @@ label.file-upload-btn {
   @apply leading-snug;
 }
 .ask-pipeline-step-num {
-  @apply mr-2 inline-flex rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700;
+  @apply mr-2 inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
 }
 .ask-pipeline-phase {
-  @apply mr-2 inline-block rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500;
+  @apply mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide;
+  background: var(--color-badge-muted-bg);
+  color: var(--color-badge-muted-text);
 }
 .ask-pipeline-detail {
   @apply mt-2 space-y-2;
@@ -1719,51 +1795,72 @@ label.file-upload-btn {
   @apply grid grid-cols-[7rem_1fr] gap-2;
 }
 .ask-pipeline-meta-row dt {
-  @apply font-medium text-zinc-500;
+  @apply font-medium;
+  color: var(--color-text-muted);
 }
 .ask-pipeline-meta-row dd {
-  @apply m-0 break-all font-mono text-zinc-700;
+  @apply m-0 break-all font-mono;
+  color: var(--color-text);
 }
 .ask-pipeline-sql-block {
-  @apply rounded-lg border border-zinc-200 bg-zinc-50;
+  @apply rounded-lg border;
+  border-color: var(--color-border);
+  background: var(--color-code-bg);
 }
 .ask-pipeline-sql-head {
-  @apply flex items-center justify-between gap-2 border-b border-zinc-200 px-2 py-1 text-xs font-medium text-zinc-600;
+  @apply flex items-center justify-between gap-2 border-b px-2 py-1 text-xs font-medium;
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
 }
 .ask-pipeline-sql {
-  @apply m-0 overflow-x-auto p-2 font-mono text-xs leading-relaxed text-zinc-800;
+  @apply m-0 overflow-x-auto p-2 font-mono text-xs leading-relaxed;
+  color: var(--color-text);
   white-space: pre-wrap;
 }
 .ask-pipeline-sql--compact {
   @apply text-[11px];
 }
 .ask-pipeline-copy {
-  @apply rounded border border-zinc-300 bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-600 hover:bg-zinc-100;
+  @apply rounded border px-2 py-0.5 text-[10px] font-medium transition-colors;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+.ask-pipeline-copy:hover {
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
 }
 .ask-pipeline-chunks-title {
-  @apply text-xs font-medium text-zinc-600;
+  @apply text-xs font-medium;
+  color: var(--color-text-muted);
 }
 .ask-pipeline-chunks-list {
   @apply m-0 list-none space-y-2;
 }
 .ask-pipeline-chunk {
-  @apply rounded-lg border border-zinc-200 bg-zinc-50 p-2;
+  @apply rounded-lg border p-2;
+  border-color: var(--color-border);
+  background: var(--color-code-bg);
 }
 .ask-pipeline-chunk-head {
   @apply flex flex-wrap items-center gap-x-3 gap-y-1 text-xs;
 }
 .ask-pipeline-chunk-file {
-  @apply font-medium text-zinc-800;
+  @apply font-medium;
+  color: var(--color-text);
 }
 .ask-pipeline-chunk-id,
 .ask-pipeline-chunk-dist {
-  @apply font-mono text-zinc-500;
+  @apply font-mono;
+  color: var(--color-text-muted);
 }
 .ask-pipeline-chunk-ids {
-  @apply mt-1 flex flex-wrap gap-x-3 font-mono text-[10px] text-zinc-500;
+  @apply mt-1 flex flex-wrap gap-x-3 font-mono text-[10px];
+  color: var(--color-text-muted);
 }
 .ask-pipeline-chunk-preview {
-  @apply mt-2 whitespace-pre-wrap text-xs leading-relaxed text-zinc-600;
+  @apply mt-2 whitespace-pre-wrap text-xs leading-relaxed;
+  color: var(--color-text-muted);
 }
 
 .output-chip {

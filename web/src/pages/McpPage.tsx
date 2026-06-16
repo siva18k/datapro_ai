@@ -388,7 +388,7 @@ function BuiltInServerCard({
   actionNotice: { ok: boolean; text: string } | null;
 }) {
   return (
-    <div className="mcp-builtin-card">
+    <div className="card card-pad mcp-server-card mcp-server-card--builtin">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="font-semibold">Built-in server</h2>

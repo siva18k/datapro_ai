@@ -133,6 +133,7 @@ export const api = {
     top_k?: number;
     domain_override?: string;
     domain_overrides?: string[];
+    conversation_history?: { role: string; content: string }[];
     backend?: string;
     model?: string;
     debug?: boolean;
@@ -144,6 +145,7 @@ export const api = {
       top_k?: number;
       domain_override?: string;
       domain_overrides?: string[];
+      conversation_history?: { role: string; content: string }[];
       backend?: string;
       model?: string;
       debug?: boolean;
@@ -588,6 +590,7 @@ export const api = {
     database?: DatabaseSettingsPayload;
     mcp_url?: string;
     embedding_model?: string;
+    ask?: { conversation_turns?: number };
     llm?: LlmSettingsPayload;
     mistral_api_key?: string;
   }) => request<AppSettings>("/settings", { method: "PUT", body: JSON.stringify(data) }),
@@ -812,6 +815,12 @@ export interface BackendActionResponse extends BackendStatusResponse {
   message: string;
 }
 
+export interface LlmModelOption {
+  id: string;
+  label: string;
+  hint?: string;
+}
+
 export interface LlmBackendOption {
   id: string;
   label: string;
@@ -857,6 +866,11 @@ export interface AppSettings {
   embedding_model: string;
   embedding_model_options: string[];
   llm_backends: LlmBackendOption[];
+  mistral_model_options: LlmModelOption[];
   llm: LlmSettingsPublic;
   mistral_api_key_set: boolean;
+  ask: {
+    conversation_turns: number;
+    max_conversation_turns: number;
+  };
 }

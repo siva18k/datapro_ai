@@ -4,6 +4,9 @@ import { IconDebug } from "./SidebarNavIcons";
 interface AskPipelineStepsProps {
   steps: PipelineTraceStep[];
   isActive: boolean;
+  /** Full-page debug tab — always expanded, no collapse */
+  standalone?: boolean;
+  onOpenInTab?: () => void;
 }
 
 function CopyButton({ text, label }: { text: string; label: string }) {
@@ -118,7 +121,12 @@ function TraceDetail({ detail }: { detail: PipelineTraceDetail }) {
   );
 }
 
-export function AskPipelineSteps({ steps, isActive }: AskPipelineStepsProps) {
+export function AskPipelineSteps({
+  steps,
+  isActive,
+  standalone = false,
+  onOpenInTab,
+}: AskPipelineStepsProps) {
   if (steps.length === 0) return null;
 
   const usedSql = steps.some((s) => s.phase === "sql" && s.detail?.sql);
@@ -132,51 +140,83 @@ export function AskPipelineSteps({ steps, isActive }: AskPipelineStepsProps) {
       Boolean(s.detail?.chunks?.length),
   );
 
+  const header = (
+    <>
+      <IconDebug className="ask-pipeline-steps-icon" />
+      <span className="ask-pipeline-steps-title">
+        Pipeline trace
+        <span className="ask-pipeline-steps-count">({steps.length} steps)</span>
+      </span>
+      <span className="ask-pipeline-usage-badges">
+        {usedSql && <span className="badge">SQL</span>}
+        {usedRag && !usedMcp && <span className="badge">RAG</span>}
+        {usedMcp && <span className="badge">MCP</span>}
+      </span>
+      {isActive && <span className="ask-pipeline-steps-live">Live</span>}
+      {!standalone && onOpenInTab && (
+        <button
+          type="button"
+          className="ask-pipeline-open-tab btn btn-secondary btn-sm"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onOpenInTab();
+          }}
+        >
+          Open in tab
+        </button>
+      )}
+    </>
+  );
+
+  const stepList = (
+    <ol className="ask-pipeline-steps-list">
+      {steps.map((step, i) => {
+        const isLast = i === steps.length - 1;
+        const isCurrent = isActive && isLast;
+        return (
+          <li
+            key={`${i}-${step.phase}-${step.message}`}
+            className={`ask-pipeline-step${isCurrent ? " ask-pipeline-step--active" : ""}`}
+          >
+            <div className="ask-pipeline-step-row">
+              <span className="ask-pipeline-step-marker" aria-hidden>
+                {isCurrent ? (
+                  <span className="ask-pipeline-step-pulse" />
+                ) : (
+                  <span className="ask-pipeline-step-check">✓</span>
+                )}
+              </span>
+              <div className="ask-pipeline-step-body">
+                <div className="ask-pipeline-step-text">
+                  <span className="ask-pipeline-step-num">Step {i + 1}</span>
+                  <span className="ask-pipeline-phase">{step.phase}</span>
+                  {step.message}
+                </div>
+                {step.detail && <TraceDetail detail={step.detail} />}
+              </div>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+
+  if (standalone) {
+    return (
+      <div className="ask-pipeline-steps ask-pipeline-steps--standalone">
+        <div className="ask-pipeline-steps-summary ask-pipeline-steps-summary--static">
+          {header}
+        </div>
+        {stepList}
+      </div>
+    );
+  }
+
   return (
     <details className="ask-pipeline-steps" open={isActive}>
-      <summary className="ask-pipeline-steps-summary">
-        <IconDebug className="ask-pipeline-steps-icon" />
-        <span className="ask-pipeline-steps-title">
-          Pipeline trace
-          <span className="ask-pipeline-steps-count">({steps.length} steps)</span>
-        </span>
-        <span className="ask-pipeline-usage-badges">
-          {usedSql && <span className="badge">SQL</span>}
-          {usedRag && !usedMcp && <span className="badge">RAG</span>}
-          {usedMcp && <span className="badge">MCP</span>}
-        </span>
-        {isActive && <span className="ask-pipeline-steps-live">Live</span>}
-      </summary>
-      <ol className="ask-pipeline-steps-list">
-        {steps.map((step, i) => {
-          const isLast = i === steps.length - 1;
-          const isCurrent = isActive && isLast;
-          return (
-            <li
-              key={`${i}-${step.phase}-${step.message}`}
-              className={`ask-pipeline-step${isCurrent ? " ask-pipeline-step--active" : ""}`}
-            >
-              <div className="ask-pipeline-step-row">
-                <span className="ask-pipeline-step-marker" aria-hidden>
-                  {isCurrent ? (
-                    <span className="ask-pipeline-step-pulse" />
-                  ) : (
-                    <span className="ask-pipeline-step-check">✓</span>
-                  )}
-                </span>
-                <div className="ask-pipeline-step-body">
-                  <div className="ask-pipeline-step-text">
-                    <span className="ask-pipeline-step-num">Step {i + 1}</span>
-                    <span className="ask-pipeline-phase">{step.phase}</span>
-                    {step.message}
-                  </div>
-                  {step.detail && <TraceDetail detail={step.detail} />}
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+      <summary className="ask-pipeline-steps-summary">{header}</summary>
+      {stepList}
     </details>
   );
 }

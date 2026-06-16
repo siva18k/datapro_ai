@@ -6,6 +6,11 @@ import re
 from typing import Any
 
 from catalog_service import get_routing_context, normalize_domain_overrides, resolve_domains
+from query_fuzzy import (
+    build_vocabulary,
+    correct_query_spelling,
+    fuzzy_token_overlap,
+)
 
 
 def _domain_routing_text(domain: dict) -> str:
@@ -76,6 +81,8 @@ def route_question(
         }
 
     q_tokens = _tokenize(question)
+    routing_question, _ = correct_query_spelling(question, build_vocabulary())
+    q_tokens_expanded = _tokenize(routing_question) | q_tokens
     scores: list[tuple[float, dict]] = []
 
     q_vec = None
@@ -84,7 +91,7 @@ def route_question(
         try:
             import numpy as np
 
-            texts = [question] + [
+            texts = [routing_question] + [
                 domain["name"] + ". " + (domain.get("description") or "")
                 for domain in domains
             ]
@@ -95,11 +102,12 @@ def route_question(
             q_vec = None
             d_vecs = []
 
+    vocab = build_vocabulary()
     for i, domain in enumerate(domains):
         text = _domain_routing_text(domain)
         d_tokens = _tokenize(text)
-        overlap = len(q_tokens & d_tokens)
-        keyword_score = overlap / max(len(q_tokens), 1)
+        overlap = fuzzy_token_overlap(q_tokens_expanded, d_tokens, vocab)
+        keyword_score = overlap / max(len(q_tokens_expanded), 1)
 
         embed_score = 0.0
         if q_vec is not None and i < len(d_vecs):
