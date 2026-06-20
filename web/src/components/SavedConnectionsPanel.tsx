@@ -38,43 +38,59 @@ export function SavedConnectionsPanel() {
     setModalOpen(true);
   };
 
+  const existingNames = (connections ?? [])
+    .filter((conn) => conn.id !== editing?.id)
+    .map((conn) => conn.name);
+
   return (
     <div className="flex h-full flex-col space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-semibold">Dataset connections</h2>
-          <p className="mt-1 text-sm text-zinc-500">For Database datasets in catalog</p>
+          <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+            Named Postgres connections for Database datasets in the catalog
+          </p>
         </div>
         <button type="button" className="btn btn-sm shrink-0" onClick={openNew}>
-          + Add
+          + Add connection
         </button>
       </div>
 
-      {isLoading && <p className="text-sm text-zinc-500">Loading connections…</p>}
-
-      {!isLoading && !connections?.length && (
-        <p className="rounded-lg border border-dashed border-zinc-200 px-4 py-6 text-center text-sm text-zinc-500">
-          No saved connections yet.
+      {isLoading && (
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+          Loading connections…
         </p>
       )}
 
+      {!isLoading && !connections?.length && (
+        <div className="settings-connections-empty">
+          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+            No saved connections yet. Add a uniquely named connection to link from catalog datasets.
+          </p>
+        </div>
+      )}
+
       {!!connections?.length && (
-        <ul className="saved-connections-list space-y-2">
+        <ul className="saved-connections-grid">
           {connections.map((conn) => (
-            <li key={conn.id} className="saved-connection-item">
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium text-zinc-900">{conn.name}</p>
-                <p className="truncate text-xs text-zinc-500">
-                  {conn.user}@{conn.host}:{conn.port} · {conn.database}.{conn.schema}
-                </p>
+            <li key={conn.id} className="saved-connection-card">
+              <div className="saved-connection-card-header">
+                <p className="saved-connection-card-name">{conn.name}</p>
+                <span className="saved-connection-card-badge">Dataset</span>
               </div>
-              <div className="flex shrink-0 items-center gap-1">
+              <p className="saved-connection-card-meta">
+                {conn.user}@{conn.host}:{conn.port}
+              </p>
+              <p className="saved-connection-card-meta">
+                {conn.database}.{conn.schema} · SSL {conn.sslmode}
+              </p>
+              <div className="saved-connection-card-actions">
                 <button type="button" className="btn-ghost btn-sm" onClick={() => openEdit(conn)}>
                   Edit
                 </button>
                 <button
                   type="button"
-                  className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
+                  className="btn-ghost btn-sm saved-connection-delete"
                   disabled={remove.isPending}
                   onClick={() => {
                     if (window.confirm(`Delete connection "${conn.name}"?`)) remove.mutate(conn.id);
@@ -94,6 +110,7 @@ export function SavedConnectionsPanel() {
       <DbConnectionModal
         open={modalOpen}
         connection={editing}
+        existingNames={existingNames}
         onClose={() => {
           setModalOpen(false);
           setEditing(null);

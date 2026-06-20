@@ -5,8 +5,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from agent_flow_graph import normalize_flow_steps, validate_graph
 from agent_flow_runner import run_agent_flow_events
 from api.deps import get_embedder
 from catalog_db import (
@@ -29,15 +30,29 @@ class AgentFlowCreate(BaseModel):
     name: str
     description: str = ""
     instructions: str = ""
-    steps: list[AgentFlowStep] = Field(default_factory=list)
+    steps: Any = Field(default_factory=list)
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def accept_graph_or_linear_steps(cls, value: Any) -> Any:
+        if value is None or isinstance(value, (dict, list)):
+            return value
+        raise ValueError("steps must be a list or graph object")
 
 
 class AgentFlowUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
-    steps: list[AgentFlowStep] | None = None
+    steps: Any | None = None
     enabled: bool | None = None
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def accept_graph_or_linear_steps(cls, value: Any) -> Any:
+        if value is None or isinstance(value, (dict, list)):
+            return value
+        raise ValueError("steps must be a list or graph object")
 
 
 class AgentFlowRunBody(BaseModel):
@@ -47,6 +62,19 @@ class AgentFlowRunBody(BaseModel):
     ollama_base_url: str | None = None
 
 
+def _normalize_steps_payload(steps: list[AgentFlowStep] | dict[str, Any] | None) -> dict[str, Any]:
+    if steps is None:
+        return normalize_flow_steps([])
+    if isinstance(steps, dict):
+        graph = normalize_flow_steps(steps)
+    else:
+        graph = normalize_flow_steps([s.model_dump() if isinstance(s, AgentFlowStep) else s for s in steps])
+    ok, message = validate_graph(graph)
+    if not ok:
+        raise HTTPException(400, message)
+    return graph
+
+
 @router.get("")
 def list_all():
     return list_agent_flows()
@@ -54,7 +82,7 @@ def list_all():
 
 @router.post("")
 def create(body: AgentFlowCreate):
-    steps = [s.model_dump() for s in body.steps]
+    steps = _normalize_steps_payload(body.steps)
     return create_agent_flow(
         body.name,
         description=body.description,
@@ -77,7 +105,7 @@ def patch(flow_id: str, body: AgentFlowUpdate):
         raise HTTPException(404, "Agent flow not found")
     data = body.model_dump(exclude_none=True)
     if "steps" in data and data["steps"] is not None:
-        data["steps"] = [AgentFlowStep(**s).model_dump() if isinstance(s, dict) else s for s in data["steps"]]
+        data["steps"] = _normalize_steps_payload(data["steps"])
     flow = update_agent_flow(flow_id, **data)
     if not flow:
         raise HTTPException(404, "Agent flow not found")

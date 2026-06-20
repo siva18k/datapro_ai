@@ -226,6 +226,23 @@ def get_llm_settings() -> dict[str, str]:
     }
 
 
+def _parse_database_url(url: str) -> dict[str, Any]:
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    sslmode = (qs.get("sslmode") or ["require"])[0]
+    return {
+        "host": parsed.hostname or "",
+        "port": int(parsed.port or 5432),
+        "user": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+        "database": (parsed.path or "/").lstrip("/") or "",
+        "sslmode": sslmode or "require",
+        "password_set": bool(parsed.password),
+    }
+
+
 def get_public_settings() -> dict[str, Any]:
     from llm_providers import (
         DEFAULT_EMBEDDING_MODEL,
@@ -273,8 +290,19 @@ def get_public_settings() -> dict[str, Any]:
         },
     }
     if raw.get("DATABASE_URL"):
-        public["database"]["database_url"] = "***"
-        public["database"]["use_database_url"] = True
+        parsed = _parse_database_url(raw["DATABASE_URL"])
+        public["database"].update(
+            {
+                "host": parsed["host"],
+                "port": parsed["port"],
+                "user": parsed["user"],
+                "database": parsed["database"],
+                "sslmode": parsed["sslmode"],
+                "password_set": parsed["password_set"],
+                "database_url": "***",
+                "use_database_url": True,
+            }
+        )
     else:
         public["database"]["use_database_url"] = False
     return public
@@ -376,8 +404,6 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_db_config(db: dict[str, Any] | None = None) -> dict[str, Any]:
-    from urllib.parse import urlparse, unquote
-
     current = get_raw_settings()
     db = db or {}
     if db.get("use_database_url"):
@@ -386,14 +412,14 @@ def _resolve_db_config(db: dict[str, Any] | None = None) -> dict[str, Any]:
             url = current.get("DATABASE_URL", "")
         if not url:
             raise ValueError("DATABASE_URL is required")
-        parsed = urlparse(url)
+        parsed_fields = _parse_database_url(url)
         return {
-            "host": parsed.hostname,
-            "port": int(parsed.port or 5432),
-            "user": parsed.username,
-            "password": unquote(parsed.password or ""),
-            "database": (parsed.path or "/").lstrip("/"),
-            "sslmode": current.get("PGSSLMODE", "require"),
+            "host": parsed_fields["host"],
+            "port": parsed_fields["port"],
+            "user": parsed_fields["user"],
+            "password": parsed_fields["password"],
+            "database": parsed_fields["database"],
+            "sslmode": parsed_fields["sslmode"],
         }
 
     password = (db.get("password") or "").strip() or current.get("PGPASSWORD", "")

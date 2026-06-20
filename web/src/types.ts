@@ -235,13 +235,33 @@ export interface AgentFlowStep {
   agent_slug?: string;
 }
 
+export interface AgentFlowGraphNode {
+  id: string;
+  agent_id: string;
+  column: 0 | 1;
+  agent_name?: string;
+  agent_slug?: string;
+}
+
+export interface AgentFlowGraphEdge {
+  from: string;
+  to: string;
+  handoff?: string;
+}
+
+export interface AgentFlowGraph {
+  v: 2;
+  nodes: AgentFlowGraphNode[];
+  edges: AgentFlowGraphEdge[];
+}
+
 export interface AgentFlow {
   id: string;
   slug: string;
   name: string;
   description: string;
   instructions: string;
-  steps: AgentFlowStep[];
+  steps: AgentFlowStep[] | AgentFlowGraph;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;

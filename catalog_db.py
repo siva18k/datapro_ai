@@ -1872,33 +1872,51 @@ def set_agent_tools(agent_id: str, tools: list[dict]) -> list[dict]:
     return agent["tools"] if agent else []
 
 
+def _coerce_jsonb_steps(raw: Any) -> Any:
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, (list, dict)) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
 def _flow_row_to_dict(row: tuple) -> dict[str, Any]:
     cols = [
         "id", "slug", "name", "description", "instructions", "steps",
         "enabled", "created_at", "updated_at",
     ]
     data = _row_to_dict(cols, row)
-    data["steps"] = _coerce_jsonb_list(data.get("steps"))
+    data["steps"] = _coerce_jsonb_steps(data.get("steps"))
     return data
 
 
 def _enrich_flow_steps(flow: dict) -> dict:
-    """Attach agent name/slug to each step for API responses."""
-    steps = flow.get("steps") or []
-    enriched: list[dict] = []
-    for step in steps:
-        if not isinstance(step, dict):
+    """Attach agent name/slug to each flow node for API responses."""
+    from agent_flow_graph import normalize_flow_steps
+
+    graph = normalize_flow_steps(flow.get("steps"))
+    enriched_nodes: list[dict] = []
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict):
             continue
-        agent_id = step.get("agent_id")
-        item = dict(step)
+        agent_id = node.get("agent_id")
+        item = dict(node)
         if agent_id:
             agent = get_agent(agent_id)
             if agent:
                 item["agent_name"] = agent.get("name")
                 item["agent_slug"] = agent.get("slug")
-        enriched.append(item)
+        enriched_nodes.append(item)
     flow = dict(flow)
-    flow["steps"] = enriched
+    flow["steps"] = {**graph, "nodes": enriched_nodes}
     return flow
 
 
@@ -1979,7 +1997,7 @@ def update_agent_flow(flow_id: str, **fields) -> dict | None:
     updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not updates:
         return get_agent_flow(flow_id)
-    if "steps" in updates and isinstance(updates["steps"], list):
+    if "steps" in updates and isinstance(updates["steps"], (list, dict)):
         updates["steps"] = json.dumps(updates["steps"])
     if "name" in updates:
         updates["slug"] = _slugify(str(updates["name"]))

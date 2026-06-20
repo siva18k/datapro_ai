@@ -1,13 +1,13 @@
-"""Run multi-agent flows — chain agents with context handoff between steps."""
+"""Run multi-agent flows — DAG execution with context handoff on connections."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from typing import Any
 
+from agent_flow_graph import incoming_edges, node_by_id, normalize_flow_steps, topological_order
 from agent_runner import run_agent_events
-from api.llm import generate_answer, resolve_llm_runtime
+from api.llm import resolve_llm_runtime
 from catalog_db import get_agent, get_agent_flow
 
 
@@ -62,23 +62,43 @@ def _summarize_agent_output(agent_name: str, collected: list[dict[str, Any]]) ->
 
 def _build_handoff_instructions(
     flow_instructions: str,
-    step_handoff: str,
-    prior_context: str,
+    incoming_context: str,
     step_index: int,
     total_steps: int,
 ) -> str:
     sections: list[str] = []
     if flow_instructions.strip():
         sections.append(f"## Flow instructions\n{flow_instructions.strip()}")
-    if prior_context.strip():
-        sections.append(f"## Output from previous agents in this flow\n{prior_context.strip()}")
-    if step_handoff.strip():
-        sections.append(f"## Handoff for this step\n{step_handoff.strip()}")
+    if incoming_context.strip():
+        sections.append(f"## Output from connected upstream agents\n{incoming_context.strip()}")
     sections.append(
         f"You are step {step_index + 1} of {total_steps} in a multi-agent flow. "
-        "Use prior agent outputs above when relevant."
+        "Use upstream agent outputs above when relevant."
     )
     return "\n\n".join(sections)
+
+
+def _build_incoming_context(
+    graph: dict[str, Any],
+    node_id: str,
+    node_outputs: dict[str, str],
+    agent_names: dict[str, str],
+) -> str:
+    parts: list[str] = []
+    for edge in incoming_edges(graph, node_id):
+        parent_id = edge.get("from")
+        if not parent_id:
+            continue
+        summary = node_outputs.get(parent_id)
+        if not summary:
+            continue
+        parent_name = agent_names.get(parent_id, parent_id)
+        handoff = (edge.get("handoff") or "").strip()
+        block = f"### From {parent_name}\n{summary}"
+        if handoff:
+            block = f"### From {parent_name}\nHandoff: {handoff}\n{summary}"
+        parts.append(block)
+    return "\n\n".join(parts)
 
 
 def run_agent_flow_events(
@@ -98,9 +118,16 @@ def run_agent_flow_events(
         yield _error("Agent flow is disabled")
         return
 
-    steps = flow.get("steps") or []
-    if not steps:
+    graph = normalize_flow_steps(flow.get("steps"))
+    nodes = graph.get("nodes") or []
+    if not nodes:
         yield _error("Flow has no steps — add agents via drag-and-drop or @ mentions")
+        return
+
+    try:
+        execution_order = topological_order(graph)
+    except ValueError as exc:
+        yield _error(str(exc))
         return
 
     flow_instructions = (flow.get("instructions") or "").strip()
@@ -108,64 +135,70 @@ def run_agent_flow_events(
     if extra:
         flow_instructions = f"{flow_instructions}\n\n## Additional instructions\n{extra}" if flow_instructions else extra
 
-    yield _status(f"Starting flow «{flow['name']}» ({len(steps)} steps)")
+    total_steps = len(nodes)
+    yield _status(f"Starting flow «{flow['name']}» ({total_steps} steps)")
 
-    llm_backend, llm_model, llm_base_url = resolve_llm_runtime(
+    resolve_llm_runtime(
         backend=backend,
         model=model,
         base_url=ollama_base_url,
     )
 
-    prior_context_parts: list[str] = []
+    node_outputs: dict[str, str] = {}
+    agent_names: dict[str, str] = {}
     flow_agent_results: list[dict[str, Any]] = []
     last_report_html: str | None = None
+    completed = 0
 
-    for idx, step_def in enumerate(steps):
-        agent_id = step_def.get("agent_id")
-        handoff = (step_def.get("handoff") or "").strip()
+    for step_index, node_id in enumerate(execution_order):
+        node = node_by_id(graph, node_id)
+        if not node:
+            yield _step(node_id, "Skipped — missing node", status="warn")
+            continue
+
+        agent_id = node.get("agent_id")
         if not agent_id:
-            yield _step(f"flow_step_{idx}", "Skipped — missing agent", status="warn")
+            yield _step(node_id, "Skipped — missing agent", status="warn")
             continue
 
         agent = get_agent(agent_id)
         if not agent:
             yield _step(
-                f"flow_step_{idx}",
-                f"Agent not found for step {idx + 1}",
+                node_id,
+                "Agent not found for this step",
                 status="error",
-                payload={"agent_id": agent_id},
+                payload={"agent_id": agent_id, "node_id": node_id},
             )
             continue
         if not agent.get("enabled", True):
             yield _step(
-                f"flow_step_{idx}",
+                node_id,
                 f"Agent «{agent['name']}» is disabled",
                 status="error",
-                payload={"agent_id": agent_id, "agent_name": agent["name"]},
+                payload={"agent_id": agent_id, "agent_name": agent["name"], "node_id": node_id},
             )
             continue
 
         agent_slug = agent.get("slug") or agent_id
-        step_prefix = f"{agent_slug}"
-        prior_context = "\n\n".join(prior_context_parts)
+        agent_names[node_id] = agent["name"]
+        incoming_context = _build_incoming_context(graph, node_id, node_outputs, agent_names)
         handoff_text = _build_handoff_instructions(
             flow_instructions,
-            handoff,
-            prior_context,
-            idx,
-            len(steps),
+            incoming_context,
+            step_index,
+            total_steps,
         )
 
-        yield _status(f"Step {idx + 1}/{len(steps)}: running «{agent['name']}»…")
+        yield _status(f"Step {step_index + 1}/{total_steps}: running «{agent['name']}»…")
         yield _step(
-            f"flow_step_{idx}_start",
+            f"{node_id}_start",
             f"Starting agent «{agent['name']}»",
             payload={
                 "agent_id": agent_id,
                 "agent_name": agent["name"],
                 "agent_slug": agent_slug,
-                "step_index": idx,
-                "handoff": handoff,
+                "node_id": node_id,
+                "step_index": step_index,
             },
         )
 
@@ -184,10 +217,10 @@ def run_agent_flow_events(
             if event["type"] == "error":
                 agent_error = event.get("message", "Agent error")
                 yield _step(
-                    f"{step_prefix}:error",
+                    f"{agent_slug}:error",
                     agent_error,
                     status="error",
-                    payload={"agent_id": agent_id, "agent_name": agent["name"]},
+                    payload={"agent_id": agent_id, "agent_name": agent["name"], "node_id": node_id},
                 )
                 break
             if event["type"] == "status":
@@ -196,7 +229,7 @@ def run_agent_flow_events(
                 inner_id = event.get("step_id", "step")
                 collected.append(event)
                 yield _step(
-                    f"{step_prefix}:{inner_id}",
+                    f"{agent_slug}:{inner_id}",
                     event.get("message", ""),
                     status=event.get("status", "ok"),
                     payload={
@@ -204,7 +237,8 @@ def run_agent_flow_events(
                         "agent_id": agent_id,
                         "agent_name": agent["name"],
                         "agent_slug": agent_slug,
-                        "flow_step_index": idx,
+                        "node_id": node_id,
+                        "flow_step_index": step_index,
                     },
                 )
                 if inner_id == "report" and event.get("payload", {}).get("html"):
@@ -216,8 +250,8 @@ def run_agent_flow_events(
             yield _result(
                 {
                     "flow_id": flow_id,
-                    "completed_steps": idx,
-                    "total_steps": len(steps),
+                    "completed_steps": completed,
+                    "total_steps": total_steps,
                     "failed": True,
                     "error": agent_error,
                 }
@@ -225,24 +259,27 @@ def run_agent_flow_events(
             return
 
         summary = _summarize_agent_output(agent["name"], collected)
-        prior_context_parts.append(f"### {agent['name']}\n{summary}")
+        node_outputs[node_id] = summary
+        completed += 1
         flow_agent_results.append(
             {
                 "agent_id": agent_id,
                 "agent_name": agent["name"],
                 "agent_slug": agent_slug,
-                "step_index": idx,
+                "node_id": node_id,
+                "step_index": step_index,
                 "summary": summary,
                 "result": agent_result,
             }
         )
 
         yield _step(
-            f"flow_step_{idx}_done",
+            f"{node_id}_done",
             f"Completed «{agent['name']}»",
             payload={
                 "agent_id": agent_id,
                 "agent_name": agent["name"],
+                "node_id": node_id,
                 "summary": summary,
             },
         )
@@ -251,8 +288,8 @@ def run_agent_flow_events(
     yield _result(
         {
             "flow_id": flow_id,
-            "completed_steps": len(steps),
-            "total_steps": len(steps),
+            "completed_steps": completed,
+            "total_steps": total_steps,
             "failed": False,
             "agent_results": flow_agent_results,
             "report_html": last_report_html,

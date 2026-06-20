@@ -13,13 +13,13 @@ function GearIcon() {
 export function SidebarFooter({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <div
-      className={`sidebar-footer flex items-center border-t py-3 ${
-        collapsed ? "sidebar-footer--collapsed justify-center gap-1 px-2" : "justify-between gap-2 px-4"
+      className={`sidebar-footer flex items-center border-t ${
+        collapsed ? "sidebar-footer--collapsed" : "justify-between gap-2 px-4 py-3"
       }`}
       style={{ borderColor: "var(--color-border-light)", color: "var(--color-text-faint)" }}
     >
       {!collapsed && <span className="text-xs">React + FastAPI</span>}
-      <div className="flex items-center gap-1">
+      <div className={`sidebar-footer-actions flex items-center ${collapsed ? "" : "gap-1"}`}>
         <NavLink
           to="/settings"
           className={({ isActive }) => `icon-btn ${isActive ? "icon-btn-active" : ""}`}

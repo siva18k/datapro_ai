@@ -69,10 +69,28 @@ def connection_config(connection_id: str) -> dict[str, Any]:
     }
 
 
+def _normalize_name(name: str) -> str:
+    return name.strip().casefold()
+
+
+def _name_taken(name: str, *, exclude_id: str | None = None) -> bool:
+    target = _normalize_name(name)
+    if not target:
+        return False
+    for row in _load_store()["connections"]:
+        if exclude_id and row.get("id") == exclude_id:
+            continue
+        if _normalize_name(str(row.get("name") or "")) == target:
+            return True
+    return False
+
+
 def create_connection(payload: dict[str, Any]) -> dict[str, Any]:
     name = (payload.get("name") or "").strip()
     if not name:
         raise ValueError("Connection name is required")
+    if _name_taken(name):
+        raise ValueError(f'Connection name "{name}" is already in use. Choose a unique name.')
     row = {
         "id": str(uuid.uuid4()),
         "name": name,
@@ -98,7 +116,10 @@ def update_connection(connection_id: str, payload: dict[str, Any]) -> dict[str, 
         if row.get("id") != connection_id:
             continue
         if payload.get("name") is not None:
-            row["name"] = str(payload["name"]).strip() or row["name"]
+            next_name = str(payload["name"]).strip() or row["name"]
+            if _name_taken(next_name, exclude_id=connection_id):
+                raise ValueError(f'Connection name "{next_name}" is already in use. Choose a unique name.')
+            row["name"] = next_name
         for key in ("host", "user", "database", "schema", "sslmode"):
             if payload.get(key) is not None:
                 row[key] = str(payload[key]).strip()

@@ -1,30 +1,39 @@
-import { useMutation } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { devBootstrap, isDevBootstrapAvailable } from "../api/devBootstrap";
+import { isDevBootstrapAvailable } from "../api/devBootstrap";
 import { useApiConnection } from "../context/ApiConnectionContext";
+import { useStartApiFromWeb } from "../hooks/useStartApiFromWeb";
 
 export function ApiOfflineBanner() {
-  const { apiOnline, checking, refresh } = useApiConnection();
+  const { apiOnline, checking, connecting, refresh } = useApiConnection();
   const canStartFromWeb = isDevBootstrapAvailable();
+  const startApi = useStartApiFromWeb();
 
-  const startApi = useMutation({
-    mutationFn: devBootstrap.startApi,
-    onSuccess: (res) => {
-      if (res.reachable) void refresh();
-    },
-  });
+  if (apiOnline) return null;
 
-  if (apiOnline || checking) return null;
+  if (checking || connecting || startApi.isPending) {
+    return (
+      <div className="message-bar message-bar--info" role="status" aria-live="polite">
+        <div className="message-bar-inner">
+          <div>
+            <p className="message-bar-title">
+              {startApi.isPending ? "Starting API server…" : "Waiting for API connection…"}
+            </p>
+            <p className="message-bar-hint">This may take a few seconds while the server loads.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
+    <div className="message-bar message-bar--warning" role="status" aria-live="polite">
+      <div className="message-bar-inner">
         <p>
           API server offline.{" "}
           {canStartFromWeb ? (
             <>
               <strong>Start API server</strong> or{" "}
-              <Link to="/settings" className="font-medium underline underline-offset-2">
+              <Link to="/settings" className="message-bar-link">
                 Settings
               </Link>
               .
@@ -32,7 +41,7 @@ export function ApiOfflineBanner() {
           ) : (
             <>
               See{" "}
-              <Link to="/settings" className="font-medium underline underline-offset-2">
+              <Link to="/settings" className="message-bar-link">
                 Settings
               </Link>{" "}
               or run uvicorn on 8080.

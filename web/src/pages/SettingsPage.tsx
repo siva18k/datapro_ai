@@ -5,6 +5,7 @@ import { PageHeader } from "../components/PageHeader";
 import { SavedConnectionsPanel } from "../components/SavedConnectionsPanel";
 import { useApiConnection } from "../context/ApiConnectionContext";
 import { api, type DatabaseSettingsPayload, type LlmSettingsPayload } from "../api/client";
+import { parsePostgresUrl } from "../utils/postgresUrl";
 
 const MISTRAL_CUSTOM_MODEL = "__custom__";
 const LLM_KEY_BACKENDS = ["mistral", "openai", "anthropic", "gemini", "openrouter"] as const;
@@ -42,6 +43,36 @@ const emptyDb = (): DatabaseSettingsPayload => ({
   sslmode: "require",
 });
 
+function isCatalogConfigured(
+  db: DatabaseSettingsPayload,
+  databaseUrlSet: boolean,
+): boolean {
+  if (db.host.trim() && db.user.trim() && db.database.trim()) {
+    return true;
+  }
+  if (db.use_database_url) {
+    return databaseUrlSet || db.database_url.trim().length > 0;
+  }
+  return false;
+}
+
+function formatCatalogSummary(
+  db: DatabaseSettingsPayload,
+  databaseUrlMasked: boolean,
+): string {
+  if (db.host.trim()) {
+    return `${db.user}@${db.host}:${db.port} · ${db.database}.${db.schema}`;
+  }
+  if (db.use_database_url) {
+    if (databaseUrlMasked) return "DATABASE_URL configured";
+    if (db.database_url.trim()) {
+      return db.database_url.replace(/:([^:@/]+)@/, ":***@");
+    }
+    return "DATABASE_URL not set";
+  }
+  return "Not configured";
+}
+
 export function SettingsPage() {
   const qc = useQueryClient();
   const { apiOnline, checking: apiChecking } = useApiConnection();
@@ -68,6 +99,9 @@ export function SettingsPage() {
     openrouter: "",
   });
   const [mistralCustomMode, setMistralCustomMode] = useState(false);
+  const [catalogEditing, setCatalogEditing] = useState(true);
+  const [catalogUrlPaste, setCatalogUrlPaste] = useState("");
+  const [catalogUrlPasteError, setCatalogUrlPasteError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mcpNotice, setMcpNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -191,6 +225,22 @@ export function SettingsPage() {
       data.llm.default_backend === "mistral" && model !== "" && !knownMistralIds.has(model),
     );
     setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
+    setCatalogEditing(
+      !isCatalogConfigured(
+        {
+          use_database_url: data.database.use_database_url,
+          database_url: data.database.database_url === "***" ? "" : data.database.database_url,
+          host: data.database.host,
+          port: data.database.port,
+          user: data.database.user,
+          password: "",
+          database: data.database.database,
+          schema: data.database.schema,
+          sslmode: data.database.sslmode,
+        },
+        data.database.database_url === "***",
+      ),
+    );
   }, [data]);
 
   const save = useMutation({
@@ -205,6 +255,8 @@ export function SettingsPage() {
       return api.saveSettings({
         database: {
           ...db,
+          use_database_url: false,
+          database_url: "",
           password: db.password || undefined,
         },
         mcp_url: mcpUrl,
@@ -221,6 +273,7 @@ export function SettingsPage() {
       qc.setQueryData(["settings"], res);
       setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
       setDb((prev) => ({ ...prev, password: "" }));
+      setCatalogEditing(false);
       setMessage("Settings saved to .env and applied for this API server.");
       setError(null);
     },
@@ -234,6 +287,8 @@ export function SettingsPage() {
     mutationFn: () =>
       api.testDatabase({
         ...db,
+        use_database_url: false,
+        database_url: "",
         password: db.password || undefined,
       }),
     onSuccess: (res) => {
@@ -247,6 +302,48 @@ export function SettingsPage() {
   });
 
   const updateDb = (patch: Partial<DatabaseSettingsPayload>) => setDb((prev) => ({ ...prev, ...patch }));
+
+  const openCatalogEdit = () => {
+    setDb((prev) => ({ ...prev, use_database_url: false, database_url: "" }));
+    setCatalogUrlPaste("");
+    setCatalogUrlPasteError(null);
+    setCatalogEditing(true);
+  };
+
+  const applyCatalogUrlPaste = () => {
+    const parsed = parsePostgresUrl(catalogUrlPaste);
+    if (!parsed) {
+      setCatalogUrlPasteError("Could not parse connection URL. Use postgresql://user:pass@host:5432/database");
+      return;
+    }
+    setCatalogUrlPasteError(null);
+    setDb((prev) => ({
+      ...prev,
+      ...parsed,
+      schema: prev.schema || "ragpro",
+      password: parsed.password ?? prev.password,
+    }));
+  };
+
+  const resetCatalogFromData = () => {
+    if (!data) return;
+    setDb({
+      use_database_url: data.database.use_database_url,
+      database_url: data.database.database_url === "***" ? "" : data.database.database_url,
+      host: data.database.host,
+      port: data.database.port,
+      user: data.database.user,
+      database: data.database.database,
+      schema: data.database.schema,
+      sslmode: data.database.sslmode,
+      password: "",
+    });
+    setCatalogUrlPaste("");
+    setCatalogUrlPasteError(null);
+  };
+
+  const catalogConfigured = isCatalogConfigured(db, data?.database.database_url === "***");
+  const catalogSummary = formatCatalogSummary(db, data?.database.database_url === "***");
 
   const selectedBackend = llm.default_backend ?? "mistral";
   const selectedBackendMeta = data?.llm_backends.find((b) => b.id === selectedBackend);
@@ -276,275 +373,324 @@ export function SettingsPage() {
 
       {apiOnline && data && (
         <>
-          <div className="settings-db-split">
-            <div className="card card-pad space-y-4">
-              <div>
-                <h2 className="font-semibold">Catalog database</h2>
-                <p className="mt-1 text-sm text-zinc-500">Postgres for catalog &amp; RAG</p>
+          <div className="settings-db-stack space-y-4">
+            <div className="settings-panel settings-panel--catalog card card-pad space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="font-semibold">Catalog database</h2>
+                    <span className="settings-panel-badge">Required</span>
+                  </div>
+                  <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                    Base Postgres for catalog metadata &amp; RAG vectors
+                  </p>
+                </div>
+                {!catalogEditing && (
+                  <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={openCatalogEdit}>
+                    Edit
+                  </button>
+                )}
               </div>
 
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={db.use_database_url}
-                  onChange={(e) => updateDb({ use_database_url: e.target.checked })}
-                />
-                Use DATABASE_URL instead of separate fields
-              </label>
-
-              {db.use_database_url ? (
-                <div className="field mb-0">
-                  <label className="label">DATABASE_URL</label>
-                  <input
-                    className="input font-mono text-xs"
-                    placeholder={
-                      data.database.database_url === "***" ? "Leave blank to keep current URL" : "postgresql://..."
-                    }
-                    value={db.database_url}
-                    onChange={(e) => updateDb({ database_url: e.target.value })}
-                  />
+              {!catalogEditing ? (
+                <div className="settings-catalog-summary">
+                  <p className="settings-catalog-summary-line font-mono text-sm">{catalogSummary}</p>
+                  <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                    SSL: {db.sslmode}
+                    {data.database.password_set ? " · Password set" : ""}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={testDb.isPending || !catalogConfigured}
+                      onClick={() => testDb.mutate()}
+                    >
+                      {testDb.isPending ? "Testing…" : "Test connection"}
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="field mb-0 sm:col-span-2">
-                    <label className="label">Host</label>
-                    <input className="input" value={db.host} onChange={(e) => updateDb({ host: e.target.value })} />
-                  </div>
+                <>
                   <div className="field mb-0">
-                    <label className="label">Port</label>
-                    <input
-                      className="input"
-                      type="number"
-                      value={db.port}
-                      onChange={(e) => updateDb({ port: Number(e.target.value) })}
-                    />
+                    <label className="label" htmlFor="catalog-db-url-paste">
+                      Connection URL (optional)
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        id="catalog-db-url-paste"
+                        className="input min-w-0 flex-1 font-mono text-xs"
+                        placeholder="postgresql://user:pass@host:5432/database?sslmode=require"
+                        value={catalogUrlPaste}
+                        onChange={(e) => {
+                          setCatalogUrlPaste(e.target.value);
+                          setCatalogUrlPasteError(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            applyCatalogUrlPaste();
+                          }
+                        }}
+                      />
+                      <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={applyCatalogUrlPaste}>
+                        Apply URL
+                      </button>
+                    </div>
+                    <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                      Paste a full Postgres URL to fill the fields below.
+                    </p>
+                    {catalogUrlPasteError && <p className="alert-error mt-2 text-xs">{catalogUrlPasteError}</p>}
                   </div>
-                  <div className="field mb-0">
-                    <label className="label">SSL mode</label>
-                    <select className="select" value={db.sslmode} onChange={(e) => updateDb({ sslmode: e.target.value })}>
-                      <option value="require">require</option>
-                      <option value="verify-full">verify-full</option>
-                      <option value="prefer">prefer</option>
-                      <option value="disable">disable</option>
-                    </select>
-                  </div>
-                  <div className="field mb-0">
-                    <label className="label">User</label>
-                    <input className="input" value={db.user} onChange={(e) => updateDb({ user: e.target.value })} />
-                  </div>
-                  <div className="field mb-0">
-                    <label className="label">Password</label>
-                    <input
-                      className="input"
-                      type="password"
-                      placeholder={data.database.password_set ? "Leave blank to keep current password" : ""}
-                      value={db.password}
-                      onChange={(e) => updateDb({ password: e.target.value })}
-                    />
-                  </div>
-                  <div className="field mb-0">
-                    <label className="label">Database</label>
-                    <input className="input" value={db.database} onChange={(e) => updateDb({ database: e.target.value })} />
-                  </div>
-                  <div className="field mb-0">
-                    <label className="label">Schema</label>
-                    <input className="input" value={db.schema} onChange={(e) => updateDb({ schema: e.target.value })} />
-                  </div>
-                </div>
-              )}
 
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={testDb.isPending}
-                  onClick={() => testDb.mutate()}
-                >
-                  {testDb.isPending ? "Testing…" : "Test catalog connection"}
-                </button>
-              </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="field mb-0 sm:col-span-2">
+                      <label className="label">Host / endpoint</label>
+                      <input className="input" value={db.host} onChange={(e) => updateDb({ host: e.target.value })} />
+                    </div>
+                    <div className="field mb-0">
+                      <label className="label">Port</label>
+                      <input
+                        className="input"
+                        type="number"
+                        value={db.port}
+                        onChange={(e) => updateDb({ port: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="field mb-0">
+                      <label className="label">SSL mode</label>
+                      <select className="select" value={db.sslmode} onChange={(e) => updateDb({ sslmode: e.target.value })}>
+                        <option value="require">require</option>
+                        <option value="verify-full">verify-full</option>
+                        <option value="prefer">prefer</option>
+                        <option value="disable">disable</option>
+                      </select>
+                    </div>
+                    <div className="field mb-0">
+                      <label className="label">Username</label>
+                      <input className="input" value={db.user} onChange={(e) => updateDb({ user: e.target.value })} />
+                    </div>
+                    <div className="field mb-0">
+                      <label className="label">Password</label>
+                      <input
+                        className="input"
+                        type="password"
+                        placeholder={data.database.password_set ? "Leave blank to keep current password" : ""}
+                        value={db.password}
+                        onChange={(e) => updateDb({ password: e.target.value })}
+                      />
+                    </div>
+                    <div className="field mb-0">
+                      <label className="label">Database</label>
+                      <input className="input" value={db.database} onChange={(e) => updateDb({ database: e.target.value })} />
+                    </div>
+                    <div className="field mb-0">
+                      <label className="label">Schema</label>
+                      <input className="input" value={db.schema} onChange={(e) => updateDb({ schema: e.target.value })} />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={testDb.isPending}
+                      onClick={() => testDb.mutate()}
+                    >
+                      {testDb.isPending ? "Testing…" : "Test connection"}
+                    </button>
+                    {catalogConfigured && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          resetCatalogFromData();
+                          setCatalogEditing(false);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
 
-            <div className="card card-pad">
+            <div className="settings-panel settings-panel--connections card card-pad">
               <SavedConnectionsPanel />
             </div>
           </div>
 
-          <div className="card card-pad">
-            <div className="grid gap-6 md:grid-cols-2 md:gap-8">
-              <div className="space-y-4">
-                <div>
-                  <h2 className="font-semibold">LLM</h2>
-                  <p className="mt-1 text-sm text-zinc-500">Default for Ask &amp; Analytics</p>
-                </div>
-                <form className="settings-llm-row" autoComplete="off" onSubmit={(e) => e.preventDefault()}>
-                  <div className="field mb-0">
-                    <label className="label" htmlFor="datapro-llm-provider">
-                      Provider
-                    </label>
+          <div className="card card-pad space-y-4">
+            <div>
+              <h2 className="font-semibold">LLM</h2>
+              <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                Default for Ask &amp; Analytics
+              </p>
+            </div>
+            <form className="settings-llm-grid" autoComplete="off" onSubmit={(e) => e.preventDefault()}>
+              <div className="field mb-0">
+                <label className="label" htmlFor="datapro-llm-provider">
+                  Provider
+                </label>
+                <select
+                  id="datapro-llm-provider"
+                  className="select"
+                  autoComplete="off"
+                  value={selectedBackend}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const backend = data.llm_backends.find((b) => b.id === id);
+                    setLlm((prev) => ({
+                      ...prev,
+                      default_backend: id,
+                      default_model: sanitizeModelOverride(backend?.default_model ?? prev.default_model),
+                    }));
+                    setMistralCustomMode(false);
+                  }}
+                >
+                  {data.llm_backends.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field mb-0">
+                <label className="label" htmlFor="datapro-llm-model-override">
+                  Model
+                </label>
+                {selectedBackend === "mistral" ? (
+                  <>
                     <select
-                      id="datapro-llm-provider"
-                      className="select"
+                      id="datapro-llm-model-override"
+                      className="select font-mono text-xs"
                       autoComplete="off"
-                      value={selectedBackend}
+                      value={mistralSelectValue}
                       onChange={(e) => {
-                        const id = e.target.value;
-                        const backend = data.llm_backends.find((b) => b.id === id);
-                        setLlm((prev) => ({
-                          ...prev,
-                          default_backend: id,
-                          default_model: sanitizeModelOverride(backend?.default_model ?? prev.default_model),
-                        }));
+                        const value = e.target.value;
+                        if (value === MISTRAL_CUSTOM_MODEL) {
+                          setMistralCustomMode(true);
+                          return;
+                        }
                         setMistralCustomMode(false);
+                        setLlm((prev) => ({ ...prev, default_model: value }));
                       }}
                     >
-                      {data.llm_backends.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.label}
+                      {mistralModelOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                          {option.hint ? ` — ${option.hint}` : ""}
                         </option>
                       ))}
+                      <option value={MISTRAL_CUSTOM_MODEL}>Custom model ID…</option>
                     </select>
-                  </div>
-                  <div className="field mb-0">
-                    <label className="label" htmlFor="datapro-llm-model-override">
-                      Model
-                    </label>
-                    {selectedBackend === "mistral" ? (
-                      <>
-                        <select
-                          id="datapro-llm-model-override"
-                          className="select font-mono text-xs"
-                          autoComplete="off"
-                          value={mistralSelectValue}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            if (value === MISTRAL_CUSTOM_MODEL) {
-                              setMistralCustomMode(true);
-                              return;
-                            }
-                            setMistralCustomMode(false);
-                            setLlm((prev) => ({ ...prev, default_model: value }));
-                          }}
-                        >
-                          {mistralModelOptions.map((option) => (
-                            <option key={option.id} value={option.id}>
-                              {option.label}
-                              {option.hint ? ` — ${option.hint}` : ""}
-                            </option>
-                          ))}
-                          <option value={MISTRAL_CUSTOM_MODEL}>Custom model ID…</option>
-                        </select>
-                        {mistralCustomMode && (
-                          <input
-                            className="input mt-2 font-mono text-xs"
-                            name="datapro-llm-model-custom"
-                            type="search"
-                            autoComplete="off"
-                            autoCorrect="off"
-                            autoCapitalize="off"
-                            spellCheck={false}
-                            data-lpignore="true"
-                            data-1p-ignore
-                            data-form-type="other"
-                            placeholder="e.g. mistral-medium-latest"
-                            value={mistralModelValue}
-                            onChange={(e) =>
-                              setLlm((prev) => ({
-                                ...prev,
-                                default_model: setModelOverride(e.target.value),
-                              }))
-                            }
-                          />
-                        )}
-                        <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                          Free tier on La Plateforme includes these models with per-model rate limits.
-                          Default <code className="text-xs">codestral-2508</code> is best for SQL and code;
-                          use Ministral 3B for fast general Q&amp;A.
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <input
-                          id="datapro-llm-model-override"
-                          className="input font-mono text-xs"
-                          name="datapro-llm-model-override"
-                          type="search"
-                          autoComplete="off"
-                          autoCorrect="off"
-                          autoCapitalize="off"
-                          spellCheck={false}
-                          data-lpignore="true"
-                          data-1p-ignore
-                          data-form-type="other"
-                          readOnly
-                          onFocus={(e) => e.currentTarget.removeAttribute("readonly")}
-                          onBlur={(e) => {
-                            e.currentTarget.setAttribute("readonly", "");
-                            const cleaned = sanitizeModelOverride(e.currentTarget.value);
-                            if (cleaned !== e.currentTarget.value) {
-                              setLlm((prev) => ({ ...prev, default_model: cleaned }));
-                            }
-                          }}
-                          placeholder={selectedBackendMeta?.default_model ?? "Provider default"}
-                          value={llm.default_model ?? ""}
-                          onChange={(e) =>
-                            setLlm((prev) => ({ ...prev, default_model: setModelOverride(e.target.value) }))
-                          }
-                        />
-                        <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                          Leave blank for the provider default.
-                        </p>
-                      </>
-                    )}
-                  </div>
-                  {needsApiKey ? (
-                    <div className="field mb-0">
-                      <label className="label">{LLM_KEY_LABELS[selectedBackend as LlmKeyBackend]}</label>
+                    {mistralCustomMode && (
                       <input
-                        className="input font-mono text-xs"
-                        type="password"
-                        autoComplete="new-password"
-                        name={`datapro-${selectedBackend}-api-key`}
-                        placeholder={apiKeySet ? "Leave blank to keep current key" : "API key"}
-                        value={apiKeys[selectedBackend as LlmKeyBackend]}
+                        className="input mt-2 font-mono text-xs"
+                        name="datapro-llm-model-custom"
+                        type="search"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
+                        data-lpignore="true"
+                        data-1p-ignore
+                        data-form-type="other"
+                        placeholder="e.g. mistral-medium-latest"
+                        value={mistralModelValue}
                         onChange={(e) =>
-                          setApiKeys((prev) => ({ ...prev, [selectedBackend as LlmKeyBackend]: e.target.value }))
+                          setLlm((prev) => ({
+                            ...prev,
+                            default_model: setModelOverride(e.target.value),
+                          }))
                         }
                       />
-                    </div>
-                  ) : selectedBackend === "ollama" ? (
-                    <div className="field mb-0">
-                      <label className="label">Ollama URL</label>
-                      <input
-                        className="input font-mono text-xs"
-                        value={llm.ollama_base_url ?? "http://localhost:11434"}
-                        onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
-                      />
-                    </div>
-                  ) : null}
-                </form>
+                    )}
+                  </>
+                ) : (
+                  <input
+                    id="datapro-llm-model-override"
+                    className="input font-mono text-xs"
+                    name="datapro-llm-model-override"
+                    type="search"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1p-ignore
+                    data-form-type="other"
+                    readOnly
+                    onFocus={(e) => e.currentTarget.removeAttribute("readonly")}
+                    onBlur={(e) => {
+                      e.currentTarget.setAttribute("readonly", "");
+                      const cleaned = sanitizeModelOverride(e.currentTarget.value);
+                      if (cleaned !== e.currentTarget.value) {
+                        setLlm((prev) => ({ ...prev, default_model: cleaned }));
+                      }
+                    }}
+                    placeholder={selectedBackendMeta?.default_model ?? "Provider default"}
+                    value={llm.default_model ?? ""}
+                    onChange={(e) =>
+                      setLlm((prev) => ({ ...prev, default_model: setModelOverride(e.target.value) }))
+                    }
+                  />
+                )}
               </div>
-
-              <div className="space-y-4 md:border-l md:border-zinc-200 md:pl-8">
-                <div>
-                  <h2 className="font-semibold">Embedding model</h2>
-                </div>
+              {needsApiKey ? (
                 <div className="field mb-0">
-                  <select
-                    className="select"
-                    value={embeddingModel}
-                    onChange={(e) => setEmbeddingModel(e.target.value)}
-                    aria-label="Embedding model"
-                  >
-                    {data.embedding_model_options.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="label">{LLM_KEY_LABELS[selectedBackend as LlmKeyBackend]}</label>
+                  <input
+                    className="input font-mono text-xs"
+                    type="password"
+                    autoComplete="new-password"
+                    name={`datapro-${selectedBackend}-api-key`}
+                    placeholder={apiKeySet ? "Leave blank to keep current key" : "API key"}
+                    value={apiKeys[selectedBackend as LlmKeyBackend]}
+                    onChange={(e) =>
+                      setApiKeys((prev) => ({ ...prev, [selectedBackend as LlmKeyBackend]: e.target.value }))
+                    }
+                  />
                 </div>
+              ) : selectedBackend === "ollama" ? (
+                <div className="field mb-0">
+                  <label className="label">Ollama URL</label>
+                  <input
+                    className="input font-mono text-xs"
+                    value={llm.ollama_base_url ?? "http://localhost:11434"}
+                    onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
+                  />
+                </div>
+              ) : null}
+              <div className="field mb-0">
+                <label className="label" htmlFor="datapro-embedding-model">
+                  Embedding model
+                </label>
+                <select
+                  id="datapro-embedding-model"
+                  className="select font-mono text-xs"
+                  value={embeddingModel}
+                  onChange={(e) => setEmbeddingModel(e.target.value)}
+                >
+                  {data.embedding_model_options.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
-            </div>
+            </form>
+            {selectedBackend === "mistral" ? (
+              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                Free tier rate limits apply per model.{" "}
+                <code className="text-xs">codestral-2508</code> for SQL and code; Ministral 3B for fast Q&amp;A.
+              </p>
+            ) : (
+              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                Leave model blank to use the provider default.
+              </p>
+            )}
           </div>
 
           <div className="card card-pad">

@@ -26,6 +26,14 @@
   --color-badge-muted-text: #52525b;
   --color-badge-ok-bg: #ecfdf5;
   --color-badge-ok-text: #047857;
+  --color-flow-link-0: #2563eb;
+  --color-flow-link-1: #0d9488;
+  --color-flow-link-2: #7c3aed;
+  --color-flow-link-3: #c2410c;
+  --color-flow-link-4: #db2777;
+  --color-flow-link-5: #059669;
+  --color-flow-link-6: #4f46e5;
+  --color-flow-link-7: #0891b2;
   --shadow-sm: none;
 }
 
@@ -53,6 +61,14 @@
   --color-badge-muted-text: #d4d4d8;
   --color-badge-ok-bg: #052e16;
   --color-badge-ok-text: #6ee7b7;
+  --color-flow-link-0: #60a5fa;
+  --color-flow-link-1: #2dd4bf;
+  --color-flow-link-2: #a78bfa;
+  --color-flow-link-3: #fb923c;
+  --color-flow-link-4: #f472b6;
+  --color-flow-link-5: #34d399;
+  --color-flow-link-6: #818cf8;
+  --color-flow-link-7: #22d3ee;
   --shadow-sm: none;
 }
 
@@ -233,7 +249,13 @@ button.sidebar-hint {
   color: var(--color-text-faint);
 }
 .sidebar-footer--collapsed {
-  @apply flex-col;
+  @apply justify-center px-0.5 py-2.5;
+}
+.sidebar-footer--collapsed .sidebar-footer-actions {
+  @apply gap-0;
+}
+.sidebar-footer--collapsed .icon-btn {
+  @apply h-7 w-7;
 }
 .main {
   @apply min-h-screen flex-1;
@@ -257,6 +279,11 @@ button.sidebar-hint {
 }
 [data-theme="dark"] .message-bar--warning {
   @apply border-amber-900/60 bg-amber-950/40 text-amber-100;
+}
+.message-bar--info {
+  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary-soft) 55%, var(--color-surface));
+  color: var(--color-text);
 }
 .message-bar-inner {
   @apply mx-auto flex max-w-6xl flex-wrap items-start justify-between gap-3;
@@ -642,16 +669,27 @@ button.sidebar-hint {
 .modal-actions {
   @apply mt-5 flex flex-wrap justify-end gap-2;
 }
+.modal-actions--split {
+  @apply items-center justify-between;
+}
+.modal-actions-end {
+  @apply flex flex-wrap gap-2;
+}
 
-.settings-llm-row {
+.settings-llm-grid {
   display: grid;
   gap: 1rem;
   grid-template-columns: 1fr;
-  align-items: end;
+  align-items: start;
 }
-@media (min-width: 768px) {
-  .settings-llm-row {
-    grid-template-columns: minmax(8rem, 0.85fr) minmax(10rem, 1fr) minmax(12rem, 1.35fr);
+@media (min-width: 640px) {
+  .settings-llm-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1024px) {
+  .settings-llm-grid {
+    grid-template-columns: minmax(7rem, 0.8fr) minmax(10rem, 1.15fr) minmax(11rem, 1.05fr) minmax(10rem, 0.95fr);
   }
 }
 .settings-servers-stack {
@@ -663,8 +701,40 @@ button.sidebar-hint {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-.settings-db-split {
-  @apply grid gap-4 lg:grid-cols-2 lg:items-start;
+.settings-db-stack {
+  @apply space-y-4;
+}
+.settings-panel {
+  border-width: 1px;
+  border-style: solid;
+}
+.settings-panel--catalog {
+  background: color-mix(in srgb, var(--color-primary-soft) 30%, var(--color-surface));
+  border-color: color-mix(in srgb, var(--color-primary) 38%, var(--color-border));
+}
+.settings-panel--connections {
+  background: var(--color-surface);
+  border-color: color-mix(in srgb, var(--color-text-muted) 22%, var(--color-border));
+}
+.settings-panel-badge {
+  @apply rounded-full px-2 py-0.5 text-xs font-medium;
+  background: color-mix(in srgb, var(--color-primary-soft) 70%, var(--color-surface));
+  color: var(--color-primary-text);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, var(--color-border));
+}
+.settings-catalog-summary {
+  @apply rounded-lg px-4 py-3;
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
+}
+.settings-catalog-summary-line {
+  color: var(--color-text);
+  word-break: break-all;
+}
+.settings-connections-empty {
+  @apply rounded-lg px-4 py-6 text-center;
+  border: 1px dashed var(--color-border);
+  background: var(--color-surface-subtle);
 }
 .mcp-page-split {
   @apply grid gap-4 lg:grid-cols-2 lg:items-start;
@@ -792,32 +862,260 @@ button.sidebar-hint {
   @apply mt-1 line-clamp-2 text-xs text-zinc-500;
 }
 .agent-flow-canvas {
-  @apply min-h-[14rem] rounded-lg border border-dashed p-3 transition-colors;
+  @apply min-h-0;
+}
+.agent-flow-canvas-empty {
+  @apply flex min-h-[10rem] items-center justify-center text-center text-sm;
+  color: var(--color-text-muted);
+}
+.agent-flow-steps-grid {
+  @apply relative min-h-[14rem] rounded-lg border border-dashed p-5 transition-colors;
   border-color: var(--color-border);
   background: color-mix(in srgb, var(--color-surface-subtle) 50%, var(--color-surface));
 }
-.agent-flow-canvas--drag-over {
+.agent-flow-steps-grid--drag-over {
   border-color: var(--color-primary);
   background: var(--color-primary-soft);
 }
-.agent-flow-canvas-empty {
-  @apply flex min-h-[10rem] items-center justify-center text-center text-sm text-zinc-500;
+.agent-flow-steps-grid--col-0::before,
+.agent-flow-steps-grid--col-1::before {
+  content: "";
+  @apply pointer-events-none absolute inset-y-5 rounded-md;
+  width: calc(50% - 1.25rem);
+  background: color-mix(in srgb, var(--color-primary-soft) 65%, transparent);
+}
+.agent-flow-steps-grid--col-0::before {
+  left: 1.25rem;
+}
+.agent-flow-steps-grid--col-1::before {
+  right: 1.25rem;
+}
+.agent-flow-steps-grid-empty {
+  @apply flex min-h-[10rem] w-full items-center justify-center text-center text-sm;
+  color: var(--color-text-muted);
 }
 .agent-flow-steps-list {
-  @apply m-0 list-none space-y-3 p-0;
+  @apply relative z-[1] m-0 grid list-none grid-cols-2 gap-x-16 gap-y-14 p-0;
 }
-.agent-flow-step-card {
-  @apply rounded-lg border px-3 py-3;
-  border-color: var(--color-border);
+.agent-flow-connection-lines {
+  @apply absolute left-0 top-0 z-0 overflow-visible;
+  pointer-events: none;
+}
+.agent-flow-connection-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.agent-flow-connection-path {
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: miter;
+  pointer-events: none;
+}
+.agent-flow-connection-path--c-0 {
+  stroke: var(--color-flow-link-0);
+  color: var(--color-flow-link-0);
+}
+.agent-flow-connection-path--c-1 {
+  stroke: var(--color-flow-link-1);
+  color: var(--color-flow-link-1);
+}
+.agent-flow-connection-path--c-2 {
+  stroke: var(--color-flow-link-2);
+  color: var(--color-flow-link-2);
+}
+.agent-flow-connection-path--c-3 {
+  stroke: var(--color-flow-link-3);
+  color: var(--color-flow-link-3);
+}
+.agent-flow-connection-path--c-4 {
+  stroke: var(--color-flow-link-4);
+  color: var(--color-flow-link-4);
+}
+.agent-flow-connection-path--c-5 {
+  stroke: var(--color-flow-link-5);
+  color: var(--color-flow-link-5);
+}
+.agent-flow-connection-path--c-6 {
+  stroke: var(--color-flow-link-6);
+  color: var(--color-flow-link-6);
+}
+.agent-flow-connection-path--c-7 {
+  stroke: var(--color-flow-link-7);
+  color: var(--color-flow-link-7);
+}
+.agent-flow-connection-path--hover {
+  stroke: var(--color-alert-error-text) !important;
+  color: var(--color-alert-error-text) !important;
+}
+.agent-flow-link-remove {
+  color: var(--color-alert-error-text);
+}
+.agent-flow-link-remove:hover {
+  background: var(--color-alert-error-bg);
+}
+.agent-flow-connection-anchor {
+  fill: currentColor;
+  stroke: var(--color-surface);
+  stroke-width: 2;
+  pointer-events: none;
+}
+.agent-flow-connection-anchor--hover {
+  fill: var(--color-alert-error-text) !important;
+  stroke: var(--color-surface);
+}
+.agent-flow-connection-path--preview {
+  stroke-dasharray: 6 4;
+  stroke: var(--color-primary);
+  opacity: 0.85;
+}
+.agent-flow-connection-path--preview.agent-flow-connection-anchor {
+  fill: var(--color-primary);
+}
+.agent-flow-connection-arrowhead {
+  fill: currentColor;
+}
+.agent-flow-link-hint {
+  @apply relative z-[1] col-span-2 mb-1 text-xs;
+  color: var(--color-text-muted);
+  grid-column: 1 / -1;
+}
+.agent-flow-link-hint-handle {
+  @apply mx-0.5 inline-block h-2.5 w-2.5 rounded-full align-middle;
+  border: 2px solid var(--color-primary);
   background: var(--color-surface);
 }
+.agent-flow-link-hint-dot {
+  @apply mx-0.5 inline-block h-2.5 w-2.5 rounded-full align-middle;
+  background: var(--color-primary);
+}
+.agent-flow-link-error {
+  @apply relative z-[1] mt-2 text-xs;
+  color: var(--color-alert-error-text);
+}
+.agent-flow-link-handle {
+  @apply absolute z-[2] h-3.5 w-3.5 rounded-full border-2 p-0;
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+  cursor: crosshair;
+}
+.agent-flow-link-handle:hover,
+.agent-flow-link-handle:focus-visible {
+  background: var(--color-primary-soft);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+.agent-flow-link-handle--out-right {
+  right: -0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.agent-flow-link-handle--out-left {
+  left: -0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.agent-flow-link-handle--out-top {
+  top: -0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.agent-flow-link-handle--out-bottom {
+  bottom: -0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.agent-flow-step-card--link-target {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+.agent-flow-step-connection-row {
+  @apply flex items-center justify-between gap-2;
+}
+.agent-flow-steps-grid--linking {
+  cursor: crosshair;
+}
+.agent-flow-steps-grid--moving {
+  cursor: grabbing;
+}
+.agent-flow-step-card--dragging {
+  opacity: 0.55;
+}
+.agent-flow-step-card--drop-before {
+  box-shadow: inset 0 3px 0 var(--color-primary);
+}
+.agent-flow-step-card--drop-after {
+  box-shadow: inset 0 -3px 0 var(--color-primary);
+}
+.agent-flow-step-card--col-0 {
+  grid-column: 1;
+}
+.agent-flow-step-card--col-1 {
+  grid-column: 2;
+}
+.agent-flow-step-card {
+  @apply relative z-[1] rounded-lg border px-2.5 py-2 text-sm;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  margin-right: 0.375rem;
+}
 .agent-flow-step-header {
-  @apply flex items-start gap-2;
+  @apply flex items-start gap-1.5;
+}
+.agent-flow-step-header--draggable {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.agent-flow-step-header--draggable:active {
+  cursor: grabbing;
 }
 .agent-flow-step-index {
-  @apply flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold;
+  @apply flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[0.65rem] font-semibold;
   background: var(--color-primary-soft);
   color: var(--color-primary-text);
+}
+.agent-flow-step-connections {
+  @apply mt-2 border-t pt-2;
+  border-color: var(--color-border-light);
+}
+.agent-flow-step-connections-label {
+  @apply mb-1.5 text-[0.65rem] font-medium;
+  color: var(--color-text-muted);
+}
+.agent-flow-step-connection-list {
+  @apply m-0 list-none space-y-1.5 p-0;
+}
+.agent-flow-step-connection-item {
+  @apply rounded-md px-1.5 py-1.5;
+  background: var(--color-surface-subtle);
+  border-left: 3px solid var(--color-border);
+}
+.agent-flow-step-connection-label {
+  @apply inline-flex min-w-0 items-center gap-1.5;
+}
+.agent-flow-step-connection-dot {
+  @apply h-2 w-2 shrink-0 rounded-full;
+}
+.agent-flow-step-connection-item--c-0 { border-left-color: var(--color-flow-link-0); }
+.agent-flow-step-connection-item--c-1 { border-left-color: var(--color-flow-link-1); }
+.agent-flow-step-connection-item--c-2 { border-left-color: var(--color-flow-link-2); }
+.agent-flow-step-connection-item--c-3 { border-left-color: var(--color-flow-link-3); }
+.agent-flow-step-connection-item--c-4 { border-left-color: var(--color-flow-link-4); }
+.agent-flow-step-connection-item--c-5 { border-left-color: var(--color-flow-link-5); }
+.agent-flow-step-connection-item--c-6 { border-left-color: var(--color-flow-link-6); }
+.agent-flow-step-connection-item--c-7 { border-left-color: var(--color-flow-link-7); }
+.agent-flow-step-connection-dot--c-0 { background: var(--color-flow-link-0); }
+.agent-flow-step-connection-dot--c-1 { background: var(--color-flow-link-1); }
+.agent-flow-step-connection-dot--c-2 { background: var(--color-flow-link-2); }
+.agent-flow-step-connection-dot--c-3 { background: var(--color-flow-link-3); }
+.agent-flow-step-connection-dot--c-4 { background: var(--color-flow-link-4); }
+.agent-flow-step-connection-dot--c-5 { background: var(--color-flow-link-5); }
+.agent-flow-step-connection-dot--c-6 { background: var(--color-flow-link-6); }
+.agent-flow-step-connection-dot--c-7 { background: var(--color-flow-link-7); }
+.agent-flow-step-connection-toggle {
+  @apply flex items-start gap-2 text-xs;
+  color: var(--color-text);
 }
 .agent-instructions-input {
   position: relative;
@@ -909,13 +1207,38 @@ button.sidebar-hint {
 .agent-email-preview {
   background: color-mix(in srgb, var(--color-surface-muted, #f8fafc) 80%, var(--color-surface));
 }
-.saved-connections-list {
-  @apply m-0 list-none p-0;
+.saved-connections-grid {
+  @apply m-0 grid list-none gap-3 p-0 sm:grid-cols-2;
 }
-.saved-connection-item {
-  @apply flex items-center gap-2 rounded-lg px-3 py-2.5;
+.saved-connection-card {
+  @apply flex flex-col gap-2 rounded-lg p-4;
   border: 1px solid var(--color-border);
   background: var(--color-surface-subtle);
+}
+.saved-connection-card-header {
+  @apply flex items-start justify-between gap-2;
+}
+.saved-connection-card-name {
+  @apply min-w-0 truncate text-base font-semibold;
+  color: var(--color-text);
+}
+.saved-connection-card-badge {
+  @apply shrink-0 rounded-full px-2 py-0.5 text-xs font-medium;
+  background: var(--color-badge-muted-bg);
+  color: var(--color-badge-muted-text);
+}
+.saved-connection-card-meta {
+  @apply truncate font-mono text-xs;
+  color: var(--color-text-muted);
+}
+.saved-connection-card-actions {
+  @apply mt-auto flex flex-wrap gap-1 pt-1;
+}
+.saved-connection-delete {
+  color: var(--color-alert-error-text);
+}
+.saved-connection-delete:hover {
+  background: var(--color-alert-error-bg);
 }
 .editable-name {
   @apply inline-flex min-w-0 items-center gap-1.5 text-left;
@@ -952,6 +1275,9 @@ button.sidebar-hint {
 }
 .textarea.agent-instructions-textarea {
   min-height: 14rem;
+}
+.agent-flow-instructions-textarea {
+  min-height: 7rem;
 }
 .textarea.dataset-definition-textarea {
   min-height: 9rem;

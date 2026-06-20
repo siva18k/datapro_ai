@@ -203,8 +203,8 @@ export function AgentFlowInstructionsEditor({
         </div>
         <textarea
           ref={textareaRef}
-          className="input agent-instructions-textarea min-h-[5rem] w-full resize-y"
-          rows={4}
+          className="input agent-instructions-textarea agent-flow-instructions-textarea w-full resize-y"
+          rows={5}
           placeholder={DEFAULT_PLACEHOLDER}
           value={value}
           onChange={onInput}
