@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { McpAddBindingModal } from "../components/McpAddBindingModal";
 import { McpPromptEditModal } from "../components/McpPromptEditModal";
@@ -7,7 +8,7 @@ import { McpResourcePreviewModal } from "../components/McpResourcePreviewModal";
 import { McpServersPanel } from "../components/McpServersPanel";
 import { McpToolViewModal } from "../components/McpToolViewModal";
 import { PageHeader } from "../components/PageHeader";
-import { useApiConnection } from "../context/ApiConnectionContext";
+import { useApiPageState } from "../context/ApiConnectionContext";
 import { api, type McpBindingItem, type McpRegistryPrompt, type McpStatusResponse } from "../api/client";
 
 type BindingTab = "tools" | "resources" | "prompts";
@@ -20,7 +21,7 @@ const TAB_TO_TYPE: Record<BindingTab, "tool" | "resource" | "prompt"> = {
 
 export function McpPage() {
   const qc = useQueryClient();
-  const { apiOnline, checking: apiChecking } = useApiConnection();
+  const { apiOnline, showConnecting, showOffline, connectingTitle } = useApiPageState();
   const [domainId, setDomainId] = useState("");
   const [bindingTab, setBindingTab] = useState<BindingTab>("tools");
   const [restartNeeded, setRestartNeeded] = useState(false);
@@ -169,7 +170,16 @@ export function McpPage() {
     return JSON.stringify({ mcpServers }, null, 2);
   }, [serversData?.servers, status?.url]);
 
-  if (!apiOnline && !apiChecking) {
+  if (showConnecting) {
+    return (
+      <div className="mcp-page space-y-4">
+        <PageHeader title="MCP Server" description="Tools for MCP clients" />
+        <ApiConnectingPanel title={connectingTitle} />
+      </div>
+    );
+  }
+
+  if (showOffline) {
     return (
       <div className="mcp-page space-y-4">
         <PageHeader title="MCP Server" description="Tools for MCP clients" />

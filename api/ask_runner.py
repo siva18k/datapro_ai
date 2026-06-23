@@ -13,6 +13,13 @@ from mcp_domain_service import (
     build_prompt_via_domain_mcp,
     retrieve_chunks_for_scope,
 )
+from hybrid_prompt import merge_generation_supplements, prioritize_chunks
+from mcp_ask_planner import (
+    execute_mcp_enrichment,
+    format_mcp_context_supplement,
+    plan_mcp_enrichment,
+    resolve_domain_slug,
+)
 from orchestrator import build_domain_rag_prompt, strip_source_citations, _legacy_query_kind
 from query_planner import find_best_rag_domain, resolve_query_plan, structured_fallback_available
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
@@ -25,16 +32,41 @@ from api.ask_models import (
     PipelineTraceStep,
     SourceChunk,
 )
-from conversation_context import retrieval_query_with_history, truncate_history
+from conversation_context import contextual_question_with_history, retrieval_query_with_history, truncate_history
+from conversation_session import prepare_session_context
 
 
-def _conversation_history(body: AskRequest) -> list[dict[str, str]]:
-    raw = [{"role": t.role, "content": t.content} for t in body.conversation_history]
+def _conversation_history(body: AskRequest) -> list[dict[str, Any]]:
+    raw = [
+        {
+            "role": t.role,
+            "content": t.content,
+            **({"question": t.question} if t.question else {}),
+            **({"sql": t.sql} if t.sql else {}),
+            **({"columns": t.columns} if t.columns else {}),
+            **({"rows": t.rows} if t.rows is not None else {}),
+        }
+        for t in body.conversation_history
+    ]
     return truncate_history(raw)
 
 
-def _retrieval_query(body: AskRequest) -> str:
-    return retrieval_query_with_history(body.question, _conversation_history(body))
+def _retrieval_query(body: AskRequest, history: list[dict[str, Any]] | None = None) -> str:
+    h = history if history is not None else _conversation_history(body)
+    chat = [{"role": t["role"], "content": t["content"]} for t in h if t.get("content")]
+    return retrieval_query_with_history(body.question, chat)
+
+
+def _session_fields(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "session_reset": bool(meta.get("session_reset")),
+        "session_summary": meta.get("session_summary"),
+        "new_topic": bool(meta.get("new_topic")),
+    }
+
+
+def _meta_history(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    return meta.get("conversation_history") or []
 
 
 def _status(message: str) -> dict[str, Any]:
@@ -120,6 +152,7 @@ def _response_from_meta(meta: dict[str, Any], **kwargs: Any) -> AskResponse:
     return AskResponse(
         used_rag=bool(usage.get("rag")),
         used_mcp=bool(usage.get("mcp")),
+        **_session_fields(meta),
         **kwargs,
     )
 
@@ -155,7 +188,7 @@ def _vector_search_chunks(
     meta: dict[str, Any],
     domain_id: str | None,
 ) -> list[dict]:
-    search_query = _retrieval_query(body)
+    search_query = _retrieval_query(body, _meta_history(meta))
     scope_kwargs = _scoped_search_kwargs(meta)
     if _scope_locked(meta):
         return search_chunks(
@@ -207,13 +240,33 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         domain_overrides=selected_domains or None,
     )
     history = _conversation_history(body)
-    if history:
-        turn_count = sum(1 for turn in history if turn["role"] == "user")
-        yield _status(f"Using {turn_count} prior turn(s) for follow-up context…")
+    session = prepare_session_context(
+        body.question,
+        history,
+        model=llm_model,
+        backend=llm_backend,
+        base_url=llm_base_url,
+    )
+    history = session.effective_history
+    if session.session_reset and session.session_summary:
+        yield _status("Summarizing prior conversation — starting a new chat…")
+    elif session.is_new_topic:
+        yield _status("New topic detected — processing as a fresh question…")
+    elif session.is_follow_up:
+        yield _status(f"Using {session.prior_turn_count} prior turn(s) for follow-up context…")
+
+    routing_question = (
+        contextual_question_with_history(
+            body.question,
+            [{"role": t["role"], "content": t["content"]} for t in history if t.get("content")],
+        )
+        if history
+        else body.question
+    )
 
     yield _status("Routing question to the best domain and dataset…")
     plan = resolve_query_plan(
-        body.question,
+        routing_question,
         embedder,
         domain_override=body.domain_override,
         domain_overrides=body.domain_overrides,
@@ -290,6 +343,10 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         "rag_source_id": plan.rag_source_id,
         "rag_source_name": plan.rag_source_name,
         "usage": {"rag": False, "mcp": False},
+        "conversation_history": history,
+        "session_reset": session.session_reset,
+        "session_summary": session.session_summary,
+        "new_topic": session.is_new_topic,
     }
 
     llm = (llm_backend, llm_model, llm_base_url)
@@ -299,6 +356,89 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         return
 
     yield from _rag_events(body, embedder, meta, llm)
+
+
+def _mcp_enrichment_events(
+    body: AskRequest,
+    meta: dict[str, Any],
+    llm: tuple[str, str, str],
+    *,
+    execution_kind: str,
+) -> Iterator[dict[str, Any]]:
+    """Plan and run domain MCP tools/resources/prompts; yields trace + final enrichment."""
+    domain_id = meta.get("domain_id")
+    if not domain_id:
+        yield {"type": "_mcp_enrichment", "enrichment": None}
+        return
+
+    llm_backend, llm_model, llm_base_url = llm
+    routing = meta.get("routing") or {}
+    domain_slug = resolve_domain_slug(domain_id, routing)
+    usage = meta.setdefault("usage", {"rag": False, "mcp": False})
+
+    yield _status("Reviewing domain MCP tools, resources, and prompts…")
+    plan = plan_mcp_enrichment(
+        body.question,
+        domain_id=domain_id,
+        domain_slug=domain_slug,
+        execution_kind=execution_kind,
+        model=llm_model,
+        backend=llm_backend,
+        base_url=llm_base_url,
+    )
+    yield from _maybe_trace(
+        body,
+        f"MCP plan: {plan.get('reasoning', 'enrichment')}",
+        "mcp",
+        domain_id=domain_id,
+        domain_name=meta.get("domain_name"),
+        mcp_plan=plan,
+    )
+
+    enrichment = execute_mcp_enrichment(
+        plan,
+        question=body.question,
+        domain_id=domain_id,
+        domain_slug=domain_slug,
+        top_k=body.top_k,
+    )
+    meta["mcp_enrichment"] = enrichment
+
+    if enrichment.trace:
+        yield from _mark_mcp(usage)
+    for step in enrichment.trace:
+        kind = step.get("kind")
+        if kind == "tool":
+            yield from _maybe_trace(
+                body,
+                f"MCP tool call: {step.get('tool')}",
+                "mcp",
+                mcp_url=step.get("mcp_url"),
+                mcp_tool=step.get("tool"),
+                mcp_arguments=step.get("arguments"),
+                domain_id=domain_id,
+                domain_name=meta.get("domain_name"),
+            )
+        elif kind == "resource":
+            yield from _maybe_trace(
+                body,
+                f"MCP resource read: {step.get('uri')}",
+                "mcp",
+                mcp_resource=step.get("uri"),
+                domain_id=domain_id,
+                domain_name=meta.get("domain_name"),
+            )
+        elif kind == "prompt":
+            yield from _maybe_trace(
+                body,
+                f"MCP prompt: {step.get('prompt') or step.get('mcp_prompt')}",
+                "mcp",
+                mcp_url=step.get("mcp_url"),
+                domain_id=domain_id,
+                domain_name=meta.get("domain_name"),
+            )
+
+    yield {"type": "_mcp_enrichment", "enrichment": enrichment}
 
 
 def _structured_events(
@@ -314,7 +454,7 @@ def _structured_events(
 
     yield _status("Loading catalog metadata from database…")
     plan = plan_structured_query(
-        body.question,
+        _retrieval_query(body, _meta_history(meta)),
         embedder,
         domain_override=body.domain_override,
         routing=routing,
@@ -340,7 +480,38 @@ def _structured_events(
         domain_name=domain_name,
     )
 
-    yield _status("Generating SQL from schema definitions…")
+    yield _status("Searching ingested catalog and documents for context…")
+    mcp_enrichment = None
+    for event in _mcp_enrichment_events(
+        body, meta, llm, execution_kind=execution_kind or "sql"
+    ):
+        if event["type"] == "_mcp_enrichment":
+            mcp_enrichment = event["enrichment"]
+        else:
+            yield event
+    mcp_supplement = format_mcp_context_supplement(mcp_enrichment)
+
+    rag_chunks: list[dict] = []
+    for event in _rag_search_events(body, embedder, meta):
+        if event["type"] == "status":
+            yield event
+        elif event["type"] == "usage":
+            yield event
+        elif event["type"] == "_chunks":
+            rag_chunks = prioritize_chunks(event["chunks"])
+            break
+
+    if rag_chunks:
+        yield _status(
+            f"Found {len(rag_chunks)} ingested chunk(s) — blending with catalog definition for SQL…"
+        )
+    else:
+        yield _status("No ingested chunks — generating SQL from catalog definition and schema…")
+
+    history = _meta_history(meta)
+    prior = history and len(history) >= 2
+    if prior:
+        yield _status("Interpreting follow-up in context of the prior answer…")
 
     try:
         plan.sql, columns, rows, sql_notes = generate_and_execute_readonly_sql(
@@ -350,6 +521,9 @@ def _structured_events(
             model=llm_model,
             backend=llm_backend,
             base_url=llm_base_url,
+            rag_chunks=rag_chunks,
+            mcp_supplement=mcp_supplement,
+            conversation_history=history,
         )
         yield _status("Running read-only query on the database…")
         yield from _maybe_trace(
@@ -400,7 +574,7 @@ def _structured_events(
         question=body.question,
         columns=columns,
         rows=rows,
-        conversation_history=_conversation_history(body),
+        conversation_history=_meta_history(meta),
     )
     answer = generate_answer(
         summary_prompt,
@@ -420,39 +594,83 @@ def _structured_events(
     ]
 
     if execution_kind == "hybrid":
-        yield _status("Also searching ingested documents…")
-        for event in _rag_search_events(body, embedder, meta):
-            if event["type"] == "status":
-                yield event
-            elif event["type"] == "usage":
-                yield event
-            elif event["type"] == "_chunks":
-                chunks = event["chunks"]
-                if chunks:
-                    doc_context, _ = build_domain_rag_prompt(
-                        f"{body.question}\n\nSupplement with document context if helpful.",
-                        chunks,
-                        domain_name=domain_name,
-                        cite_sources=body.debug,
-                        conversation_history=_conversation_history(body),
-                    )
-                    yield _status("Blending database results with document context…")
-                    answer = generate_answer(
-                        f"{summary_prompt}\n\nAdditional document context:\n{doc_context}",
-                        model=llm_model,
-                        backend=llm_backend,
-                        base_url=llm_base_url,
-                    )
-                    sources.extend(
-                        SourceChunk(
-                            source=c.get("source", c.get("source_file", "")),
-                            chunk_id=c.get("chunk_id", ""),
-                            text=c.get("text", ""),
-                            distance=c.get("distance"),
+        mcp_extra = format_mcp_context_supplement(mcp_enrichment)
+        if rag_chunks:
+            yield _status("Blending database results with retrieved document context…")
+            doc_context, _ = build_domain_rag_prompt(
+                f"{body.question}\n\nSupplement with document context if helpful.",
+                rag_chunks,
+                domain_name=domain_name,
+                cite_sources=body.debug,
+                conversation_history=[
+                    {"role": t["role"], "content": t["content"]}
+                    for t in _meta_history(meta)
+                    if t.get("content")
+                ],
+            )
+            blend_prompt = merge_generation_supplements(
+                summary_prompt,
+                mcp_extra,
+                f"Additional retrieved context:\n{doc_context}",
+            )
+            answer = generate_answer(
+                blend_prompt,
+                model=llm_model,
+                backend=llm_backend,
+                base_url=llm_base_url,
+            )
+            sources.extend(
+                SourceChunk(
+                    source=c.get("source", c.get("source_file", "")),
+                    chunk_id=c.get("chunk_id", ""),
+                    text=c.get("text", ""),
+                    distance=c.get("distance"),
+                )
+                for c in rag_chunks
+            )
+        else:
+            yield _status("Also searching ingested documents…")
+            for event in _rag_search_events(body, embedder, meta):
+                if event["type"] == "status":
+                    yield event
+                elif event["type"] == "usage":
+                    yield event
+                elif event["type"] == "_chunks":
+                    chunks = event["chunks"]
+                    if chunks:
+                        doc_context, _ = build_domain_rag_prompt(
+                            f"{body.question}\n\nSupplement with document context if helpful.",
+                            chunks,
+                            domain_name=domain_name,
+                            cite_sources=body.debug,
+                            conversation_history=[
+                    {"role": t["role"], "content": t["content"]}
+                    for t in _meta_history(meta)
+                    if t.get("content")
+                ],
                         )
-                        for c in chunks
-                    )
-                break
+                        yield _status("Blending database results with document context…")
+                        blend_prompt = merge_generation_supplements(
+                            summary_prompt,
+                            mcp_extra,
+                            f"Additional document context:\n{doc_context}",
+                        )
+                        answer = generate_answer(
+                            blend_prompt,
+                            model=llm_model,
+                            backend=llm_backend,
+                            base_url=llm_base_url,
+                        )
+                        sources.extend(
+                            SourceChunk(
+                                source=c.get("source", c.get("source_file", "")),
+                                chunk_id=c.get("chunk_id", ""),
+                                text=c.get("text", ""),
+                                distance=c.get("distance"),
+                            )
+                            for c in chunks
+                        )
+                    break
 
     if not body.debug:
         answer = strip_source_citations(answer)
@@ -501,7 +719,7 @@ def _rag_search_events(
     chunks: list[dict] = []
     retrieval = "vector"
     mcp_meta: dict[str, Any] | None = None
-    search_query = _retrieval_query(body)
+    search_query = _retrieval_query(body, _meta_history(meta))
 
     domain_chunks, mcp_meta = retrieve_chunks_for_scope(
         search_query,
@@ -623,6 +841,15 @@ def _rag_events(
     domain_name = meta.get("domain_name")
 
     chunks: list[dict] = []
+    mcp_enrichment = None
+    for event in _mcp_enrichment_events(
+        body, meta, llm, execution_kind=meta.get("execution_kind") or "rag"
+    ):
+        if event["type"] == "_mcp_enrichment":
+            mcp_enrichment = event["enrichment"]
+        else:
+            yield event
+
     for event in _rag_search_events(body, embedder, meta):
         if event["type"] == "status":
             yield event
@@ -692,16 +919,23 @@ def _rag_events(
     yield _status(gen_msg)
     domain_name = meta.get("domain_name") or domain_name
     domain_slug = routing.get("domain_slug")
-    history = _conversation_history(body)
-    mcp_prompt, mcp_prompt_meta = build_prompt_via_domain_mcp(
-        body.question,
-        domain_id=meta.get("domain_id"),
-        domain_slug=domain_slug,
-        top_k=body.top_k,
+    history = _meta_history(meta)
+    chat_history = [{"role": t["role"], "content": t["content"]} for t in history if t.get("content")]
+    mcp_extra = format_mcp_context_supplement(mcp_enrichment)
+    planned_mcp_prompt = (
+        mcp_enrichment.mcp_prompt_text
+        if mcp_enrichment and mcp_enrichment.mcp_prompt_text and not chat_history
+        else None
     )
-    if mcp_prompt and not history:
-        prompt = mcp_prompt
-        if mcp_prompt_meta:
+    mcp_prompt_meta: dict[str, Any] | None = None
+    if not planned_mcp_prompt:
+        planned_mcp_prompt, mcp_prompt_meta = build_prompt_via_domain_mcp(
+            body.question,
+            domain_id=meta.get("domain_id"),
+            domain_slug=domain_slug,
+            top_k=body.top_k,
+        )
+        if planned_mcp_prompt and mcp_prompt_meta:
             yield from _maybe_trace(
                 body,
                 f"Using MCP prompt: {mcp_prompt_meta.get('mcp_prompt')}",
@@ -710,21 +944,34 @@ def _rag_events(
                 domain_id=meta.get("domain_id"),
                 domain_name=domain_name,
             )
+    elif mcp_enrichment and mcp_enrichment.mcp_prompt_name:
+        yield from _maybe_trace(
+            body,
+            f"Using MCP prompt: {mcp_enrichment.mcp_prompt_name}",
+            "mcp",
+            domain_id=meta.get("domain_id"),
+            domain_name=domain_name,
+        )
+
+    if planned_mcp_prompt and not chat_history:
+        prompt = merge_generation_supplements(mcp_extra, planned_mcp_prompt)
     else:
         _, prompt = build_domain_rag_prompt(
             body.question,
             chunks,
             domain_name=domain_name,
             cite_sources=body.debug,
-            conversation_history=history,
+            conversation_history=chat_history,
         )
+        if mcp_extra:
+            prompt = merge_generation_supplements(mcp_extra, prompt)
     yield from _maybe_trace(
         body,
         gen_msg,
         "llm",
         domain_id=meta.get("domain_id"),
         domain_name=domain_name,
-        retrieval_query=_retrieval_query(body),
+        retrieval_query=_retrieval_query(body, _meta_history(meta)),
         llm_prompt=_truncate_debug_text(prompt) if body.debug else None,
         chunks=_chunk_refs(chunks),
     )

@@ -106,3 +106,45 @@ def list_table_columns(config: dict, table_name: str) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def list_foreign_keys(config: dict) -> list[dict[str, Any]]:
+    """Foreign-key constraints in the configured schema."""
+    schema = config.get("schema") or "public"
+    conn = _connect_external(config)
+    try:
+        rows = conn.run(
+            """
+            SELECT
+                kcu.table_schema,
+                kcu.table_name,
+                kcu.column_name,
+                ccu.table_schema AS foreign_table_schema,
+                ccu.table_name AS foreign_table_name,
+                ccu.column_name AS foreign_column_name
+            FROM information_schema.table_constraints AS tc
+            JOIN information_schema.key_column_usage AS kcu
+              ON tc.constraint_schema = kcu.constraint_schema
+             AND tc.constraint_name = kcu.constraint_name
+            JOIN information_schema.constraint_column_usage AS ccu
+              ON ccu.constraint_schema = tc.constraint_schema
+             AND ccu.constraint_name = tc.constraint_name
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+              AND kcu.table_schema = :schema
+            ORDER BY kcu.table_name, kcu.column_name
+            """,
+            schema=schema,
+        )
+    finally:
+        conn.close()
+    return [
+        {
+            "table_schema": row[0],
+            "table_name": row[1],
+            "column_name": row[2],
+            "foreign_table_schema": row[3],
+            "foreign_table_name": row[4],
+            "foreign_column_name": row[5],
+        }
+        for row in rows
+    ]

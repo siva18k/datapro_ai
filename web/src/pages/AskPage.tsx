@@ -18,7 +18,7 @@ import {
   openPipelineTraceTab,
   savePipelineTraceSession,
 } from "../utils/pipelineTraceSession";
-import { buildAskConversationHistory } from "../utils/askConversation";
+import { buildAskConversationHistory, sessionResetTurns } from "../utils/askConversation";
 
 interface Message {
   role: "user" | "assistant";
@@ -147,21 +147,29 @@ export function AskPage() {
     },
     onSuccess: (res, variables) => {
       const completedTrace = variables.debug ? [...pipelineTraceRef.current] : undefined;
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: res.answer,
-          question: res.question ?? variables.displayQuestion,
-          domain_name: res.domain_name,
-          query_kind: res.query_kind,
-          sql: res.sql,
-          columns: res.columns,
-          rows: res.rows,
-          sources: res.sources,
-          pipeline_trace: completedTrace,
-        },
-      ]);
+      const assistantMessage: Message = {
+        role: "assistant",
+        content: res.answer,
+        question: res.question ?? variables.displayQuestion,
+        domain_name: res.domain_name,
+        query_kind: res.query_kind,
+        sql: res.sql,
+        columns: res.columns,
+        rows: res.rows,
+        sources: res.sources,
+        pipeline_trace: completedTrace,
+      };
+
+      if (res.session_reset) {
+        setMessages([
+          ...sessionResetTurns(res),
+          { role: "user", content: variables.displayQuestion },
+          assistantMessage,
+        ]);
+        return;
+      }
+
+      setMessages((prev) => [...prev, assistantMessage]);
     },
   });
 
@@ -393,7 +401,6 @@ export function AskPage() {
           {messages.length === 0 && (
             <div className="py-16 text-center text-sm text-zinc-500">
               <p className="font-medium text-zinc-700">Ask a question</p>
-              <p className="mt-2">Type <code>@</code> to run an agent, <code>@@</code> to run a flow, or ask e.g. travel policy, revenue by region</p>
             </div>
           )}
 

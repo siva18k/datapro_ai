@@ -101,6 +101,8 @@ export const api = {
     request(`/columns/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
 
   getDefinition: (id: string) => request<{ markdown: string; path: string }>(`/datasets/${id}/definition`),
+  getDefinitionRelationships: (id: string) =>
+    request<import("../types").DatasetRelationshipsResult>(`/datasets/${id}/definition/relationships`),
   saveDefinition: (id: string, markdown: string) =>
     request(`/datasets/${id}/definition`, { method: "PUT", body: JSON.stringify({ markdown }) }),
   draftDefinition: (id: string) => request<{ markdown: string }>(`/datasets/${id}/definition/draft`, { method: "POST" }),
@@ -133,7 +135,14 @@ export const api = {
     top_k?: number;
     domain_override?: string;
     domain_overrides?: string[];
-    conversation_history?: { role: string; content: string }[];
+    conversation_history?: {
+      role: string;
+      content: string;
+      question?: string;
+      sql?: string;
+      columns?: string[];
+      rows?: unknown[][];
+    }[];
     backend?: string;
     model?: string;
     debug?: boolean;
@@ -145,7 +154,14 @@ export const api = {
       top_k?: number;
       domain_override?: string;
       domain_overrides?: string[];
-      conversation_history?: { role: string; content: string }[];
+      conversation_history?: {
+      role: string;
+      content: string;
+      question?: string;
+      sql?: string;
+      columns?: string[];
+      rows?: unknown[][];
+    }[];
       backend?: string;
       model?: string;
       debug?: boolean;
@@ -207,6 +223,14 @@ export const api = {
       prompt: string;
       domain_override?: string;
       domain_overrides?: string[];
+      conversation_history?: {
+        role: string;
+        content: string;
+        question?: string;
+        sql?: string;
+        columns?: string[];
+        rows?: unknown[][];
+      }[];
       backend?: string;
       model?: string;
     },

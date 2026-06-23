@@ -444,7 +444,7 @@ export function AskPromptComposer({
                   ? "Add instructions for this flow run…"
                   : selectedAgent
                     ? "Add instructions for this agent run…"
-                    : "Ask a question, type @ for an agent, or @@ for a flow…"
+                    : "Ask a question — @ for an agent, @@ for a flow — e.g. travel policy, revenue by region"
               }
               value={value}
               onChange={onInput}

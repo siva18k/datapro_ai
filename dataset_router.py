@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from catalog_db import get_rag_profile, list_column_metadata, list_sources, list_table_metadata
-from catalog_service import load_dataset_definition
+from catalog_definition import load_definition_for_prompt
 from db import search_chunks
 from query_fuzzy import (
     build_vocabulary,
@@ -45,8 +45,8 @@ def build_dataset_routing_text(source: dict, *, include_definition: bool = True)
 
     if include_definition:
         try:
-            definition = load_dataset_definition(source)
-            if definition:
+            definition = load_definition_for_prompt(source)
+            if definition and definition != "(none)":
                 parts.append(definition)
         except Exception:
             pass

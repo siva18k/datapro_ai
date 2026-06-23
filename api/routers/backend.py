@@ -3,12 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Query
 
 from api_process import (
-    delayed_stop,
     get_server_log_tail,
     get_server_status,
     restart_server,
+    run_stop_server_subprocess,
     start_server,
-    stop_server,
     would_stop_current_process,
 )
 
@@ -32,9 +31,22 @@ def backend_start():
 
 @router.post("/stop")
 def backend_stop(background_tasks: BackgroundTasks):
-    if would_stop_current_process():
-        background_tasks.add_task(delayed_stop)
-        status = _status_payload()
+    status = _status_payload()
+    if not status["reachable"] and not status["listener_pids"]:
+        return {
+            "ok": False,
+            "message": "No API server is running on the configured port.",
+            **status,
+        }
+
+    def _stop_in_subprocess() -> None:
+        run_stop_server_subprocess(
+            host=status.get("host"),
+            port=status.get("port"),
+        )
+
+    if would_stop_current_process(status.get("port")):
+        background_tasks.add_task(_stop_in_subprocess)
         return {
             "ok": True,
             "message": (
@@ -43,7 +55,11 @@ def backend_stop(background_tasks: BackgroundTasks):
             ),
             **status,
         }
-    ok, message = stop_server()
+
+    ok, message = run_stop_server_subprocess(
+        host=status.get("host"),
+        port=status.get("port"),
+    )
     return {"ok": ok, "message": message, **_status_payload()}
 
 

@@ -29,7 +29,6 @@ export function AnalyticsPanel({
         selectedSlugs={selectedDomains}
         onChange={onSelectedDomainsChange}
         title="Domains"
-        hint="Postgres datasets · auto-detect when none selected"
         collapsedHintPrefix="Analytics scope"
       />
     </div>

@@ -28,7 +28,7 @@ from catalog_db import (
     list_sources,
     list_table_metadata,
 )
-from catalog_service import load_dataset_definition
+from catalog_definition import load_definition_for_prompt, prepare_definition_for_llm
 from dataset_router import pick_structured_dataset as _pick_structured_dataset
 from domain_router import route_question
 from api.answer_format import build_sql_summary_prompt
@@ -259,14 +259,22 @@ class StructuredSchemaContext:
     def cataloged_relations(self) -> list[str]:
         return [f"{t['table_schema']}.{t['table_name']}" for t in self.tables]
 
+    def _active_tables(self) -> list[dict[str, Any]]:
+        return [
+            t
+            for t in self.tables
+            if t.get("enabled", True) and (t.get("table_role") or "fact") != "excluded"
+        ]
+
     def to_llm_prompt_block(self) -> str:
-        relations = self.cataloged_relations()
+        relations = [f"{t['table_schema']}.{t['table_name']}" for t in self._active_tables()]
+        definition = prepare_definition_for_llm(self.dataset_definition_md)
         lines = [
             f"# Dataset: {self.source_name}",
             f"Domain: {self.domain_name}",
             f"Connector: {self.connector}",
             "",
-            "## Allowed tables (use ONLY these exact names in FROM/JOIN)",
+            "## Allowed tables (use ONLY these exact schema-qualified names)",
         ]
         if relations:
             for rel in relations:
@@ -276,31 +284,43 @@ class StructuredSchemaContext:
         lines.extend(
             [
                 "",
-                "Do NOT invent table names (e.g. use `customer_profiles`, not `customers`).",
+                "Do NOT invent table or column names (e.g. use `customer_profiles`, not `customers`).",
                 "",
                 "## Dataset definition",
-                self.dataset_definition_md or "(none)",
+                "Authoritative for dataset scope, join paths (hub/bridge tables), analytics patterns, and caveats.",
+                "Read this before writing SQL — prefer documented join paths over guessing foreign keys.",
                 "",
-                "## Tables (detail)",
+                definition,
+                "",
+                "## Column reference (exact names and types)",
             ]
         )
-        for table in self.tables:
-            lines.append(f"### {table['table_schema']}.{table['table_name']}")
-            if table.get("definition"):
-                lines.append(table["definition"])
+        for table in self._active_tables():
+            role = table.get("table_role") or "fact"
+            lines.append(f"### {table['table_schema']}.{table['table_name']} (role: {role})")
+            table_def = (table.get("definition") or "").strip()
+            if table_def:
+                lines.append(table_def)
             lines.append("Columns:")
-            for col in table.get("columns") or []:
-                labels = ", ".join(col.get("labels") or []) or "—"
-                desc = col.get("description") or ""
+            columns = table.get("columns") or []
+            if not columns:
+                lines.append("- (no columns cataloged)")
+            for col in columns:
+                labels = ", ".join(col.get("labels") or [])
+                desc = (col.get("description") or "").strip()
+                extra = ""
+                if labels:
+                    extra += f" labels: [{labels}]"
+                if desc:
+                    extra += f" — {desc}"
                 lines.append(
-                    f"- `{col['column_name']}` ({col.get('data_type', '?')}) "
-                    f"labels: [{labels}] {desc}".strip()
+                    f"- `{col['column_name']}` ({col.get('data_type', '?')}){extra}".strip()
                 )
             lines.append("")
         lines.append(
-            "Rules: generate READ-ONLY SELECT only; every table reference must match an "
-            "entry in Allowed tables exactly; use labeled columns per business meaning; "
-            "limit rows unless user asks for full export."
+            "SQL rules: READ-ONLY SELECT only; schema-qualify every table; use Column reference "
+            "for exact column names; follow Dataset definition join paths; LIMIT rows unless the "
+            "user requests a full export."
         )
         return "\n".join(lines)
 
@@ -383,6 +403,8 @@ def build_schema_context(source_id: str) -> StructuredSchemaContext:
     for table in list_table_metadata(source_id):
         if not table.get("enabled", True):
             continue
+        if (table.get("table_role") or "fact") == "excluded":
+            continue
         tables_out.append(
             {
                 **table,
@@ -396,7 +418,7 @@ def build_schema_context(source_id: str) -> StructuredSchemaContext:
         domain_id=source["domain_id"],
         domain_name=source.get("domain_name", ""),
         connector=source["connector"],
-        dataset_definition_md=load_dataset_definition(source),
+        dataset_definition_md=load_definition_for_prompt(source),
         tables=tables_out,
     )
 
@@ -414,12 +436,14 @@ def build_domain_schema_context(domain_id: str, primary_source_id: str) -> Struc
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
         if source.get("connector") != "postgres":
             continue
-        def_md = load_dataset_definition(source)
-        if def_md.strip():
+        def_md = load_definition_for_prompt(source)
+        if def_md.strip() and def_md != "(none)":
             definition_parts.append(f"### {source['name']}\n{def_md}")
         columns_by_table = list_columns_by_source(source["id"])
         for table in list_table_metadata(source["id"]):
             if not table.get("enabled", True):
+                continue
+            if (table.get("table_role") or "fact") == "excluded":
                 continue
             key = (table["table_schema"], table["table_name"])
             if key in seen:
@@ -439,10 +463,19 @@ def build_domain_schema_context(domain_id: str, primary_source_id: str) -> Struc
     )
 
 
+def _normalize_sql_for_validation(sql: str) -> str:
+    text = sql.strip().rstrip(";")
+    text = re.sub(r"--[^\n]*", "", text)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return text.strip().lower()
+
+
 def validate_readonly_sql(sql: str) -> None:
-    """Reject anything that is not a single read-only SELECT."""
-    normalized = sql.strip().rstrip(";").lower()
-    if not normalized.startswith("select"):
+    """Reject anything that is not a single read-only SELECT (WITH ... SELECT is allowed)."""
+    normalized = _normalize_sql_for_validation(sql)
+    if not (normalized.startswith("select") or normalized.startswith("with")):
+        raise ValueError("Only SELECT statements are allowed")
+    if normalized.startswith("with") and not re.search(r"\bselect\b", normalized):
         raise ValueError("Only SELECT statements are allowed")
     forbidden = (
         "insert",
@@ -466,6 +499,118 @@ def validate_readonly_sql(sql: str) -> None:
         raise ValueError("Multiple statements are not allowed")
 
 
+@dataclass
+class SqlValidationResult:
+    """Result of the pre-execution SQL validation gate."""
+
+    valid: bool
+    violations: list[str] = field(default_factory=list)
+    phantom_tables: list[str] = field(default_factory=list)
+    phantom_columns: list[str] = field(default_factory=list)
+
+    @property
+    def is_catalog_violation(self) -> bool:
+        """True when SQL references tables not in the catalog — trigger repair."""
+        return bool(self.phantom_tables)
+
+
+def _extract_sql_identifiers(sql: str) -> tuple[set[str], set[str]]:
+    """
+    Extract table references and selected column identifiers from SQL text.
+    Returns (table_refs, column_refs) as lowercase name sets (unqualified).
+    Best-effort — regex-based, not a full parser.
+    """
+    normalized = sql.lower()
+
+    # Table references: FROM x, JOIN x, from schema.x, join schema.x
+    table_pattern = re.compile(
+        r"(?:from|join)\s+(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)"
+        r"(?:\s+(?:as\s+)?[a-z_][a-z0-9_]*)?",
+        re.I,
+    )
+    table_refs = {m.group(1).lower() for m in table_pattern.finditer(normalized)}
+
+    # Column references: simple name.col or bare col in SELECT list (before FROM)
+    from_pos = normalized.find("from")
+    select_clause = normalized[6:from_pos] if from_pos > 0 else ""
+    col_pattern = re.compile(r"(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)")
+    col_refs = {
+        m.group(1).lower()
+        for m in col_pattern.finditer(select_clause)
+        if m.group(1) not in {"select", "distinct", "as", "case", "when", "then", "else", "end"}
+    }
+
+    return table_refs, col_refs
+
+
+def validate_generated_sql(
+    sql: str,
+    schema_context: "StructuredSchemaContext",
+) -> SqlValidationResult:
+    """
+    Explicit pre-execution validation gate — runs before hitting the database.
+
+    Checks:
+    1. Read-only / syntax (via validate_readonly_sql)
+    2. All table references are in the catalog Allowed tables
+    3. Selected columns exist in at least one cataloged table (best-effort)
+
+    Returns SqlValidationResult; callers use .is_catalog_violation to decide
+    whether to trigger repair before the first DB round-trip.
+    """
+    phantom_tables: list[str] = []
+    phantom_columns: list[str] = []
+
+    # Gate 1: read-only syntax
+    try:
+        validate_readonly_sql(sql)
+    except ValueError as exc:
+        return SqlValidationResult(valid=False, violations=[str(exc)])
+
+    if not schema_context or not schema_context.tables:
+        return SqlValidationResult(valid=True)
+
+    # Build catalog name sets
+    allowed_table_names = {t["table_name"].lower() for t in schema_context.tables}
+    all_column_names: set[str] = set()
+    for table in schema_context.tables:
+        for col in table.get("columns") or []:
+            all_column_names.add(col["column_name"].lower())
+
+    # Gate 2: catalog table check
+    sql_tables, sql_cols = _extract_sql_identifiers(sql)
+    # Filter out SQL keywords and aliases that look like table names
+    sql_keywords = {
+        "select", "from", "where", "join", "inner", "outer", "left", "right",
+        "full", "cross", "on", "and", "or", "not", "in", "as", "by", "group",
+        "order", "having", "limit", "offset", "union", "all", "distinct",
+        "null", "true", "false", "case", "when", "then", "else", "end",
+        "count", "sum", "avg", "min", "max", "coalesce", "cast", "extract",
+        "date", "now", "interval", "asc", "desc",
+    }
+    candidate_tables = sql_tables - sql_keywords
+    catalog_violations: list[str] = []
+    for tname in candidate_tables:
+        if tname not in allowed_table_names:
+            phantom_tables.append(tname)
+            catalog_violations.append(f"Table `{tname}` is not in the catalog Allowed tables")
+
+    # Gate 3: column check (warn only — aliases make strict checking unreliable)
+    candidate_cols = sql_cols - sql_keywords - allowed_table_names
+    for cname in candidate_cols:
+        if len(cname) <= 2:  # skip short tokens (a, id, etc.)
+            continue
+        if cname not in all_column_names:
+            phantom_columns.append(cname)
+
+    return SqlValidationResult(
+        valid=True,
+        violations=catalog_violations,
+        phantom_tables=phantom_tables,
+        phantom_columns=phantom_columns,
+    )
+
+
 def _is_recoverable_sql_error(message: str) -> bool:
     lower = message.lower()
     return (
@@ -486,10 +631,19 @@ def generate_and_execute_readonly_sql(
     backend: str = "mistral",
     base_url: str = "http://localhost:11434",
     max_attempts: int = 2,
+    rag_chunks: list[dict[str, Any]] | None = None,
+    mcp_supplement: str = "",
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[str], list[list[Any]], list[str]]:
     """Generate SQL from catalog schema, execute, retry on errors, then partial fallback."""
     from api.llm import generate_partial_sql, generate_sql, repair_sql
     from api.schema_gaps import analyze_schema_gaps, note_from_sql_error
+    from hybrid_prompt import build_sql_rag_supplement, merge_generation_supplements, prioritize_chunks
+    from structured_follow_up import (
+        apply_structured_transform,
+        extract_prior_structured_result,
+        plan_structured_follow_up,
+    )
 
     if not schema_context.tables:
         raise ValueError(
@@ -497,19 +651,98 @@ def generate_and_execute_readonly_sql(
             "Data tab → discover and add tables before running analytics."
         )
 
-    gap_analysis = analyze_schema_gaps(question, schema_context)
-    notes: list[str] = list(gap_analysis.notes)
-    gap_instructions = gap_analysis.skip_instructions
+    history = conversation_history or []
+    prior = extract_prior_structured_result(history)
+    active_question = question
+    chat_history = [{"role": t["role"], "content": t["content"]} for t in history if t.get("content")]
+
+    if prior and len(history) >= 2:
+        follow_up = plan_structured_follow_up(
+            question,
+            history,
+            prior,
+            model=model,
+            backend=backend,
+            base_url=base_url,
+        )
+        if follow_up.notes:
+            notes_from_plan = list(follow_up.notes)
+        else:
+            notes_from_plan = []
+        if follow_up.mode == "transform" and follow_up.transform_spec:
+            columns, rows = apply_structured_transform(prior, follow_up.transform_spec)
+            return prior.sql or "", columns, rows, notes_from_plan
+        active_question = follow_up.refined_question
+    else:
+        notes_from_plan = []
+
+    gap_analysis = analyze_schema_gaps(active_question, schema_context)
+    notes: list[str] = notes_from_plan + list(gap_analysis.notes)
+    gap_instructions = gap_analysis.skip_instructions + gap_analysis.join_hints
+    rag_supplement = merge_generation_supplements(
+        build_sql_rag_supplement(prioritize_chunks(rag_chunks or [])),
+        mcp_supplement,
+    )
     errors: list[str] = []
 
     sql = generate_sql(
-        question,
+        active_question,
         schema_context,
         model=model,
         backend=backend,
         base_url=base_url,
         gap_instructions=gap_instructions,
+        rag_supplement=rag_supplement,
+        conversation_history=chat_history,
+        prior_result=prior,
     )
+
+    # ── Explicit pre-execution validation gate ──────────────────────────────
+    # Catch catalog violations (phantom tables/columns) before the DB round-trip.
+    # Repair immediately rather than spending a DB error on something we already know is wrong.
+    validation = validate_generated_sql(sql, schema_context)
+    if not validation.valid:
+        # Hard violation (e.g. non-SELECT) — treat as immediate error.
+        raise ValueError(
+            f"SQL validation failed: {'; '.join(validation.violations)}"
+        )
+    if validation.is_catalog_violation:
+        phantom_note = (
+            "SQL referenced tables not in the catalog — repaired before execution."
+        )
+        if phantom_note not in notes:
+            notes.append(phantom_note)
+        violation_text = (
+            "Validation error — tables not in catalog: "
+            + ", ".join(f"`{t}`" for t in validation.phantom_tables)
+        )
+        errors.append(violation_text)
+        sql = repair_sql(
+            active_question,
+            schema_context,
+            sql,
+            violation_text,
+            model=model,
+            backend=backend,
+            base_url=base_url,
+            gap_instructions=gap_instructions,
+            rag_supplement=rag_supplement,
+            conversation_history=chat_history,
+            prior_result=prior,
+        )
+        # Re-validate the repaired SQL
+        recheck = validate_generated_sql(sql, schema_context)
+        if not recheck.valid:
+            raise ValueError(
+                f"SQL still invalid after repair: {'; '.join(recheck.violations)}"
+            )
+        if recheck.phantom_tables:
+            raise ValueError(
+                "SQL still references tables not in the catalog after repair: "
+                + ", ".join(f"`{t}`" for t in recheck.phantom_tables)
+            )
+    # ────────────────────────────────────────────────────────────────────────
+
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -525,7 +758,7 @@ def generate_and_execute_readonly_sql(
             if attempt >= max_attempts - 1 or not _is_recoverable_sql_error(err_text):
                 break
             sql = repair_sql(
-                question,
+                active_question,
                 schema_context,
                 sql,
                 err_text,
@@ -533,16 +766,20 @@ def generate_and_execute_readonly_sql(
                 backend=backend,
                 base_url=base_url,
                 gap_instructions=gap_instructions,
+                rag_supplement=rag_supplement,
+                conversation_history=chat_history,
+                prior_result=prior,
             )
 
     partial_note = "Showing a partial answer — some requested data was not available in the catalog."
     try:
         sql = generate_partial_sql(
-            question,
+            active_question,
             schema_context,
             failed_sql=sql,
             error_messages=errors,
             gap_instructions=gap_instructions,
+            rag_supplement=rag_supplement,
             model=model,
             backend=backend,
             base_url=base_url,

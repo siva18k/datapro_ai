@@ -159,7 +159,17 @@ def build_prompt_via_domain_mcp(
     return None, None
 
 
-def read_bound_resources_for_domain(domain_id: str | None) -> list[dict[str, Any]]:
+def _expand_resource_uri(uri: str, domain_slug: str | None) -> str:
+    if domain_slug and "{domain}" in uri:
+        return uri.replace("{domain}", domain_slug)
+    return uri
+
+
+def read_bound_resources_for_domain(
+    domain_id: str | None,
+    *,
+    domain_slug: str | None = None,
+) -> list[dict[str, Any]]:
     """Optional context from bound MCP resources (best-effort)."""
     if not domain_id:
         return []
@@ -169,14 +179,21 @@ def read_bound_resources_for_domain(domain_id: str | None) -> list[dict[str, Any
         uri = resource.get("capability_name")
         if not url or not uri or not check_mcp_server(url):
             continue
+        resolved_uri = _expand_resource_uri(uri, domain_slug)
         try:
-            content = read_resource_preview(url, uri)
+            content = read_resource_preview(url, resolved_uri)
         except Exception:
-            continue
+            if resolved_uri != uri:
+                try:
+                    content = read_resource_preview(url, uri)
+                except Exception:
+                    continue
+            else:
+                continue
         if content:
             out.append(
                 {
-                    "uri": uri,
+                    "uri": resolved_uri,
                     "server": resource.get("server_slug"),
                     "content": content[:4000],
                 }

@@ -142,36 +142,48 @@ Files from upload/path connectors become chunks in `knowledge_chunks`. Postgres 
 
 Migrations in `migrations/`; schema name defaults to `ragpro` (`DB_SCHEMA`). Connection setup for new clones: [catalog-database.md](catalog-database.md).
 
-## Ask flow (document RAG today)
+## Ask flow
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant W as React Ask page
     participant A as POST /api/ask
-    participant R as domain_router
-    participant E as Embedder
-    participant V as pgvector search
+    participant P as query_planner
+    participant M as mcp_ask_planner
+    participant S as structured_orchestrator
+    participant V as pgvector / MCP search
     participant L as LLM
 
     U->>W: Question
     W->>A: question, top_k, domain_override
-    A->>R: route_question()
-    R-->>A: domain_id, confidence
-    A->>E: encode question
-    A->>V: search_chunks(domain_id, top_k)
-    V-->>A: chunks + distances
-    A->>L: build_domain_rag_prompt + generate_answer
+    A->>P: resolve_query_plan()
+    P-->>A: domain, dataset, execution_kind
+    A->>M: plan_mcp_enrichment (bound tools/resources/prompts)
+    M-->>A: MCP context supplement
+    alt sql or hybrid
+        A->>V: retrieve chunks (MCP search_documents or vector)
+        A->>S: generate SQL + live query
+        S->>L: definition + schema + RAG + MCP context
+        L-->>S: SELECT
+        S-->>A: rows
+        A->>L: summarize (+ hybrid doc blend)
+    else rag
+        A->>V: retrieve chunks
+        A->>L: MCP prompt or RAG prompt + MCP context
+    end
     L-->>A: answer text
-    A-->>W: answer, sources, domain_name
+    A-->>W: answer, sources, domain_name, usage flags
     W-->>U: Chat bubble + expandable sources
 ```
 
-`domain_override` skips routing. Otherwise `domain_router` scores domains from catalog keywords/embeddings. No hits in the routed domain → search widens globally.
+`domain_override` skips routing. Otherwise `query_planner` / `domain_router` pick domain and execution path (`sql`, `rag`, `hybrid`).
 
-`orchestrator.py` already classifies `execution_kind` (`sql`, `python`, `hybrid`) but `/api/ask` still uses vector RAG only for now — wiring structured paths is the next step.
+**Follow-up context (Ask and Analytics):** The UI sends recent turns plus the prior structured result (SQL, columns, rows) in `conversation_history`. Before each request, `conversation_session.py` either (a) detects a **new topic** via LLM and clears context, (b) after **N follow-ups** (Settings → `ASK_CONVERSATION_TURNS`, default 5) **summarizes** the session and starts a fresh chat, or (c) keeps context for a true follow-up. `structured_follow_up.py` then decides transform vs refined SQL.
 
-## Execution kinds (where it's headed)
+**Domain MCP bindings** (Catalog → domain → MCP servers) let Ask call bound **tools** (e.g. `search_documents`, `list_domain_sources`), read **resources** (domain/source URIs), and render **prompts** (e.g. `domain_grounded_answer`). `mcp_ask_planner.py` uses a small LLM call to choose which capabilities help for each question, with a heuristic fallback when the planner is unavailable.
+
+## Execution kinds
 
 | Kind | For | What happens |
 |------|-----|--------------|
@@ -183,6 +195,8 @@ sequenceDiagram
 Pipeline we're aiming for: route domain + dataset → load `definition.md` and schema context → LLM generates SQL or Python to shrink data → run in a sandbox (not inside the API process) → answer LLM gets curated rows plus optional chunks.
 
 `GET /api/datasets/{id}/schema-context` returns prompt blocks for SQL/Python grounding.
+
+**Structured SQL prompts** assemble context in this order: allowed tables → dataset definition → column reference → optional **retrieved RAG chunks** and **MCP domain context** (resources + tool results from bindings). Catalog definition and columns remain authoritative for table/column names and joins. Fact table rows are queried live from the source database — only metadata and lookup rows are RAG-embedded.
 
 ## Ingest
 
@@ -216,4 +230,4 @@ SQL path is read-only by design; dataset credentials sit in catalog config (encr
 - New domain: UI or `POST /api/domains`
 - Routing tweaks: `domain_router.py` or richer domain descriptions
 - Agents: MCP tools or plain `/api/ask`
-- Structured Ask: wire `structured_orchestrator` / `code_orchestrator` into `api/routers/ask.py`
+- Domain MCP: bind tools/resources/prompts per domain in Catalog → MCP; Ask uses `mcp_ask_planner` automatically

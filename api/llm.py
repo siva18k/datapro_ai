@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import requests
 
 from llm_providers import API_KEY_ENV, DEFAULT_MODELS
@@ -32,8 +34,42 @@ def _strip_sql_response(text: str) -> str:
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
-        text = "\n".join(lines)
+        text = "\n".join(lines).strip()
+    # Models sometimes prepend prose or labels before the query.
+    match = re.search(r"\b(with|select)\b", text, re.I)
+    if match:
+        text = text[match.start() :]
     return text.strip().rstrip(";")
+
+
+_SQL_GENERATION_RULES = """
+Rules:
+- Return ONLY the SQL (no markdown, no explanation).
+- Read the Dataset definition section first — it documents scope, join paths, hub/bridge tables, and caveats.
+- Use Column reference for exact column names and types — never invent columns (e.g. no balance if not listed).
+- Use ONLY tables listed under Allowed tables — never invent names like customers, orders, or products.
+- Follow join paths from the Dataset definition (especially hub and bridge tables) instead of guessing FKs.
+- If a dimension is listed as unavailable below, omit it — do not fail; answer with what exists.
+- Schema-qualify every table exactly as shown (e.g. finance_data.customer_profiles).
+- SELECT only — no INSERT, UPDATE, DELETE, DDL.
+- Prefer COUNT/SUM/aggregates when the question asks "how many" or totals.
+- For overview / "tell me about" questions, SELECT representative columns with LIMIT 25 (or COUNT + sample rows).
+- When prior conversation or query results are provided, treat the latest message as a follow-up — keep the same filters, grouping, and grain unless the user clearly changes scope.
+""".strip()
+
+
+def _sql_context_block(
+    *,
+    conversation_history: list[dict[str, str]] | None = None,
+    prior_result=None,
+) -> str:
+    from conversation_context import format_conversation_block, format_prior_result_block
+
+    history_block = format_conversation_block(conversation_history)
+    prior_block = format_prior_result_block(prior_result)
+    if not history_block and not prior_block:
+        return ""
+    return f"{history_block}{prior_block}"
 
 
 def generate_sql(
@@ -44,24 +80,25 @@ def generate_sql(
     backend: str | None = None,
     base_url: str | None = None,
     gap_instructions: str = "",
+    rag_supplement: str = "",
+    conversation_history: list[dict[str, str]] | None = None,
+    prior_result=None,
 ) -> str:
     """LLM text-to-SQL from catalog schema context."""
+    rag_block = f"\n{rag_supplement.strip()}\n" if rag_supplement.strip() else ""
+    context_block = _sql_context_block(
+        conversation_history=conversation_history,
+        prior_result=prior_result,
+    )
     prompt = f"""You are a PostgreSQL expert. Write ONE read-only SELECT query to answer the user question.
 
 {schema_context.to_llm_prompt_block()}
-
-User question:
+{rag_block}
+{context_block}User question:
 {question}
 {gap_instructions}
 
-Rules:
-- Return ONLY the SQL (no markdown, no explanation).
-- Use ONLY tables listed under "Allowed tables" — never invent names like customers, orders, or products.
-- If a dimension is listed as unavailable above, omit it — do not fail; answer with what exists.
-- Schema-qualify every table exactly as shown (e.g. finance_data.customer_profiles).
-- SELECT only — no INSERT, UPDATE, DELETE, DDL.
-- Prefer COUNT/SUM/aggregates when the question asks "how many" or totals.
-- For overview / "tell me about" questions, SELECT representative columns with LIMIT 25 (or COUNT + sample rows).
+{_SQL_GENERATION_RULES}
 """
     raw = generate_answer(prompt, model=model, backend=backend, base_url=base_url)
     return _strip_sql_response(raw)
@@ -77,13 +114,21 @@ def repair_sql(
     backend: str | None = None,
     base_url: str | None = None,
     gap_instructions: str = "",
+    rag_supplement: str = "",
+    conversation_history: list[dict[str, str]] | None = None,
+    prior_result=None,
 ) -> str:
     """Rewrite SQL after a PostgreSQL execution error."""
+    rag_block = f"\n{rag_supplement.strip()}\n" if rag_supplement.strip() else ""
+    context_block = _sql_context_block(
+        conversation_history=conversation_history,
+        prior_result=prior_result,
+    )
     prompt = f"""You are a PostgreSQL expert. Fix the failed query using ONLY cataloged tables.
 
 {schema_context.to_llm_prompt_block()}
-
-User question:
+{rag_block}
+{context_block}User question:
 {question}
 {gap_instructions}
 
@@ -95,8 +140,10 @@ Database error:
 
 Rules:
 - Return ONLY the corrected SELECT (no markdown, no explanation).
+- Read the Dataset definition for correct join paths — use bridge/hub tables as documented.
 - Remove or replace missing tables/columns — skip dimensions that caused the error.
-- Use ONLY tables from "Allowed tables" — map business terms to real names (customers → customer_profiles if listed).
+- Use ONLY tables from Allowed tables — map business terms to real catalog names.
+- Use Column reference for exact column names — do not invent columns.
 - Schema-qualify every table exactly as in the catalog.
 - SELECT only. Prefer a partial answer over failing.
 """
@@ -111,16 +158,18 @@ def generate_partial_sql(
     failed_sql: str = "",
     error_messages: list[str] | None = None,
     gap_instructions: str = "",
+    rag_supplement: str = "",
     model: str | None = None,
     backend: str | None = None,
     base_url: str | None = None,
 ) -> str:
     """Best-effort SQL when full question cannot be answered — skip missing elements."""
     errors = "\n".join(error_messages or []) or "(none)"
+    rag_block = f"\n{rag_supplement.strip()}\n" if rag_supplement.strip() else ""
     prompt = f"""You are a PostgreSQL expert. The user asked a question that could not be fully answered.
 
 {schema_context.to_llm_prompt_block()}
-
+{rag_block}
 User question:
 {question}
 {gap_instructions}
@@ -132,8 +181,9 @@ Errors:
 {errors}
 
 Write ONE simpler read-only SELECT that answers what you CAN from the catalog only.
+- Read the Dataset definition for join paths and caveats before simplifying.
 - Skip any dimension that is missing or caused errors (department, unknown tables, etc.).
-- Use ONLY allowed catalog tables.
+- Use ONLY allowed catalog tables and Column reference column names.
 - Return ONLY the SQL (no markdown).
 """
     raw = generate_answer(prompt, model=model, backend=backend, base_url=base_url)

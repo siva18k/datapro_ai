@@ -12,8 +12,8 @@ except ImportError:
 
 if load_dotenv is not None:
     project_env = Path(__file__).resolve().parent / ".env"
-    load_dotenv(project_env, override=False)
-    load_dotenv(override=False)
+    # Project .env is authoritative — override stale/empty vars inherited from the shell or Vite.
+    load_dotenv(project_env, override=True)
 
 
 def _load_config():
@@ -25,27 +25,30 @@ def _load_config():
 
 
 def get_db_config():
-    cfg = _load_config()
+    """Resolve DB connection from project .env (Settings), not only process environment."""
+    from settings_service import get_raw_settings
 
-    host = cfg.get("PGHOST")
-    port = int(cfg.get("PGPORT", 5432))
-    user = cfg.get("PGUSER")
-    password = cfg.get("PGPASSWORD")
-    database = cfg.get("PGDATABASE")
-    schema = cfg.get("DB_SCHEMA", "ragpro")
-    sslmode = cfg.get("PGSSLMODE", "require")
+    cfg = get_raw_settings()
+    host = (cfg.get("PGHOST") or "").strip()
+    port = int(cfg.get("PGPORT") or 5432)
+    user = (cfg.get("PGUSER") or "").strip()
+    password = (cfg.get("PGPASSWORD") or "").strip()
+    database = (cfg.get("PGDATABASE") or "").strip()
+    schema = (cfg.get("DB_SCHEMA") or "ragpro").strip() or "ragpro"
+    sslmode = (cfg.get("PGSSLMODE") or "require").strip() or "require"
 
     if cfg.get("DATABASE_URL"):
         parsed = urlparse(cfg["DATABASE_URL"])
-        host = host or parsed.hostname
+        host = host or (parsed.hostname or "")
         port = int(cfg.get("PGPORT") or parsed.port or 5432)
-        user = user or parsed.username
+        user = user or unquote(parsed.username or "")
         password = password or unquote(parsed.password or "")
-        database = database or parsed.path.lstrip("/")
+        database = database or (parsed.path or "").lstrip("/")
 
     if not all([host, user, password, database]):
         raise RuntimeError(
-            "Missing DB config. Set DATABASE_URL or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE."
+            "Missing DB config. Set DATABASE_URL or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE "
+            f"in {Path(__file__).resolve().parent / '.env'}."
         )
 
     return {

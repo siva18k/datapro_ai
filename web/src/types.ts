@@ -54,6 +54,23 @@ export interface ColumnMeta {
   description: string;
 }
 
+export interface DatasetRelationship {
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+  source: string;
+  confidence: string;
+  note: string;
+}
+
+export interface DatasetRelationshipsResult {
+  relationships: DatasetRelationship[];
+  markdown_section: string;
+  merged_markdown: string;
+  table_count: number;
+}
+
 export interface ColumnSyncStats {
   added: number;
   updated: number;
@@ -137,6 +154,9 @@ export interface AskResponse {
   columns?: string[];
   rows?: unknown[][];
   sources: AskSource[];
+  session_reset?: boolean;
+  session_summary?: string | null;
+  new_topic?: boolean;
 }
 
 export interface AskExportResponse {
@@ -181,6 +201,9 @@ export interface AnalyticsResponse {
   query_kind?: string;
   sql?: string;
   notes?: string[];
+  session_reset?: boolean;
+  session_summary?: string | null;
+  new_topic?: boolean;
 }
 
 export interface AgentCapabilities {

@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { CatalogDomainsPanel } from "../components/CatalogDomainsPanel";
 import { DbConnectionModal } from "../components/DbConnectionModal";
 import { DatasetPanel } from "../components/DatasetPanel";
 import { EditableName } from "../components/EditableName";
 import { PageHeader } from "../components/PageHeader";
-import { useApiConnection } from "../context/ApiConnectionContext";
+import { useApiPageState } from "../context/ApiConnectionContext";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
 import { CONNECTOR_LABELS, type Dataset } from "../types";
@@ -16,7 +17,7 @@ const NEW_CONNECTION = "__new__";
 
 export function CatalogPage() {
   const qc = useQueryClient();
-  const { apiOnline, checking: apiChecking } = useApiConnection();
+  const { apiOnline, showConnecting, showOffline, connectingTitle } = useApiPageState();
   const [domainId, setDomainId] = useState<string | null>(null);
   const [openDatasetId, setOpenDatasetId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -182,7 +183,16 @@ export function CatalogPage() {
   );
   useSetSidebarContent(sidebarPanel);
 
-  if (!apiOnline && !apiChecking) {
+  if (showConnecting) {
+    return (
+      <div>
+        <PageHeader title="Data Catalog" description="Datasets by domain" />
+        <ApiConnectingPanel title={connectingTitle} />
+      </div>
+    );
+  }
+
+  if (showOffline) {
     return (
       <div>
         <PageHeader
@@ -412,18 +422,31 @@ function DatasetCard({
 
   return (
     <div className={`catalog-dataset-card ${open ? "border-blue-400" : ""}`}>
-      <div className="flex items-center gap-2 px-4 py-3">
+      <div
+        className="catalog-dataset-header flex cursor-pointer items-center gap-2 px-4 py-3"
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} dataset ${dataset.name}`}
+      >
         <div className="min-w-0 flex-1">
-          <EditableName
-            value={dataset.name}
-            className="font-medium text-zinc-900"
-            inputClassName="w-full font-medium"
-            saving={renaming}
-            onSave={onRename}
-          />
-          <button type="button" className="mt-0.5 block w-full truncate text-left text-sm text-zinc-500 hover:opacity-80" onClick={onToggle}>
-            {meta}
-          </button>
+          <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <EditableName
+              value={dataset.name}
+              className="font-medium text-zinc-900"
+              inputClassName="w-full font-medium"
+              saving={renaming}
+              onSave={onRename}
+            />
+          </div>
+          <p className="mt-0.5 truncate text-sm text-zinc-500">{meta}</p>
         </div>
         <span className="badge-muted badge shrink-0">{dataset.source_type}</span>
         <button
@@ -438,9 +461,9 @@ function DatasetCard({
         >
           {deleting ? "…" : "Delete"}
         </button>
-        <button type="button" className="btn-ghost shrink-0 px-2 text-zinc-400" onClick={onToggle} aria-label="Expand">
+        <span className="shrink-0 px-2 text-zinc-400" aria-hidden="true">
           {open ? "▲" : "▼"}
-        </button>
+        </span>
       </div>
       {open && (
         <div className="catalog-panel-divider">

@@ -11,6 +11,7 @@ from typing import Any
 class SchemaGapAnalysis:
     notes: list[str]
     skip_instructions: str
+    join_hints: str = ""
 
 
 def _table_names(ctx: Any) -> set[str]:
@@ -101,6 +102,22 @@ def analyze_schema_gaps(question: str, ctx: Any) -> SchemaGapAnalysis:
         if not has_geo and not has_country_col:
             notes.append("Geography — no country or region fields in the catalog; location filter was skipped.")
 
+    join_hints = ""
+    if re.search(r"\bsegment", q):
+        segment_tables = _tables_matching(ctx, "segment")
+        bridge_tables = [n for n in _table_names(ctx) if "bridge" in n and "segment" in n]
+        if segment_tables and bridge_tables:
+            qualified = [
+                f"{t['table_schema']}.{t['table_name']}"
+                for t in ctx.tables
+                if "bridge" in t["table_name"].lower() and "segment" in t["table_name"].lower()
+            ]
+            if qualified:
+                join_hints = (
+                    "\n\nJoin hints (from catalog — use bridge tables for segments):\n"
+                    + "\n".join(f"- For segment breakdowns, join through `{name}`" for name in qualified)
+                )
+
     skip_instructions = ""
     if notes:
         skip_instructions = (
@@ -109,4 +126,4 @@ def analyze_schema_gaps(question: str, ctx: Any) -> SchemaGapAnalysis:
             + "\n\nWrite SQL that answers as much as possible using only cataloged data."
         )
 
-    return SchemaGapAnalysis(notes=notes, skip_instructions=skip_instructions)
+    return SchemaGapAnalysis(notes=notes, skip_instructions=skip_instructions, join_hints=join_hints)

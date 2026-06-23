@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from catalog_db import get_source, list_sources
-from catalog_service import get_source_data_path, list_source_files, load_dataset_definition
+from catalog_definition import load_definition_for_prompt, prepare_definition_for_llm
+from catalog_service import get_source_data_path, list_source_files
 from dataset_router import pick_file_dataset
 from domain_router import route_question
 from structured_orchestrator import _ANALYTICAL_PATTERNS, should_use_structured_sql
@@ -91,19 +92,32 @@ class FileDatasetContext:
     dataset_definition_md: str
     files: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_llm_prompt_block(self) -> str:
+    def to_llm_prompt_block(self, *, rag_supplement: str = "") -> str:
+        definition = prepare_definition_for_llm(self.dataset_definition_md)
         lines = [
             f"# Dataset: {self.source_name}",
             f"Domain: {self.domain_name}",
             f"Data directory (read-only): `{self.data_dir}`",
             "",
             "## Dataset definition",
-            self.dataset_definition_md or "(none)",
+            "Authoritative for dataset scope, file selection, and business context.",
+            "",
+            definition,
             "",
             "## Files",
         ]
         for f in self.files:
             lines.append(f"- `{f['name']}` ({f['size_bytes']} bytes, {f['extension']})")
+        if rag_supplement.strip():
+            lines.extend(["", rag_supplement.strip()])
+        else:
+            lines.extend(
+                [
+                    "",
+                    "## Retrieval note",
+                    "No ingested document chunks matched — use the dataset definition and file list above.",
+                ]
+            )
         lines.extend(
             [
                 "",
@@ -188,7 +202,7 @@ def build_file_dataset_context(source_id: str) -> FileDatasetContext:
         domain_name=source.get("domain_name", ""),
         connector=source["connector"],
         data_dir=str(data_path),
-        dataset_definition_md=load_dataset_definition(source),
+        dataset_definition_md=load_definition_for_prompt(source),
         files=files_meta,
     )
 
@@ -339,13 +353,27 @@ def plan_code_curation(
         return None
 
     ctx = build_file_dataset_context(dataset["id"])
+    from hybrid_prompt import build_python_rag_supplement, prioritize_chunks, retrieve_hybrid_chunks
+
+    rag_chunks: list[dict] = []
+    if embedder is not None:
+        rag_chunks = prioritize_chunks(
+            retrieve_hybrid_chunks(
+                question,
+                embedder,
+                domain_id=domain_id,
+                source_id=dataset["id"],
+                top_k=5,
+            )
+        )
+    rag_supplement = build_python_rag_supplement(rag_chunks)
     return CodeExecutionPlan(
         question=question,
         domain_id=domain_id,
         source_id=dataset["id"],
         kind=kind,
         routing=routing,
-        context_prompt=ctx.to_llm_prompt_block(),
+        context_prompt=ctx.to_llm_prompt_block(rag_supplement=rag_supplement),
     )
 
 

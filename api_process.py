@@ -90,9 +90,58 @@ def _get_process_command(pid: int) -> str:
         return ""
 
 
-def _is_api_server_process(pid: int) -> bool:
+def _get_ppid(pid: int) -> int | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "ppid="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        text = result.stdout.strip()
+        return int(text) if text.isdigit() else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def _process_chain(pid: int, *, max_depth: int = 10) -> list[int]:
+    chain = [pid]
+    current = pid
+    for _ in range(max_depth):
+        ppid = _get_ppid(current)
+        if ppid is None or ppid <= 1:
+            break
+        chain.append(ppid)
+        current = ppid
+    return chain
+
+
+def _listener_serves_datapro_api(port: int) -> bool:
+    """True when something on this port responds like the DATA Pro FastAPI app."""
+    try:
+        health = requests.get(build_health_url(port=port), timeout=2)
+        if health.status_code != 200:
+            return False
+        openapi = requests.get(f"{build_api_url(port=port)}/openapi.json", timeout=2)
+        return openapi.status_code == 200 and "DATA Pro API" in openapi.text
+    except requests.RequestException:
+        return False
+
+
+def _is_api_server_process(pid: int, *, port: int | None = None) -> bool:
+    port = port if port is not None else DEFAULT_PORT
     command = _get_process_command(pid)
-    return "uvicorn" in command and "api.main" in command
+    if "uvicorn" in command and "api.main" in command:
+        return True
+    if "multiprocessing.spawn" in command and "spawn_main" in command:
+        for ancestor in _process_chain(pid)[1:]:
+            anc_cmd = _get_process_command(ancestor)
+            if "uvicorn" in anc_cmd and "api.main" in anc_cmd:
+                return True
+        # Orphaned uvicorn --reload worker (parent exited)
+        return _listener_serves_datapro_api(port)
+    return False
 
 
 def _find_listener_pids(port: int) -> list[int]:
@@ -113,7 +162,15 @@ def _find_listener_pids(port: int) -> list[int]:
 
 def find_api_server_pids(port: int | None = None) -> list[int]:
     port = port if port is not None else DEFAULT_PORT
-    return [pid for pid in _find_listener_pids(port) if _is_api_server_process(pid)]
+    listeners = _find_listener_pids(port)
+    if not listeners:
+        return []
+    pids = [pid for pid in listeners if _is_api_server_process(pid, port=port)]
+    if pids:
+        return pids
+    if _listener_serves_datapro_api(port):
+        return listeners
+    return []
 
 
 def _current_process_pids() -> set[int]:
@@ -148,6 +205,28 @@ def _terminate_pid(pid: int) -> None:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         return
+
+
+def _stop_pids(pids: list[int]) -> tuple[list[int], list[str]]:
+    """Stop API listener pid(s) and any uvicorn parent in the same chain."""
+    targets: set[int] = set()
+    for pid in pids:
+        targets.add(pid)
+        for ancestor in _process_chain(pid):
+            cmd = _get_process_command(ancestor)
+            if "uvicorn" in cmd and "api.main" in cmd:
+                targets.add(ancestor)
+                break
+
+    stopped: list[int] = []
+    errors: list[str] = []
+    for pid in sorted(targets, reverse=True):
+        try:
+            _terminate_pid(pid)
+            stopped.append(pid)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+    return stopped, errors
 
 
 def get_server_log_tail(max_lines: int = 80) -> str:
@@ -284,21 +363,17 @@ def stop_server(*, host: str | None = None, port: int | None = None) -> tuple[bo
 
     if not pids:
         _clear_pid()
-        if check_api_server(health_url):
-            return False, (
-                f"Server is still reachable at {build_api_url(host=host, port=port)}, but its process "
-                f"could not be found on port {port}. Stop it manually in your terminal."
-            )
-        return False, "No API server is running on the configured port."
+        if check_api_server(health_url) and _listener_serves_datapro_api(port):
+            pids = _find_listener_pids(port)
+        if not pids:
+            if check_api_server(health_url):
+                return False, (
+                    f"Server is still reachable at {build_api_url(host=host, port=port)}, but its process "
+                    f"could not be found on port {port}. Stop it manually in your terminal."
+                )
+            return False, "No API server is running on the configured port."
 
-    stopped: list[int] = []
-    errors: list[str] = []
-    for pid in pids:
-        try:
-            _terminate_pid(pid)
-            stopped.append(pid)
-        except RuntimeError as exc:
-            errors.append(str(exc))
+    stopped, errors = _stop_pids(pids)
 
     _clear_pid()
     time.sleep(0.5)
@@ -319,9 +394,38 @@ def stop_server(*, host: str | None = None, port: int | None = None) -> tuple[bo
     return True, f"Stopped API server (pid {label})."
 
 
+def run_stop_server_subprocess(*, host: str | None = None, port: int | None = None) -> tuple[bool, str]:
+    """
+    Stop via a fresh Python process so orphaned uvicorn workers get current stop logic.
+    The running API handler may be stale code loaded at worker spawn time.
+    """
+    host = host or DEFAULT_HOST
+    port = port if port is not None else DEFAULT_PORT
+    script = (
+        "from api_process import stop_server; "
+        "ok, msg = stop_server("
+        f"host={host!r}, port={port}"
+        "); "
+        "print(msg); "
+        "import sys; "
+        "sys.exit(0 if ok else 1)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(PROJECT_DIR),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    message = (result.stdout or result.stderr or "").strip() or "Stop failed"
+    if result.returncode == 0:
+        return True, message.splitlines()[-1] if message else "Stopped API server."
+    return False, message.splitlines()[-1] if message else "Failed to stop API server."
+
+
 def delayed_stop(*, host: str | None = None, port: int | None = None, delay: float = 0.75) -> None:
     time.sleep(delay)
-    stop_server(host=host, port=port)
+    run_stop_server_subprocess(host=host, port=port)
 
 
 def restart_server(*, host: str | None = None, port: int | None = None) -> tuple[bool, str]:
@@ -349,7 +453,7 @@ def restart_server(*, host: str | None = None, port: int | None = None) -> tuple
                 "The page may disconnect briefly."
             )
 
-        stop_ok, stop_msg = stop_server(host=host, port=port)
+        stop_ok, stop_msg = run_stop_server_subprocess(host=host, port=port)
         if not stop_ok and get_server_status(host=host, port=port)["reachable"]:
             return False, stop_msg
         time.sleep(0.5)

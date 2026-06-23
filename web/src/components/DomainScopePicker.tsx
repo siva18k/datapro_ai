@@ -12,7 +12,7 @@ export function DomainScopePicker({
   selectedSlugs,
   onChange,
   title = "Domain",
-  hint = "Auto-detect when none selected",
+  hint,
   collapsedHintPrefix = "Domain",
 }: {
   selectedSlugs: string[];

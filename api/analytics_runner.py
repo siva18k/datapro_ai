@@ -10,6 +10,15 @@ from api.analytics_models import AnalyticsRequest, AnalyticsResponse
 from api.answer_format import build_analytics_summary_prompt
 from api.llm import generate_answer, resolve_llm_runtime
 from catalog_service import ensure_catalog_ready, normalize_domain_overrides
+from conversation_context import contextual_question_with_history, truncate_history
+from conversation_session import prepare_session_context
+from hybrid_prompt import prioritize_chunks, retrieve_hybrid_chunks
+from mcp_ask_planner import (
+    execute_mcp_enrichment,
+    format_mcp_context_supplement,
+    plan_mcp_enrichment,
+    resolve_domain_slug,
+)
 from query_planner import resolve_query_plan, structured_fallback_available
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
 
@@ -26,6 +35,31 @@ def _error(message: str) -> dict[str, Any]:
     return {"type": "error", "message": message}
 
 
+def _analytics_history(body: AnalyticsRequest) -> list[dict[str, Any]]:
+    raw = [
+        {
+            "role": t.role,
+            "content": t.content,
+            **({"question": t.question} if t.question else {}),
+            **({"sql": t.sql} if t.sql else {}),
+            **({"columns": t.columns} if t.columns else {}),
+            **({"rows": t.rows} if t.rows is not None else {}),
+        }
+        for t in body.conversation_history
+    ]
+    return truncate_history(raw)
+
+
+def _attach_session(dash: AnalyticsResponse, session) -> AnalyticsResponse:
+    return dash.model_copy(
+        update={
+            "session_reset": session.session_reset,
+            "session_summary": session.session_summary,
+            "new_topic": session.is_new_topic,
+        }
+    )
+
+
 def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str, Any]]:
     ensure_catalog_ready()
     llm_backend, llm_model, llm_base_url = resolve_llm_runtime(
@@ -38,11 +72,36 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         yield _error("Enter a question or dashboard requirements.")
         return
 
+    raw_history = _analytics_history(body)
+    session = prepare_session_context(
+        prompt,
+        raw_history,
+        model=llm_model,
+        backend=llm_backend,
+        base_url=llm_base_url,
+    )
+    history = session.effective_history
+    if session.session_reset and session.session_summary:
+        yield _status("Summarizing prior conversation — starting a new chat…")
+    elif session.is_new_topic:
+        yield _status("New topic detected — processing as a fresh question…")
+    elif session.is_follow_up:
+        yield _status(f"Using {session.prior_turn_count} prior turn(s) for follow-up context…")
+
+    routing_prompt = (
+        contextual_question_with_history(
+            prompt,
+            [{"role": t["role"], "content": t["content"]} for t in history if t.get("content")],
+        )
+        if history
+        else prompt
+    )
+
     yield _status("Analyzing prompt across domains and data sources…")
     selected_domains = normalize_domain_overrides(body.domain_override, body.domain_overrides)
     scope_locked = bool(selected_domains)
     plan = resolve_query_plan(
-        prompt,
+        routing_prompt,
         embedder,
         domain_override=body.domain_override,
         domain_overrides=body.domain_overrides,
@@ -74,12 +133,12 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
             domain_name=plan.domain_name,
             routing_method=plan.routing.get("method"),
         )
-        yield _result(dash)
+        yield _result(_attach_session(dash, session))
         return
 
     yield _status("Loading catalog schema…")
     sql_plan = plan_structured_query(
-        prompt,
+        routing_prompt,
         embedder,
         domain_id=plan.domain_id,
         routing=plan.routing,
@@ -94,14 +153,51 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
             domain_name=plan.domain_name,
             routing_method=plan.routing.get("method"),
         )
-        yield _result(dash)
+        yield _result(_attach_session(dash, session))
         return
 
     ctx = sql_plan.schema_context
     yield _status(f"Querying «{ctx.source_name}» ({len(ctx.tables)} tables)…")
 
+    domain_slug = resolve_domain_slug(plan.domain_id, plan.routing)
+    mcp_plan = plan_mcp_enrichment(
+        prompt,
+        domain_id=plan.domain_id,
+        domain_slug=domain_slug,
+        execution_kind=plan.execution_kind,
+        model=llm_model,
+        backend=llm_backend,
+        base_url=llm_base_url,
+    )
+    mcp_enrichment = execute_mcp_enrichment(
+        mcp_plan,
+        question=prompt,
+        domain_id=plan.domain_id,
+        domain_slug=domain_slug,
+        top_k=5,
+    )
+    mcp_supplement = format_mcp_context_supplement(mcp_enrichment)
+    if mcp_enrichment.trace:
+        yield _status("Loaded domain MCP context for SQL generation…")
+
+    rag_chunks = prioritize_chunks(
+        retrieve_hybrid_chunks(
+            prompt,
+            embedder,
+            domain_id=plan.domain_id,
+            source_id=sql_plan.source_id,
+            top_k=5,
+        )
+    )
+    if rag_chunks:
+        yield _status(f"Found {len(rag_chunks)} ingested chunk(s) for SQL context…")
+    else:
+        yield _status("Generating SQL from catalog definition…")
+
+    if history and len(history) >= 2:
+        yield _status("Interpreting follow-up in context of the prior dashboard…")
+
     try:
-        yield _status("Generating SQL from catalog…")
         sql, columns, rows, sql_notes = generate_and_execute_readonly_sql(
             prompt,
             sql_plan.source_id,
@@ -109,6 +205,9 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
             model=llm_model,
             backend=llm_backend,
             base_url=llm_base_url,
+            rag_chunks=rag_chunks,
+            mcp_supplement=mcp_supplement,
+            conversation_history=history,
         )
         sql_plan.sql = sql
     except Exception as exc:
@@ -122,7 +221,7 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
             sql=getattr(sql_plan, "sql", None) or None,
             notes=[f"Query failed: {exc}"],
         )
-        yield _result(dash)
+        yield _result(_attach_session(dash, session))
         return
 
     yield _status(f"Building dashboard from {len(rows)} row(s)…")
@@ -131,6 +230,7 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         columns=columns,
         rows=rows,
         gap_notes=sql_notes,
+        conversation_history=[{"role": t["role"], "content": t["content"]} for t in history],
     )
     summary = generate_answer(
         summary_prompt,
@@ -149,7 +249,7 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         sql=sql_plan.sql,
         notes=sql_notes,
     )
-    yield _result(dash)
+    yield _result(_attach_session(dash, session))
 
 
 def collect_analytics_response(body: AnalyticsRequest, embedder) -> AnalyticsResponse:

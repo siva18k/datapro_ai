@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 class ConversationTurn(BaseModel):
     role: str
     content: str
+    question: str | None = None
+    sql: str | None = None
+    columns: list[str] | None = None
+    rows: list[list[Any]] | None = None
 
 
 class AskRequest(BaseModel):
@@ -83,6 +87,9 @@ class AskResponse(BaseModel):
     sql: str | None = None
     columns: list[str] | None = None
     rows: list[list] | None = None
+    session_reset: bool = False
+    session_summary: str | None = None
+    new_topic: bool = False
 
 
 class AskExportRequest(BaseModel):

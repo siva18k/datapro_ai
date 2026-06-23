@@ -69,6 +69,22 @@ def call_tool(url: str, tool_name: str, arguments: dict | None = None) -> Any:
     return asyncio.run(_call_tool_raw(url, tool_name, arguments or {}))
 
 
+def call_tool_text(url: str, tool_name: str, arguments: dict | None = None) -> str:
+    """Call an MCP tool and return concatenated text content."""
+    result = call_tool(url, tool_name, arguments or {})
+    if getattr(result, "isError", False):
+        message = ""
+        for block in result.content:
+            if hasattr(block, "text"):
+                message += block.text
+        raise RuntimeError(message or "MCP tool call failed")
+    parts: list[str] = []
+    for block in result.content:
+        if hasattr(block, "text") and block.text:
+            parts.append(block.text)
+    return "\n".join(parts)
+
+
 async def _call_search_documents(
     url: str, query: str, top_k: int, domain: str | None = None
 ) -> list[dict]:

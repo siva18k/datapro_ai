@@ -18,7 +18,31 @@ export function SidebarFooter({ collapsed = false }: { collapsed?: boolean }) {
       }`}
       style={{ borderColor: "var(--color-border-light)", color: "var(--color-text-faint)" }}
     >
-      {!collapsed && <span className="text-xs">React + FastAPI</span>}
+      {!collapsed && (
+        <a
+          href="/about"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs hover:opacity-80 transition-opacity"
+          style={{ color: "var(--color-text-faint)" }}
+          title="About DATA Pro — how it works"
+        >
+          About
+        </a>
+      )}
+      {collapsed && (
+        <a
+          href="/about"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="icon-btn"
+          aria-label="About DATA Pro"
+          title="About DATA Pro"
+          style={{ fontSize: 14 }}
+        >
+          ?
+        </a>
+      )}
       <div className={`sidebar-footer-actions flex items-center ${collapsed ? "" : "gap-1"}`}>
         <NavLink
           to="/settings"

@@ -38,6 +38,8 @@ from structured_db import (
     postgres_config_from_source,
     test_postgres_connection,
 )
+from catalog_definition import draft_dataset_definition, strip_markdown_fences
+from relationship_inference import build_relationships_section, merge_relationships_into_definition
 from code_orchestrator import build_file_dataset_context
 from structured_orchestrator import build_schema_context
 
@@ -313,6 +315,26 @@ def schema_context(dataset_id: str):
     raise HTTPException(400, f"Schema context not supported for connector {source.get('connector')}")
 
 
+@router.get("/datasets/{dataset_id}/definition/relationships")
+def get_definition_relationships(dataset_id: str):
+    """Infer referential relationships from cataloged tables and return markdown for the definition."""
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    if source.get("connector") != "postgres":
+        raise HTTPException(400, "Relationship inference is only available for postgres datasets")
+    try:
+        payload = build_relationships_section(dataset_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    definition_md = strip_markdown_fences(load_dataset_definition(source))
+    merged = merge_relationships_into_definition(definition_md, payload["markdown_section"])
+    return {
+        **payload,
+        "merged_markdown": merged,
+    }
+
+
 @router.get("/datasets/{dataset_id}/definition")
 def get_definition(dataset_id: str):
     source = get_source(source_id=dataset_id)
@@ -329,7 +351,8 @@ def put_definition(dataset_id: str, body: DefinitionBody):
     source = get_source(source_id=dataset_id)
     if not source:
         raise HTTPException(404, "Dataset not found")
-    save_dataset_definition(source, body.markdown)
+    markdown = strip_markdown_fences(body.markdown)
+    save_dataset_definition(source, markdown)
     return {"ok": True, "path": str(get_dataset_definition_path(source))}
 
 
@@ -338,13 +361,10 @@ def draft_definition(dataset_id: str):
     source = get_source(source_id=dataset_id)
     if not source:
         raise HTTPException(404, "Dataset not found")
-    domain_name = source.get("domain_name", "")
-    prompt = (
-        f"Write a data-catalog definition in markdown for dataset '{source['name']}' "
-        f"in domain '{domain_name}', type '{source['connector']}'. "
-        "Sections: Overview, Purpose, Contents, Usage notes, Update cadence. Markdown only."
-    )
-    md = generate_answer(prompt)
+    try:
+        md = draft_dataset_definition(dataset_id, generate_fn=generate_answer)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     save_dataset_definition(source, md)
     return {"markdown": md}
 

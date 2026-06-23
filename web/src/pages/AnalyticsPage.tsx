@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnalyticsDashboard } from "../components/AnalyticsDashboard";
 import { AnalyticsPanel } from "../components/AnalyticsPanel";
@@ -7,14 +7,22 @@ import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
 import type { AnalyticsResponse } from "../types";
+import { buildAskConversationHistory, sessionResetTurns, type ConversationTurn } from "../utils/askConversation";
 
 export function AnalyticsPage() {
   const [prompt, setPrompt] = useState("");
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
   const [dashboard, setDashboard] = useState<AnalyticsResponse | null>(null);
+  const [sessionTurns, setSessionTurns] = useState<ConversationTurn[]>([]);
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
+
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+  });
+  const conversationTurns = settings?.ask?.conversation_turns ?? 5;
 
   const sidebarPanel = useMemo(
     () => (
@@ -48,23 +56,51 @@ export function AnalyticsPage() {
   };
 
   const run = useMutation({
-    mutationFn: (text: string) =>
+    mutationFn: ({ text, history }: { text: string; history: ConversationTurn[] }) =>
       api.analyticsStream(
         {
           prompt: text,
           domain_overrides: selectedDomains.length ? selectedDomains : undefined,
+          conversation_history: history.length ? history : undefined,
         },
         (message) => setActivityStatus(message),
       ),
     onSettled: () => setActivityStatus(null),
-    onSuccess: (res) => setDashboard(res),
+    onSuccess: (res, variables) => {
+      setDashboard(res);
+      const assistantContent = res.summary?.trim() || res.title;
+      const userTurn: ConversationTurn = { role: "user", content: variables.text };
+      const assistantTurn: ConversationTurn = {
+        role: "assistant",
+        content: assistantContent,
+        question: variables.text,
+        sql: res.sql ?? undefined,
+        columns: res.columns ?? undefined,
+        rows: res.rows ?? undefined,
+      };
+
+      if (res.session_reset) {
+        setSessionTurns([...sessionResetTurns(res), userTurn, assistantTurn]);
+        return;
+      }
+
+      setSessionTurns((prev) => [...prev, userTurn, assistantTurn]);
+    },
   });
 
   const submit = () => {
     const text = prompt.trim();
     if (!text || run.isPending) return;
     setDashboard(null);
-    run.mutate(text);
+    const history = buildAskConversationHistory(sessionTurns, conversationTurns);
+    run.mutate({ text, history });
+    setPrompt("");
+  };
+
+  const clearSession = () => {
+    setDashboard(null);
+    setSessionTurns([]);
+    setPrompt("");
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -110,7 +146,7 @@ export function AnalyticsPage() {
                 type="button"
                 className="btn btn-secondary shrink-0"
                 disabled={run.isPending}
-                onClick={() => setDashboard(null)}
+                onClick={clearSession}
               >
                 Clear
               </button>
@@ -126,6 +162,21 @@ export function AnalyticsPage() {
         </div>
 
         <div ref={previewRef} className="analytics-preview min-h-0 flex-1 overflow-y-auto">
+          {dashboard?.session_reset && dashboard.session_summary && (
+            <div className="message-bar message-bar--info m-4" role="status">
+              <div className="message-bar-inner">
+                <p className="message-bar-title">Previous conversation summary</p>
+                <p className="message-bar-hint whitespace-pre-wrap">{dashboard.session_summary}</p>
+              </div>
+            </div>
+          )}
+          {dashboard?.session_reset && dashboard.new_topic && !dashboard.session_summary && (
+            <div className="message-bar message-bar--info m-4" role="status">
+              <div className="message-bar-inner">
+                <p className="message-bar-hint">New topic — prior context cleared.</p>
+              </div>
+            </div>
+          )}
           <AnalyticsDashboard
             data={dashboard}
             isRunning={run.isPending}

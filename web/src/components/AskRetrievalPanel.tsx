@@ -83,7 +83,6 @@ export function AskRetrievalPanel({
         <DomainScopePicker
           selectedSlugs={selectedDomains}
           onChange={onSelectedDomainsChange}
-          hint="Auto-detect when none selected"
         />
       </div>
       <AskOutputOptions selected={outputFormats} onChange={onOutputFormatsChange} />

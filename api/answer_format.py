@@ -50,7 +50,9 @@ def build_sql_summary_prompt(
     follow_up_line = ""
     if history_block:
         follow_up_line = (
-            "The latest user message may be a follow-up — use prior conversation only to interpret it.\n\n"
+            "The latest user message is a follow-up. Use prior conversation to interpret it.\n"
+            "If notes mention a conversion or transformation, explain it briefly in your answer.\n"
+            "Do not change the breakdown or scope unless the user clearly asked to.\n\n"
         )
 
     return f"""You are a business analyst answering in a chat UI.
@@ -74,19 +76,28 @@ def build_analytics_summary_prompt(
     rows: list[list[Any]],
     max_sample_rows: int = 8,
     gap_notes: list[str] | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
     """Brief insight for analytics dashboard — charts/tables render the data."""
+    from conversation_context import format_conversation_block
+
     sample = rows[:max_sample_rows]
+    history_block = format_conversation_block(conversation_history)
     skipped = ""
     if gap_notes:
         skipped = (
-            "\nSome requested dimensions were unavailable:\n"
+            "\nNotes (include methodology in your insight when relevant):\n"
             + "\n".join(f"- {n}" for n in gap_notes)
-            + "\nThe SQL omitted those elements — summarize what the data does show.\n"
+            + "\n"
+        )
+    follow_up = ""
+    if history_block:
+        follow_up = (
+            "This is a follow-up — keep the same scope/grain as the prior answer unless the user changed it.\n"
         )
     return f"""You are a business analyst writing a one-line dashboard insight.
 
-User question:
+{history_block}{follow_up}User question:
 {question}
 {skipped}
 Query returned {len(rows)} row(s).
@@ -96,6 +107,7 @@ Sample rows (for context only — do NOT repeat as a table):
 
 Reply with ONE or TWO short sentences only:
 - State the main finding or headline number.
+- If a conversion or assumption was applied, mention it briefly (e.g. FX rate used).
 - No markdown tables, bullet lists, or row-by-row dumps.
 - No "sorted by" or column listing.
 - Bold one key metric if helpful.

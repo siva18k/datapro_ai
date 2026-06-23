@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { PageHeader } from "../components/PageHeader";
 import { SavedConnectionsPanel } from "../components/SavedConnectionsPanel";
-import { useApiConnection } from "../context/ApiConnectionContext";
-import { api, type DatabaseSettingsPayload, type LlmSettingsPayload } from "../api/client";
+import { useApiPageState } from "../context/ApiConnectionContext";
+import { api, type BackendActionResponse, type BackendStatusResponse } from "../api/client";
+import { devBootstrap, isDevBootstrapAvailable } from "../api/devBootstrap";
 import { parsePostgresUrl } from "../utils/postgresUrl";
 
 const MISTRAL_CUSTOM_MODEL = "__custom__";
@@ -75,7 +77,7 @@ function formatCatalogSummary(
 
 export function SettingsPage() {
   const qc = useQueryClient();
-  const { apiOnline, checking: apiChecking } = useApiConnection();
+  const { apiOnline, showConnecting, showOffline, connectingTitle } = useApiPageState();
   const { data, isLoading } = useQuery({
     queryKey: ["settings"],
     queryFn: api.getSettings,
@@ -179,7 +181,34 @@ export function SettingsPage() {
   });
 
   const backendStop = useMutation({
-    mutationFn: api.backendStop,
+    mutationFn: async (): Promise<BackendActionResponse> => {
+      if (isDevBootstrapAvailable()) {
+        const dev = await devBootstrap.stopApi();
+        if (dev.ok || !dev.reachable) {
+          try {
+            const status = await api.backendStatus();
+            return { ...status, ok: dev.ok, message: dev.message };
+          } catch {
+            const fallback: BackendStatusResponse = {
+              url: dev.url,
+              health_url: `${dev.url}/api/health`,
+              host: "127.0.0.1",
+              port: dev.port,
+              reachable: dev.reachable,
+              running: dev.reachable,
+              source: dev.reachable ? "unknown" : "stopped",
+              status_label: dev.reachable ? "Running (reachable, process not identified on port)" : "Stopped",
+              active_pid: null,
+              listener_pids: [],
+              stopping_self: false,
+              log_path: "",
+            };
+            return { ...fallback, ok: dev.ok, message: dev.message };
+          }
+        }
+      }
+      return api.backendStop();
+    },
     onSuccess: (res) => {
       invalidateBackendStatus();
       setBackendNotice({ ok: res.ok, text: res.message });
@@ -365,9 +394,9 @@ export function SettingsPage() {
         description="Database, models, and servers"
       />
 
-      {apiChecking && !apiOnline && <p className="text-sm text-zinc-500">Connecting to API server…</p>}
+      {showConnecting && <ApiConnectingPanel title={connectingTitle} />}
 
-      {!apiOnline && !apiChecking && <ApiOfflinePanel title="Start the API server" />}
+      {showOffline && <ApiOfflinePanel title="Start the API server" />}
 
       {apiOnline && isLoading && <p className="text-sm text-zinc-500">Loading settings…</p>}
 

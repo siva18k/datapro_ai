@@ -4,21 +4,27 @@ import { useApiConnection } from "../context/ApiConnectionContext";
 import { useStartApiFromWeb } from "../hooks/useStartApiFromWeb";
 
 export function ApiOfflineBanner() {
-  const { apiOnline, checking, connecting, refresh } = useApiConnection();
+  const { apiOnline, apiPending, starting, connecting, retryConnection } = useApiConnection();
   const canStartFromWeb = isDevBootstrapAvailable();
   const startApi = useStartApiFromWeb();
+  const busy = apiPending || startApi.isPending;
 
   if (apiOnline) return null;
 
-  if (checking || connecting || startApi.isPending) {
+  if (busy) {
+    const title = starting || startApi.isPending
+      ? "Starting API server…"
+      : connecting
+        ? "Checking API connection…"
+        : "Checking API connection…";
     return (
       <div className="message-bar message-bar--info" role="status" aria-live="polite">
         <div className="message-bar-inner">
           <div>
-            <p className="message-bar-title">
-              {startApi.isPending ? "Starting API server…" : "Waiting for API connection…"}
+            <p className="message-bar-title">{title}</p>
+            <p className="message-bar-hint">
+              Checking every few seconds. This may take up to 10 seconds while the server loads.
             </p>
-            <p className="message-bar-hint">This may take a few seconds while the server loads.</p>
           </div>
         </div>
       </div>
@@ -50,16 +56,11 @@ export function ApiOfflineBanner() {
         </p>
         <div className="flex flex-wrap gap-2">
           {canStartFromWeb && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={startApi.isPending}
-              onClick={() => startApi.mutate()}
-            >
-              {startApi.isPending ? "Starting…" : "Start API server"}
+            <button type="button" className="btn btn-sm" onClick={() => startApi.mutate()}>
+              Start API server
             </button>
           )}
-          <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={() => void refresh()}>
+          <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={() => void retryConnection()}>
             Retry connection
           </button>
         </div>

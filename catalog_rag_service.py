@@ -10,7 +10,7 @@ from catalog_db import (
     list_table_metadata,
     update_rag_profile,
 )
-from catalog_service import load_dataset_definition
+from catalog_definition import load_definition_for_prompt
 from db import connect, get_db_config, upsert_chunks
 from ingest_service import chunk_text
 from structured_db import postgres_config_from_source
@@ -73,7 +73,7 @@ def delete_structured_rag_chunks(source: dict) -> int:
 def build_catalog_metadata_text(source: dict) -> list[dict[str, str]]:
     """One text block per cataloged table (+ dataset overview)."""
     blocks: list[dict[str, str]] = []
-    definition_md = load_dataset_definition(source)
+    definition_md = load_definition_for_prompt(source)
     overview = [
         f"[Catalog — {source.get('domain_name', '')} / {source.get('name', '')}]",
         f"Dataset: {source.get('name', '')}",

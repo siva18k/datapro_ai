@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { api } from "../api/client";
-import type { ColumnMeta, Dataset, TableMeta } from "../types";
+import type { ColumnMeta, Dataset, TableMeta, TableRole } from "../types";
 import { CONNECTOR_LABELS } from "../types";
+import { mergeRelationshipsSection } from "../utils/definitionRelationships";
 
 type Tab = "definition" | "connection" | "data";
 
@@ -13,7 +14,19 @@ function visibleTabs(connector: string): Tab[] {
   if (connector === "upload" || connector === "file_path") {
     return ["definition", "data"];
   }
-  return ["definition", "connection", "data"];
+  return ["definition", "data", "connection"];
+}
+
+function tableRoleLabel(role?: TableRole): string {
+  switch (role) {
+    case "lookup":
+      return "Lookup";
+    case "excluded":
+      return "Excluded";
+    case "fact":
+    default:
+      return "Fact / dimension";
+  }
 }
 
 function dataTabHint(connector: string): string {
@@ -110,26 +123,91 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
     },
   });
 
-  const draftDef = useMutation({
-    mutationFn: () => api.draftDefinition(dataset.id),
-    onSuccess: (r) => setMd(r.markdown),
-  });
-
   const descSaved = useSaveFlash(descSaveCount);
   const defSaved = useSaveFlash(defSaveCount);
 
+  const { data: catalogTables } = useQuery({
+    queryKey: ["tables", dataset.id],
+    queryFn: () => api.catalogTables(dataset.id),
+    enabled: tab === "definition" && dataset.connector === "postgres",
+  });
+
+  const catalogTablesFingerprint = useMemo(
+    () =>
+      catalogTables
+        ?.map((t) => `${t.id}:${t.table_role ?? "fact"}:${t.table_schema}.${t.table_name}`)
+        .sort()
+        .join("|") ?? "",
+    [catalogTables],
+  );
+
+  const relationshipsFingerprintRef = useRef("");
+  const [relationshipsNotice, setRelationshipsNotice] = useState<string | null>(null);
+
+  const refreshRelationships = useMutation({
+    mutationFn: () => api.getDefinitionRelationships(dataset.id),
+    onSuccess: (data) => {
+      setMd((prev) => mergeRelationshipsSection(prev, data.markdown_section));
+      const count = data.relationships.length;
+      setRelationshipsNotice(
+        count
+          ? `Relationships updated (${count} join path${count === 1 ? "" : "s"} inferred). Save definition to persist.`
+          : "Relationships section updated (no joins inferred yet). Save definition to persist.",
+      );
+    },
+  });
+
+  const draftDef = useMutation({
+    mutationFn: () => api.draftDefinition(dataset.id),
+    onSuccess: (r) => {
+      setMd(r.markdown);
+      relationshipsFingerprintRef.current = catalogTablesFingerprint;
+      qc.invalidateQueries({ queryKey: ["definition", dataset.id] });
+      setRelationshipsNotice("AI draft applied with catalog-grounded content and refreshed relationships.");
+    },
+  });
+
+  useEffect(() => {
+    relationshipsFingerprintRef.current = "";
+    setRelationshipsNotice(null);
+  }, [dataset.id]);
+
+  useEffect(() => {
+    if (tab !== "definition" || dataset.connector !== "postgres") return;
+    if (definition === undefined) return;
+    if ((catalogTables?.length ?? 0) < 2) return;
+    if (!catalogTablesFingerprint) return;
+    if (catalogTablesFingerprint === relationshipsFingerprintRef.current) return;
+    relationshipsFingerprintRef.current = catalogTablesFingerprint;
+    refreshRelationships.mutate();
+  }, [tab, dataset.connector, definition, catalogTablesFingerprint, catalogTables?.length]);
+
   return (
     <div className="card-pad">
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <div className="field mb-0 min-w-[200px] flex-1">
-          <label className="label">Short description</label>
-          <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} />
+      <div className="mb-4">
+        <label className="label" htmlFor={`dataset-desc-${dataset.id}`}>
+          Short description
+        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            id={`dataset-desc-${dataset.id}`}
+            className="input mb-0 min-w-[200px] flex-1"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-secondary shrink-0"
+            onClick={() => saveDesc.mutate()}
+            disabled={saveDesc.isPending}
+          >
+            {saveDesc.isPending ? "Saving…" : "Save description"}
+          </button>
         </div>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => saveDesc.mutate()} disabled={saveDesc.isPending}>
-          {saveDesc.isPending ? "Saving…" : "Save description"}
-        </button>
-        <SaveNotice show={descSaved} message="Description saved" />
-        <ErrorNotice error={saveDesc.isError ? saveDesc.error : null} />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <SaveNotice show={descSaved} message="Description saved" />
+          <ErrorNotice error={saveDesc.isError ? saveDesc.error : null} />
+        </div>
       </div>
 
       <div className="tabs">
@@ -147,7 +225,12 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
 
       {tab === "definition" && (
         <div className="space-y-4">
-          <p className="text-sm text-zinc-500">Markdown definition for analysts and LLMs.</p>
+          <p className="text-sm text-zinc-500">
+            Markdown definition for analysts and LLMs.
+            {dataset.connector === "postgres" && (catalogTables?.length ?? 0) >= 2 && (
+              <> Table relationships are inferred from catalog roles and columns and appended automatically below.</>
+            )}
+          </p>
           <textarea
             className="textarea dataset-definition-textarea font-mono"
             rows={6}
@@ -164,6 +247,16 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
             <button type="button" className="btn btn-secondary" onClick={() => draftDef.mutate()} disabled={draftDef.isPending}>
               {draftDef.isPending ? "Drafting…" : "AI draft"}
             </button>
+            {dataset.connector === "postgres" && (catalogTables?.length ?? 0) >= 2 && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => refreshRelationships.mutate()}
+                disabled={refreshRelationships.isPending}
+              >
+                {refreshRelationships.isPending ? "Inferring…" : "Refresh relationships"}
+              </button>
+            )}
             <a
               className="btn btn-secondary"
               href={`data:text/markdown,${encodeURIComponent(md)}`}
@@ -172,6 +265,12 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
               Download
             </a>
           </div>
+          {relationshipsNotice && (
+            <p className="alert-ok text-sm" role="status">
+              {relationshipsNotice}
+            </p>
+          )}
+          <ErrorNotice error={refreshRelationships.isError ? refreshRelationships.error : null} />
           {md && (
             <details className="catalog-themed-box">
               <summary className="cursor-pointer text-sm font-medium">Preview</summary>
@@ -378,29 +477,53 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
               aria-label="Filter tables"
             />
           </div>
-          <div className="flex max-h-48 flex-wrap gap-2 overflow-auto">
-            {filteredRemoteTables.length === 0 && (
-              <p className="text-sm text-zinc-500">No tables match &quot;{tableSearch}&quot;.</p>
-            )}
-            {filteredRemoteTables.map((t) => (
-              <label
-                key={t}
-                className={`catalog-table-chip ${
-                  catalogedNames.has(t) ? "catalog-table-chip--cataloged" : ""
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedRemote.includes(t)}
-                  disabled={catalogedNames.has(t)}
-                  onChange={(e) =>
-                    setSelectedRemote((prev) => (e.target.checked ? [...prev, t] : prev.filter((x) => x !== t)))
-                  }
-                />
-                {t}
-                {catalogedNames.has(t) && <span className="text-xs opacity-80">(in catalog)</span>}
-              </label>
-            ))}
+          <div className="table-wrap dataset-data-table">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th className="w-10" aria-label="Select" />
+                  <th>Table</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRemoteTables.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      No tables match &quot;{tableSearch}&quot;.
+                    </td>
+                  </tr>
+                )}
+                {filteredRemoteTables.map((t) => {
+                  const inCatalog = catalogedNames.has(t);
+                  return (
+                    <tr key={t}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedRemote.includes(t)}
+                          disabled={inCatalog}
+                          aria-label={`Select ${t}`}
+                          onChange={(e) =>
+                            setSelectedRemote((prev) =>
+                              e.target.checked ? [...prev, t] : prev.filter((x) => x !== t),
+                            )
+                          }
+                        />
+                      </td>
+                      <td className="font-medium">{t}</td>
+                      <td>
+                        {inCatalog ? (
+                          <span className="badge badge-ok">In catalog</span>
+                        ) : (
+                          <span className="badge badge-muted">Available</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
@@ -504,18 +627,23 @@ function TableEditor({ datasetId, tables }: { datasetId: string; tables: TableMe
   }, [flushInputs]);
 
   const [def, setDef] = useState(table?.definition ?? "");
-  const [tableRole, setTableRole] = useState(table?.table_role ?? "fact");
   useEffect(() => {
     setDef(table?.definition ?? "");
-    setTableRole(table?.table_role ?? "fact");
-  }, [table?.id, table?.definition, table?.table_role]);
+  }, [table?.id, table?.definition]);
 
   const saveDef = useMutation({
-    mutationFn: () =>
-      api.updateTable(active!, { definition: def, table_role: tableRole }),
+    mutationFn: () => api.updateTable(active!, { definition: def }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tables"] });
       setTblSaveCount((n) => n + 1);
+    },
+  });
+
+  const saveRole = useMutation({
+    mutationFn: ({ tableId, role }: { tableId: string; role: TableRole }) =>
+      api.updateTable(tableId, { table_role: role }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tables"] });
     },
   });
 
@@ -541,48 +669,84 @@ function TableEditor({ datasetId, tables }: { datasetId: string; tables: TableMe
     }
   };
 
+  const selectTable = (tableId: string) => setActive(tableId);
+
   return (
     <div className="catalog-themed-box">
       <label className="label">Table metadata &amp; columns ({tables.length} tables)</label>
-      <div className="mb-3 flex max-w-md flex-wrap items-center gap-2">
-        <select className="select min-w-0 flex-1" value={active} onChange={(e) => setActive(e.target.value)}>
-          <option value="">Select a table…</option>
-          {tables.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.table_schema}.{t.table_name}
-            </option>
-          ))}
-        </select>
-        {table && (
-          <button
-            type="button"
-            className="btn-ghost btn-sm shrink-0 text-red-600 hover:bg-red-50"
-            disabled={removeTable.isPending}
-            onClick={onRemoveTable}
-          >
-            {removeTable.isPending ? "Removing…" : "Remove"}
-          </button>
-        )}
+      <p className="mb-2 text-xs" style={{ color: "var(--color-text-faint)" }}>
+        Click a row to edit the table definition and column labels. Set role from the dropdown in each row.
+      </p>
+      <div className="table-wrap catalog-table-picker dataset-data-table mb-4">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Table</th>
+              <th>Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tables.map((t) => {
+              const isActive = active === t.id;
+              const role = t.table_role ?? "fact";
+              const roleSaving = saveRole.isPending && saveRole.variables?.tableId === t.id;
+              return (
+                <tr
+                  key={t.id}
+                  className={`catalog-table-picker-row${isActive ? " catalog-table-picker-row--active" : ""}`}
+                  onClick={() => selectTable(t.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selectTable(t.id);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-pressed={isActive}
+                  aria-label={`${t.table_schema}.${t.table_name}, ${tableRoleLabel(role)}`}
+                >
+                  <td className="font-medium">
+                    {t.table_schema}.{t.table_name}
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                    <select
+                      className="select catalog-table-picker-select"
+                      value={role}
+                      disabled={roleSaving}
+                      aria-label={`Role for ${t.table_schema}.${t.table_name}`}
+                      onChange={(e) =>
+                        saveRole.mutate({ tableId: t.id, role: e.target.value as TableRole })
+                      }
+                    >
+                      <option value="fact">Fact / dimension</option>
+                      <option value="lookup">Lookup</option>
+                      <option value="excluded">Excluded</option>
+                    </select>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
+      <ErrorNotice error={saveRole.isError ? saveRole.error : null} />
       <ErrorNotice error={removeTable.isError ? removeTable.error : null} />
       {table && (
         <>
-      <div className="mb-2 flex flex-wrap items-end gap-3">
-        <div className="field mb-0 min-w-[10rem]">
-          <label className="label">Table role</label>
-          <select
-            className="select"
-            value={tableRole}
-            onChange={(e) => setTableRole(e.target.value)}
-          >
-            <option value="fact">Fact / dimension (metadata only)</option>
-            <option value="lookup">Lookup (metadata + row embeddings)</option>
-            <option value="excluded">Excluded from RAG</option>
-          </select>
-        </div>
-        <p className="pb-2 text-xs" style={{ color: "var(--color-text-faint)" }}>
-          Lookup tables embed row values for direct retrieval; facts use catalog text only.
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3" style={{ borderColor: "var(--color-border-light)" }}>
+        <p className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+          {table.table_schema}.{table.table_name}
         </p>
+        <button
+          type="button"
+          className="btn-ghost btn-sm shrink-0"
+          style={{ color: "var(--color-alert-error-text)" }}
+          disabled={removeTable.isPending}
+          onClick={onRemoveTable}
+        >
+          {removeTable.isPending ? "Removing…" : "Remove table"}
+        </button>
       </div>
       <textarea
         className="textarea mb-2 min-h-[72px]"
@@ -848,7 +1012,7 @@ function FileDataTab({ dataset }: { dataset: Dataset }) {
         </p>
       ) : (
         <>
-          <div className="table-wrap">
+          <div className="table-wrap dataset-data-table">
             <table className="data">
               <thead>
                 <tr>

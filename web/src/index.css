@@ -606,6 +606,13 @@ button.sidebar-hint {
   border: 1px solid var(--color-border);
   @apply rounded-lg overflow-hidden;
 }
+.catalog-dataset-header:hover {
+  background: color-mix(in srgb, var(--color-surface-muted) 55%, var(--color-surface));
+}
+.catalog-dataset-header:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
 .catalog-panel-divider {
   border-top: 1px solid var(--color-border-light);
 }
@@ -631,6 +638,59 @@ button.sidebar-hint {
   background: var(--color-badge-ok-bg);
   border-color: color-mix(in srgb, var(--color-badge-ok-text) 35%, var(--color-border));
   color: var(--color-badge-ok-text);
+}
+.catalog-table-picker {
+  @apply max-h-64 overflow-auto;
+}
+.catalog-table-picker-row {
+  cursor: pointer;
+  transition: background-color 0.12s ease, box-shadow 0.12s ease;
+}
+.catalog-table-picker-row:hover {
+  background: color-mix(in srgb, var(--color-surface-muted) 70%, var(--color-surface));
+}
+.catalog-table-picker-row--active {
+  cursor: pointer;
+  background: color-mix(in srgb, var(--color-primary-soft) 88%, var(--color-surface));
+  box-shadow: inset 4px 0 0 var(--color-primary);
+}
+.catalog-table-picker-row--active:hover {
+  background: color-mix(in srgb, var(--color-primary-soft) 96%, var(--color-surface));
+}
+.catalog-table-picker-row--active td:first-child {
+  color: var(--color-primary-text);
+  font-weight: 600;
+}
+.catalog-table-picker-row:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+.catalog-table-picker-select {
+  @apply w-full min-w-[9rem] max-w-[13rem] py-1 text-xs;
+}
+.dataset-data-table.table-wrap {
+  border-color: color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+}
+.dataset-data-table table.data {
+  border-collapse: collapse;
+}
+.dataset-data-table table.data thead th {
+  border-bottom: 1px solid color-mix(in srgb, var(--color-primary) 20%, var(--color-border));
+}
+.dataset-data-table table.data tbody tr {
+  border-top: 1px solid var(--color-border);
+}
+.dataset-data-table table.data tbody tr:first-child {
+  border-top: none;
+}
+.dataset-data-table table.data td,
+.dataset-data-table table.data th {
+  border-left: none;
+  border-right: none;
+  border-top: none;
+}
+.dataset-data-table table.data tbody tr.catalog-table-picker-row--active {
+  border-top-color: color-mix(in srgb, var(--color-primary) 32%, var(--color-border));
 }
 
 /* —— Add dataset row —— */

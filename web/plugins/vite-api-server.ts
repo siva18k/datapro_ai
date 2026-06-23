@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,6 +49,36 @@ function readBody(req: Connect.IncomingMessage): Promise<string> {
   });
 }
 
+/** Load repo-root .env the same way the Python API does (Settings → apply_managed_settings_to_env). */
+function buildApiEnv(projectRoot: string): NodeJS.ProcessEnv {
+  const python = resolvePython(projectRoot);
+  const envPath = path.join(projectRoot, ".env");
+  try {
+    const result = spawnSync(
+      python,
+      [
+        "-c",
+        "from settings_service import apply_managed_settings_to_env; import json, os; "
+          + "print(json.dumps(apply_managed_settings_to_env(dict(os.environ))))",
+      ],
+      { cwd: projectRoot, encoding: "utf8", timeout: 15000 },
+    );
+    if (result.status === 0 && result.stdout.trim()) {
+      const loaded = JSON.parse(result.stdout.trim()) as Record<string, string>;
+      return { ...loaded, API_HOST, API_PORT: String(API_PORT) };
+    }
+    if (result.stderr?.trim()) {
+      console.warn("[datapro] Could not load managed settings:", result.stderr.trim());
+    }
+  } catch (err) {
+    console.warn("[datapro] Could not load managed settings:", err);
+  }
+  if (!fs.existsSync(envPath)) {
+    console.warn(`[datapro] No .env at ${envPath} — start API from repo root or add DATABASE_URL`);
+  }
+  return { ...process.env, API_HOST, API_PORT: String(API_PORT) };
+}
+
 export function apiServerPlugin(): Plugin {
   let proc: ChildProcessWithoutNullStreams | null = null;
   let managed = false;
@@ -95,7 +125,7 @@ export function apiServerPlugin(): Plugin {
       ["-m", "uvicorn", "api.main:app", "--reload", "--host", API_HOST, "--port", String(API_PORT)],
       {
         cwd: projectRoot,
-        env: { ...process.env, API_HOST, API_PORT: String(API_PORT) },
+        env: buildApiEnv(projectRoot),
         detached: false,
         stdio: ["ignore", logHandle, logHandle],
       },
@@ -155,14 +185,16 @@ export function apiServerPlugin(): Plugin {
       if (proc && !proc.killed) proc.kill("SIGKILL");
       proc = null;
       managed = false;
-      return {
-        ok: true,
-        message: "Stopped API server.",
-        reachable: await isApiReachable(),
-        url: `http://${API_HOST}:${API_PORT}`,
-        port: API_PORT,
-        managed: false,
-      };
+      if (!(await isApiReachable())) {
+        return {
+          ok: true,
+          message: "Stopped API server.",
+          reachable: false,
+          url: `http://${API_HOST}:${API_PORT}`,
+          port: API_PORT,
+          managed: false,
+        };
+      }
     }
 
     if (!(await isApiReachable())) {
@@ -176,11 +208,21 @@ export function apiServerPlugin(): Plugin {
       };
     }
 
+    const python = resolvePython(projectRoot);
+    const result = spawnSync(
+      python,
+      [
+        "-c",
+        "from api_process import stop_server; ok, msg = stop_server(); print(msg); import sys; sys.exit(0 if ok else 1)",
+      ],
+      { cwd: projectRoot, encoding: "utf8", timeout: 30000 },
+    );
+    const message = (result.stdout || result.stderr || "").trim() || "Stop failed";
+    const ok = result.status === 0;
     return {
-      ok: false,
-      message:
-        "API server is running but was not started from this dev session. Stop it from Settings or your terminal.",
-      reachable: true,
+      ok,
+      message: ok ? message.split("\n").pop() || "Stopped API server." : message.split("\n").pop() || "Failed to stop API server.",
+      reachable: await isApiReachable(),
       url: `http://${API_HOST}:${API_PORT}`,
       port: API_PORT,
       managed: false,

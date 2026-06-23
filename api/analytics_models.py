@@ -4,11 +4,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from api.ask_models import ConversationTurn
+
 
 class AnalyticsRequest(BaseModel):
     prompt: str
     domain_override: str | None = None
     domain_overrides: list[str] | None = None
+    conversation_history: list[ConversationTurn] = Field(default_factory=list)
     backend: str | None = None
     model: str | None = None
     ollama_base_url: str | None = None
@@ -41,3 +44,6 @@ class AnalyticsResponse(BaseModel):
     query_kind: str | None = None
     sql: str | None = None
     notes: list[str] = Field(default_factory=list)
+    session_reset: bool = False
+    session_summary: str | None = None
+    new_topic: bool = False
