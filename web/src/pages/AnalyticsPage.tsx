@@ -7,7 +7,7 @@ import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
 import type { AnalyticsResponse } from "../types";
-import { buildAskConversationHistory, sessionResetTurns, type ConversationTurn } from "../utils/askConversation";
+import { buildAskConversationHistory, sessionResetTurns, shouldSendConversationHistory, type ConversationTurn } from "../utils/askConversation";
 
 export function AnalyticsPage() {
   const [prompt, setPrompt] = useState("");
@@ -92,9 +92,14 @@ export function AnalyticsPage() {
     const text = prompt.trim();
     if (!text || run.isPending) return;
     setDashboard(null);
-    const history = buildAskConversationHistory(sessionTurns, conversationTurns);
+    const useFollowUp = shouldSendConversationHistory(sessionTurns, text);
+    const history = useFollowUp
+      ? buildAskConversationHistory(sessionTurns, conversationTurns)
+      : [];
+    if (!useFollowUp && sessionTurns.length > 0) {
+      setSessionTurns([]);
+    }
     run.mutate({ text, history });
-    setPrompt("");
   };
 
   const clearSession = () => {
@@ -102,6 +107,8 @@ export function AnalyticsPage() {
     setSessionTurns([]);
     setPrompt("");
   };
+
+  const hasSession = sessionTurns.length > 0 || Boolean(dashboard);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -141,14 +148,15 @@ export function AnalyticsPage() {
             <button type="button" className="btn shrink-0" disabled={run.isPending || !prompt.trim()} onClick={submit}>
               {run.isPending ? "Building…" : "Run"}
             </button>
-            {dashboard && (
+            {hasSession && (
               <button
                 type="button"
                 className="btn btn-secondary shrink-0"
                 disabled={run.isPending}
                 onClick={clearSession}
+                title="Clear follow-up context and start fresh"
               >
-                Clear
+                New chat
               </button>
             )}
           </div>

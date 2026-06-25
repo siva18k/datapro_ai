@@ -188,6 +188,26 @@ export interface AnalyticsChartDefaults {
   chart_title?: string;
 }
 
+export interface TimePeriod {
+  label: string;
+  start: string;
+  end_exclusive: string;
+  granularity?: string;
+  calendar_year?: number;
+  quarter?: number;
+  fiscal_year?: number;
+  fiscal_quarter?: number;
+}
+
+export interface TimeContext {
+  requirement: string;
+  reference_date?: string;
+  fiscal_year_start_month?: number;
+  granularity?: string;
+  source?: "mcp" | "local";
+  periods: TimePeriod[];
+}
+
 export interface AnalyticsResponse {
   title: string;
   summary?: string;
@@ -195,6 +215,7 @@ export interface AnalyticsResponse {
   rows?: unknown[][];
   total_rows?: number;
   chart_defaults?: AnalyticsChartDefaults;
+  time_context?: TimeContext;
   kpis?: KpiWidget[];
   domain_name?: string;
   routing_method?: string;

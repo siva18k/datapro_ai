@@ -9,20 +9,22 @@ from api.answer_format import build_sql_summary_prompt
 from api.llm import generate_answer, resolve_llm_runtime
 from catalog_service import ensure_catalog_ready, normalize_domain_overrides
 from db import chunk_verify_sql, search_chunks
-from mcp_domain_service import (
-    build_prompt_via_domain_mcp,
-    retrieve_chunks_for_scope,
-)
+from mcp_domain_service import retrieve_chunks_for_scope
 from hybrid_prompt import merge_generation_supplements, prioritize_chunks
 from mcp_ask_planner import (
     execute_mcp_enrichment,
     format_mcp_context_supplement,
+    has_domain_mcp_bindings,
     plan_mcp_enrichment,
     resolve_domain_slug,
 )
 from orchestrator import build_domain_rag_prompt, strip_source_citations, _legacy_query_kind
 from query_planner import find_best_rag_domain, resolve_query_plan, structured_fallback_available
-from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
+from structured_orchestrator import (
+    generate_and_execute_readonly_sql,
+    load_table_business_rules_for_domain,
+    plan_structured_query,
+)
 
 from api.ask_models import (
     AskRequest,
@@ -34,6 +36,7 @@ from api.ask_models import (
 )
 from conversation_context import contextual_question_with_history, retrieval_query_with_history, truncate_history
 from conversation_session import prepare_session_context
+from temporal_context import format_query_results_with_time_context
 
 
 def _conversation_history(body: AskRequest) -> list[dict[str, Any]]:
@@ -347,6 +350,7 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         "session_reset": session.session_reset,
         "session_summary": session.session_summary,
         "new_topic": session.is_new_topic,
+        "is_follow_up": session.is_follow_up,
     }
 
     llm = (llm_backend, llm_model, llm_base_url)
@@ -376,6 +380,10 @@ def _mcp_enrichment_events(
     domain_slug = resolve_domain_slug(domain_id, routing)
     usage = meta.setdefault("usage", {"rag": False, "mcp": False})
 
+    if not has_domain_mcp_bindings(domain_id):
+        yield {"type": "_mcp_enrichment", "enrichment": None}
+        return
+
     yield _status("Reviewing domain MCP tools, resources, and prompts…")
     plan = plan_mcp_enrichment(
         body.question,
@@ -395,6 +403,7 @@ def _mcp_enrichment_events(
         mcp_plan=plan,
     )
 
+    yield _status("Loading MCP domain context…")
     enrichment = execute_mcp_enrichment(
         plan,
         question=body.question,
@@ -509,7 +518,8 @@ def _structured_events(
         yield _status("No ingested chunks — generating SQL from catalog definition and schema…")
 
     history = _meta_history(meta)
-    prior = history and len(history) >= 2
+    sql_history = history if meta.get("is_follow_up") else []
+    prior = sql_history and len(sql_history) >= 2
     if prior:
         yield _status("Interpreting follow-up in context of the prior answer…")
 
@@ -523,7 +533,7 @@ def _structured_events(
             base_url=llm_base_url,
             rag_chunks=rag_chunks,
             mcp_supplement=mcp_supplement,
-            conversation_history=history,
+            conversation_history=sql_history,
         )
         yield _status("Running read-only query on the database…")
         yield from _maybe_trace(
@@ -554,6 +564,13 @@ def _structured_events(
         yield from _rag_events(body, embedder, meta, llm)
         return
 
+    columns, rows, _time_ctx = format_query_results_with_time_context(
+        body.question,
+        columns,
+        rows,
+        enrichment=mcp_enrichment,
+    )
+
     row_count = len(rows)
     rows_msg = f"Retrieved {row_count} row{'s' if row_count != 1 else ''} — summarizing answer…"
     yield _status(rows_msg)
@@ -574,7 +591,8 @@ def _structured_events(
         question=body.question,
         columns=columns,
         rows=rows,
-        conversation_history=_meta_history(meta),
+        conversation_history=sql_history,
+        table_rules=ctx.table_business_rules_block(),
     )
     answer = generate_answer(
         summary_prompt,
@@ -922,49 +940,18 @@ def _rag_events(
     history = _meta_history(meta)
     chat_history = [{"role": t["role"], "content": t["content"]} for t in history if t.get("content")]
     mcp_extra = format_mcp_context_supplement(mcp_enrichment)
-    planned_mcp_prompt = (
-        mcp_enrichment.mcp_prompt_text
-        if mcp_enrichment and mcp_enrichment.mcp_prompt_text and not chat_history
-        else None
-    )
-    mcp_prompt_meta: dict[str, Any] | None = None
-    if not planned_mcp_prompt:
-        planned_mcp_prompt, mcp_prompt_meta = build_prompt_via_domain_mcp(
-            body.question,
-            domain_id=meta.get("domain_id"),
-            domain_slug=domain_slug,
-            top_k=body.top_k,
-        )
-        if planned_mcp_prompt and mcp_prompt_meta:
-            yield from _maybe_trace(
-                body,
-                f"Using MCP prompt: {mcp_prompt_meta.get('mcp_prompt')}",
-                "mcp",
-                mcp_url=mcp_prompt_meta.get("mcp_url"),
-                domain_id=meta.get("domain_id"),
-                domain_name=domain_name,
-            )
-    elif mcp_enrichment and mcp_enrichment.mcp_prompt_name:
-        yield from _maybe_trace(
-            body,
-            f"Using MCP prompt: {mcp_enrichment.mcp_prompt_name}",
-            "mcp",
-            domain_id=meta.get("domain_id"),
-            domain_name=domain_name,
-        )
+    table_rules = load_table_business_rules_for_domain(meta.get("domain_id"))
 
-    if planned_mcp_prompt and not chat_history:
-        prompt = merge_generation_supplements(mcp_extra, planned_mcp_prompt)
-    else:
-        _, prompt = build_domain_rag_prompt(
-            body.question,
-            chunks,
-            domain_name=domain_name,
-            cite_sources=body.debug,
-            conversation_history=chat_history,
-        )
-        if mcp_extra:
-            prompt = merge_generation_supplements(mcp_extra, prompt)
+    _, prompt = build_domain_rag_prompt(
+        body.question,
+        chunks,
+        domain_name=domain_name,
+        cite_sources=body.debug,
+        conversation_history=chat_history,
+        catalog_supplement=table_rules,
+    )
+    if mcp_extra:
+        prompt = merge_generation_supplements(mcp_extra, prompt)
     yield from _maybe_trace(
         body,
         gen_msg,

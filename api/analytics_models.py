@@ -31,6 +31,26 @@ class AnalyticsChartDefaults(BaseModel):
     chart_title: str | None = None
 
 
+class TimePeriod(BaseModel):
+    label: str
+    start: str
+    end_exclusive: str
+    granularity: str | None = None
+    calendar_year: int | None = None
+    quarter: int | None = None
+    fiscal_year: int | None = None
+    fiscal_quarter: int | None = None
+
+
+class TimeContext(BaseModel):
+    requirement: str
+    reference_date: str | None = None
+    fiscal_year_start_month: int = 1
+    granularity: str | None = None
+    source: Literal["mcp", "local"] | None = None
+    periods: list[TimePeriod] = Field(default_factory=list)
+
+
 class AnalyticsResponse(BaseModel):
     title: str
     summary: str | None = None
@@ -38,6 +58,7 @@ class AnalyticsResponse(BaseModel):
     rows: list[list[Any]] | None = None
     total_rows: int | None = None
     chart_defaults: AnalyticsChartDefaults | None = None
+    time_context: TimeContext | None = None
     kpis: list[KpiWidget] = Field(default_factory=list)
     domain_name: str | None = None
     routing_method: str | None = None

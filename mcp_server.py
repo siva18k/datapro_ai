@@ -33,6 +33,7 @@ from mcp_registry import (
     is_enabled,
     load_registry,
 )
+from temporal_context import resolve_time_period
 
 REGISTRY = load_registry()
 SERVER = REGISTRY["server"]
@@ -546,6 +547,28 @@ if is_enabled("tools", "ingest_documents", REGISTRY):
             "files": report["files"],
             "errors": report["errors"],
         }
+
+
+if is_enabled("tools", "resolve_time_period", REGISTRY):
+
+    @mcp.tool(description=get_tool_description("resolve_time_period", REGISTRY))
+    def resolve_time_period_tool(
+        requirement: str,
+        reference_date: str | None = None,
+        fiscal_year_start_month: int = 1,
+    ) -> dict:
+        """
+        Resolve calendar/fiscal periods and SQL date-filter templates from natural language.
+
+        Examples: 'quarterly revenue for 2024', 'last year by month', 'FY2025 Q2', 'YTD'.
+        Set fiscal_year_start_month to 4 for an April fiscal year. Replace <date_column> in
+        returned SQL snippets with a catalog date column name.
+        """
+        return resolve_time_period(
+            requirement,
+            reference_date=reference_date,
+            fiscal_year_start_month=fiscal_year_start_month,
+        )
 
 
 def main() -> None:

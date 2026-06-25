@@ -83,8 +83,8 @@ export function AnalyticsDashboard({
 
   const chartSeries = useMemo(() => {
     if (!chartAvailable) return null;
-    return buildChartSeries(columns, rows, labelColumn, valueColumn);
-  }, [chartAvailable, columns, rows, labelColumn, valueColumn]);
+    return buildChartSeries(columns, rows, labelColumn, valueColumn, 50, data?.time_context);
+  }, [chartAvailable, columns, rows, labelColumn, valueColumn, data?.time_context]);
 
   const chartTitle =
     data?.chart_defaults?.chart_title ??
@@ -192,7 +192,7 @@ export function AnalyticsDashboard({
                   {rows.map((row, ri) => (
                     <tr key={ri}>
                       {columns.map((_, ci) => (
-                        <td key={ci}>{formatCell(row[ci])}</td>
+                        <td key={ci}>{formatCell(row[ci], data.time_context)}</td>
                       ))}
                     </tr>
                   ))}

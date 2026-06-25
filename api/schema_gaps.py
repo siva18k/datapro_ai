@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from catalog_query_hints import build_temporal_sql_hints
+
 
 @dataclass
 class SchemaGapAnalysis:
@@ -102,7 +104,7 @@ def analyze_schema_gaps(question: str, ctx: Any) -> SchemaGapAnalysis:
         if not has_geo and not has_country_col:
             notes.append("Geography — no country or region fields in the catalog; location filter was skipped.")
 
-    join_hints = ""
+    join_hints = build_temporal_sql_hints(question, ctx)
     if re.search(r"\bsegment", q):
         segment_tables = _tables_matching(ctx, "segment")
         bridge_tables = [n for n in _table_names(ctx) if "bridge" in n and "segment" in n]
@@ -113,10 +115,11 @@ def analyze_schema_gaps(question: str, ctx: Any) -> SchemaGapAnalysis:
                 if "bridge" in t["table_name"].lower() and "segment" in t["table_name"].lower()
             ]
             if qualified:
-                join_hints = (
+                segment_block = (
                     "\n\nJoin hints (from catalog — use bridge tables for segments):\n"
                     + "\n".join(f"- For segment breakdowns, join through `{name}`" for name in qualified)
                 )
+                join_hints = (join_hints + segment_block) if join_hints else segment_block
 
     skip_instructions = ""
     if notes:

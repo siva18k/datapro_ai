@@ -3,6 +3,13 @@
 ## What this dataset is
 The Sales dataset captures all transactional and operational data related to sales activities, including orders, invoices, payments, shipments, and returns. It supports financial analysis, customer behavior tracking, and operational performance monitoring.
 
+January to March is Q1
+April to June is Q2
+July to September is Q3
+October to December is Q4.
+Financial Year and FY are same, FY2024 is financial year 2024 which means Q1 to Q4.
+
+
 ## Core tables
 
 - **`finance_data.analytics_fact_sales_daily`**: Aggregated daily sales metrics by channel and product.

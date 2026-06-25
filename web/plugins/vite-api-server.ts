@@ -130,17 +130,25 @@ export function apiServerPlugin(): Plugin {
         stdio: ["ignore", logHandle, logHandle],
       },
     );
+    const child = proc;
     managed = true;
 
-    proc.on("exit", () => {
-      proc = null;
-      managed = false;
+    child.on("exit", (code) => {
+      if (code != null && code !== 0) {
+        console.warn(`[datapro] API server exited (code ${code}). Check ${logPath}`);
+      }
+      if (proc === child) {
+        proc = null;
+        managed = false;
+      }
     });
 
-    proc.on("error", (err) => {
+    child.on("error", (err) => {
       console.error("[datapro] Failed to start API server:", err.message);
-      proc = null;
-      managed = false;
+      if (proc === child) {
+        proc = null;
+        managed = false;
+      }
     });
 
     for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -155,10 +163,20 @@ export function apiServerPlugin(): Plugin {
           managed: true,
         };
       }
-      if (proc.exitCode != null) {
+      if (child.exitCode != null) {
+        if (await isApiReachable()) {
+          return {
+            ok: true,
+            message: `API server reachable at http://${API_HOST}:${API_PORT}`,
+            reachable: true,
+            url: `http://${API_HOST}:${API_PORT}`,
+            port: API_PORT,
+            managed: false,
+          };
+        }
         return {
           ok: false,
-          message: `API server exited early (code ${proc.exitCode}). Check ${logPath}`,
+          message: `API server exited early (code ${child.exitCode}). Check ${logPath}`,
           reachable: false,
           url: `http://${API_HOST}:${API_PORT}`,
           port: API_PORT,
@@ -287,8 +305,28 @@ export function apiServerPlugin(): Plugin {
       });
 
       console.log(
-        `[datapro] Dev bootstrap ready — start API from Settings (${BOOTSTRAP_PREFIX}/api/start)`,
+        `[datapro] Dev bootstrap ready — auto-starting API (${BOOTSTRAP_PREFIX}/api/start)`,
       );
+
+      void (async () => {
+        try {
+          if (await isApiReachable()) {
+            console.log(`[datapro] API already running at http://${API_HOST}:${API_PORT}`);
+            return;
+          }
+          const result = await startApi();
+          if (result.reachable) {
+            console.log(`[datapro] API ready at http://${API_HOST}:${API_PORT}`);
+          } else {
+            console.warn(`[datapro] API auto-start: ${result.message}`);
+          }
+        } catch (err) {
+          console.error(
+            "[datapro] API auto-start failed:",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      })();
 
       return () => {
         if (managed && proc && !proc.killed) {

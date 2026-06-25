@@ -60,6 +60,7 @@ MCP_TRANSPORT=stdio python mcp_server.py
 | `ingest_documents` | Run ingest |
 | `list_domains` | Catalog domains |
 | `list_domain_sources` | Sources in a domain |
+| `resolve_time_period` | Calendar/fiscal quarters, months, year boundaries + SQL date filters from natural language. **Analytics** calls this automatically (via MCP when running) to label chart/table buckets such as `Q1-2024` instead of raw `DATE_TRUNC` timestamps. |
 
 ## Resources (`ragpro://` URIs)
 

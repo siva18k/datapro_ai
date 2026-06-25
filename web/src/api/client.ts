@@ -30,8 +30,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new Error("API server is not reachable. Start it from Settings or run uvicorn on port 8080.");
   }
+  const text = await res.text();
   if (!res.ok) {
-    const text = await res.text();
+    if (!text.trim()) {
+      throw new Error(
+        `Request failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""}). ` +
+          "Is the API server running on port 8080?",
+      );
+    }
     try {
       const body = JSON.parse(text) as { detail?: string | { msg?: string }[] };
       if (typeof body.detail === "string") throw new Error(body.detail);
@@ -39,11 +45,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         throw new Error(body.detail.map((d) => d.msg).filter(Boolean).join("; ") || res.statusText);
       }
     } catch (e) {
-      if (e instanceof Error && e.message !== text) throw e;
+      if (e instanceof Error && e.message !== text && !(e instanceof SyntaxError)) throw e;
     }
     throw new Error(text || res.statusText);
   }
-  return res.json() as Promise<T>;
+  if (!text.trim()) {
+    throw new Error("Empty response from API — is the server running on port 8080?");
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Invalid JSON from API — the server may have returned an error page.");
+  }
 }
 
 export const api = {
@@ -121,11 +134,19 @@ export const api = {
         const body = JSON.parse(text) as { detail?: string };
         if (body.detail) throw new Error(body.detail);
       } catch (e) {
-        if (e instanceof Error && e.message !== text) throw e;
+        if (e instanceof Error && e.message !== text && !(e instanceof SyntaxError)) throw e;
       }
       throw new Error(text || res.statusText);
     }
-    return res.json() as Promise<{ saved: string[]; skipped: { name: string; reason: string }[] }>;
+    const text = await res.text();
+    if (!text.trim()) {
+      throw new Error("Empty response from API — is the server running on port 8080?");
+    }
+    try {
+      return JSON.parse(text) as { saved: string[]; skipped: { name: string; reason: string }[] };
+    } catch {
+      throw new Error("Invalid JSON from upload response.");
+    }
   },
   ingest: (id: string, file_names: string[]) =>
     request(`/datasets/${id}/ingest`, { method: "POST", body: JSON.stringify({ file_names }) }),
@@ -180,7 +201,7 @@ export const api = {
         const body = JSON.parse(text) as { detail?: string };
         if (typeof body.detail === "string") throw new Error(body.detail);
       } catch (e) {
-        if (e instanceof Error && e.message !== text) throw e;
+        if (e instanceof Error && e.message !== text && !(e instanceof SyntaxError)) throw e;
       }
       throw new Error(text || res.statusText);
     }
@@ -247,7 +268,7 @@ export const api = {
         const body = JSON.parse(text) as { detail?: string };
         if (typeof body.detail === "string") throw new Error(body.detail);
       } catch (e) {
-        if (e instanceof Error && e.message !== text) throw e;
+        if (e instanceof Error && e.message !== text && !(e instanceof SyntaxError)) throw e;
       }
       throw new Error(text || res.statusText);
     }
@@ -345,7 +366,7 @@ export const api = {
         const body = JSON.parse(text) as { detail?: string };
         if (typeof body.detail === "string") throw new Error(body.detail);
       } catch (e) {
-        if (e instanceof Error && e.message !== text) throw e;
+        if (e instanceof Error && e.message !== text && !(e instanceof SyntaxError)) throw e;
       }
       throw new Error(text || res.statusText);
     }
@@ -418,7 +439,7 @@ export const api = {
         const body = JSON.parse(text) as { detail?: string };
         if (typeof body.detail === "string") throw new Error(body.detail);
       } catch (e) {
-        if (e instanceof Error && e.message !== text) throw e;
+        if (e instanceof Error && e.message !== text && !(e instanceof SyntaxError)) throw e;
       }
       throw new Error(text || res.statusText);
     }

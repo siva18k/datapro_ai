@@ -46,7 +46,9 @@ _SQL_GENERATION_RULES = """
 Rules:
 - Return ONLY the SQL (no markdown, no explanation).
 - Read the Dataset definition section first — it documents scope, join paths, hub/bridge tables, and caveats.
-- Use Column reference for exact column names and types — never invent columns (e.g. no balance if not listed).
+- Read **Table business rules** — apply status filters, revenue definitions, exclusions, and metric logic exactly as written per table.
+- Use Column reference for exact column names and types — match natural-language time phrases to date columns via names and labels.
+- When the user names a calendar year (e.g. 2024), filter the chosen date column to that year; use relative date math only when they ask relatively (e.g. "last year").
 - Use ONLY tables listed under Allowed tables — never invent names like customers, orders, or products.
 - Follow join paths from the Dataset definition (especially hub and bridge tables) instead of guessing FKs.
 - If a dimension is listed as unavailable below, omit it — do not fail; answer with what exists.
@@ -141,6 +143,7 @@ Database error:
 Rules:
 - Return ONLY the corrected SELECT (no markdown, no explanation).
 - Read the Dataset definition for correct join paths — use bridge/hub tables as documented.
+- Read **Table business rules** — preserve status filters and metric exclusions from the catalog.
 - Remove or replace missing tables/columns — skip dimensions that caused the error.
 - Use ONLY tables from Allowed tables — map business terms to real catalog names.
 - Use Column reference for exact column names — do not invent columns.
@@ -182,6 +185,7 @@ Errors:
 
 Write ONE simpler read-only SELECT that answers what you CAN from the catalog only.
 - Read the Dataset definition for join paths and caveats before simplifying.
+- Read **Table business rules** — keep documented status filters and revenue rules when simplifying.
 - Skip any dimension that is missing or caused errors (department, unknown tables, etc.).
 - Use ONLY allowed catalog tables and Column reference column names.
 - Return ONLY the SQL (no markdown).

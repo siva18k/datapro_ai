@@ -31,6 +31,7 @@ def build_sql_summary_prompt(
     rows: list[list[Any]],
     max_sample_rows: int = 15,
     conversation_history: list[dict[str, str]] | None = None,
+    table_rules: str = "",
 ) -> str:
     from conversation_context import format_conversation_block
 
@@ -55,14 +56,22 @@ def build_sql_summary_prompt(
             "Do not change the breakdown or scope unless the user clearly asked to.\n\n"
         )
 
+    rules_block = ""
+    if table_rules.strip():
+        rules_block = (
+            "Catalog table business rules (mention in your answer when they affected the result, "
+            "e.g. revenue counts SHIPPED orders only):\n"
+            f"{table_rules.strip()}\n\n"
+        )
+
     return f"""You are a business analyst answering in a chat UI.
 
-{history_block}{follow_up_line}User question:
+{history_block}{follow_up_line}{rules_block}User question:
 {question}
 
 Query returned {row_count} row(s).
 Columns: {columns}
-Data sample (for your answer — may be truncated):
+Data sample (for your answer — may be truncated; time bucket columns already use labels like Q1-2024):
 {sample}
 {extra}
 {CHAT_RESPONSE_FORMAT}
@@ -77,6 +86,7 @@ def build_analytics_summary_prompt(
     max_sample_rows: int = 8,
     gap_notes: list[str] | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    table_rules: str = "",
 ) -> str:
     """Brief insight for analytics dashboard — charts/tables render the data."""
     from conversation_context import format_conversation_block
@@ -95,9 +105,16 @@ def build_analytics_summary_prompt(
         follow_up = (
             "This is a follow-up — keep the same scope/grain as the prior answer unless the user changed it.\n"
         )
+    rules_block = ""
+    if table_rules.strip():
+        rules_block = (
+            "Catalog table business rules (mention briefly if they shaped the metric, "
+            "e.g. SHIPPED-only revenue):\n"
+            f"{table_rules.strip()}\n"
+        )
     return f"""You are a business analyst writing a one-line dashboard insight.
 
-{history_block}{follow_up}User question:
+{history_block}{follow_up}{rules_block}User question:
 {question}
 {skipped}
 Query returned {len(rows)} row(s).

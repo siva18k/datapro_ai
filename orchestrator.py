@@ -128,6 +128,7 @@ def build_domain_rag_prompt(
     domain_name: str | None = None,
     cite_sources: bool = False,
     conversation_history: list[dict[str, str]] | None = None,
+    catalog_supplement: str = "",
 ) -> tuple[str, str]:
     from conversation_context import format_conversation_block
 
@@ -147,13 +148,20 @@ def build_domain_rag_prompt(
         if history_block
         else ""
     )
+    catalog_block = ""
+    if catalog_supplement.strip():
+        catalog_block = (
+            "Catalog table business rules (apply when interpreting metrics and filters):\n"
+            f"{catalog_supplement.strip()}\n\n"
+        )
     llm_prompt = f"""You are an internal knowledge assistant in a chat conversation.
 {domain_line}Answer only from the provided context.
 If the answer is not supported by the context, say:
 "I do not know based on the provided documents."
+When catalog table business rules are provided below, apply them to status filters and metric definitions.
 {citation_line}{follow_up_line}{CHAT_RESPONSE_FORMAT}
 
-{history_block}User question:
+{catalog_block}{history_block}User question:
 {user_question}
 
 Context:

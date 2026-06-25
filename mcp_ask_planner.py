@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from api.llm import generate_answer
 from catalog_db import get_domain
-from mcp_client import call_tool_text, check_mcp_server
+from mcp_client import call_tool_text, check_mcp_server, get_default_mcp_url
 from mcp_domain_service import (
-    build_prompt_via_domain_mcp,
     domain_mcp_capabilities,
     read_bound_resources_for_domain,
 )
+from temporal_context import format_time_period_hints, has_temporal_signal
 
 # Read-only MCP tools safe to invoke during question answering.
 ALLOWED_ASK_MCP_TOOLS = frozenset(
@@ -27,6 +28,7 @@ ALLOWED_ASK_MCP_TOOLS = frozenset(
         "get_chunk",
         "knowledge_base_stats",
         "list_available_documents",
+        "resolve_time_period",
     }
 )
 
@@ -37,6 +39,13 @@ ALLOWED_ASK_MCP_PROMPTS = frozenset(
         "citation_rules",
         "summarize_document",
     }
+)
+
+# Heuristic planner is instant; LLM planner adds latency and can block Ask on slow models.
+_USE_LLM_MCP_PLANNER = os.environ.get("MCP_LLM_PLANNER", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
 )
 
 
@@ -74,6 +83,13 @@ def _has_any_bindings(bindings: dict[str, list[dict[str, Any]]]) -> bool:
     return any(caps for caps in bindings.values())
 
 
+def has_domain_mcp_bindings(domain_id: str | None) -> bool:
+    """True when the domain has any bound MCP tools, resources, or prompts."""
+    if not domain_id:
+        return False
+    return _has_any_bindings(_load_domain_bindings(domain_id))
+
+
 def summarize_domain_mcp_bindings(
     domain_id: str | None,
     bindings: dict[str, list[dict[str, Any]]] | None = None,
@@ -94,9 +110,7 @@ def summarize_domain_mcp_bindings(
         for cap in caps:
             name = cap.get("capability_name", "")
             server = cap.get("server_slug") or cap.get("server_name") or "server"
-            reachable = bool(cap.get("server_url") and check_mcp_server(cap["server_url"]))
-            status = "reachable" if reachable else "offline"
-            lines.append(f"- `{name}` on {server} ({status})")
+            lines.append(f"- `{name}` on {server}")
     return "\n".join(lines) if lines else "No MCP capabilities are bound to this domain."
 
 
@@ -160,7 +174,8 @@ def _format_structured_tool_result(result: McpToolResult, max_chars: int = 2500)
         return rendered[:max_chars]
 
     if isinstance(structured, dict):
-        # e.g. knowledge_base_stats → {total_chunks, source_count, ...}
+        if structured.get("periods") is not None and structured.get("filter"):
+            return format_time_period_hints(structured).strip()[:max_chars]
         lines = []
         for k, v in structured.items():
             lines.append(f"{k}: {v}")
@@ -192,7 +207,6 @@ def _heuristic_mcp_plan(
             bindings = _load_domain_bindings(domain_id)
         bound_tools = {c["capability_name"] for c in bindings.get("tool", [])}
         bound_prompts = {c["capability_name"] for c in bindings.get("prompt", [])}
-        use_resources = bool(bindings.get("resource"))
 
         lower = question.lower()
         if "list_domain_sources" in bound_tools and domain_slug and any(
@@ -203,6 +217,11 @@ def _heuristic_mcp_plan(
             word in lower for word in ("how many", "chunk", "document", "ingested")
         ):
             tools.append({"name": "knowledge_base_stats", "arguments": {}})
+        # Bound resources can be large — only prefetch when scope/inventory is unclear.
+        use_resources = bool(bindings.get("resource")) and any(
+            word in lower
+            for word in ("what data", "what is cataloged", "which dataset", "what sources", "what domains")
+        )
 
         if execution_kind == "rag":
             if "domain_grounded_answer" in bound_prompts:
@@ -212,6 +231,17 @@ def _heuristic_mcp_plan(
         elif execution_kind in ("sql", "hybrid") and "list_domain_sources" in bound_tools and domain_slug:
             if not tools:
                 tools.append({"name": "list_domain_sources", "arguments": {"domain": domain_slug}})
+        if (
+            execution_kind in ("sql", "hybrid")
+            and has_temporal_signal(question)
+            and not any(t.get("name") == "resolve_time_period" for t in tools)
+        ):
+            tools.append(
+                {
+                    "name": "resolve_time_period",
+                    "arguments": {"requirement": question.strip()},
+                }
+            )
 
     return {
         "use_resources": use_resources,
@@ -259,6 +289,15 @@ def plan_mcp_enrichment(
 
     binding_summary = summarize_domain_mcp_bindings(domain_id, bindings=bindings)
 
+    if not _USE_LLM_MCP_PLANNER:
+        return _heuristic_mcp_plan(
+            question,
+            domain_id=domain_id,
+            domain_slug=domain_slug,
+            execution_kind=execution_kind,
+            bindings=bindings,
+        )
+
     prompt = f"""You route DATA Pro questions to the right context sources.
 
 Execution path already chosen: **{execution_kind}** (sql = live database, rag = documents only, hybrid = SQL + documents).
@@ -302,6 +341,7 @@ Rules:
             domain_id=domain_id,
             domain_slug=domain_slug,
             execution_kind=execution_kind,
+            bindings=bindings,
         )
 
 
@@ -361,9 +401,11 @@ def execute_mcp_enrichment(
         if tool_name not in ALLOWED_ASK_MCP_TOOLS or tool_name == "search_documents":
             continue
         binding = _find_bound_capability(domain_id, "tool", tool_name)
-        if not binding:
-            continue
-        url = binding.get("server_url")
+        url = binding.get("server_url") if binding else None
+        server_label = (binding.get("server_slug") or binding.get("server_name")) if binding else None
+        if not url and tool_name == "resolve_time_period":
+            url = get_default_mcp_url()
+            server_label = "datapro"
         if not url or not check_mcp_server(url):
             continue
         args = _normalize_tool_arguments(
@@ -378,7 +420,7 @@ def execute_mcp_enrichment(
 
         tool_result = McpToolResult(
             tool=tool_name,
-            server=binding.get("server_slug") or binding.get("server_name"),
+            server=server_label,
             mcp_url=url,
             arguments=args,
             raw=(raw_text or "")[:8000],
@@ -395,41 +437,8 @@ def execute_mcp_enrichment(
             }
         )
 
-    prompt_name = plan.get("mcp_prompt")
-    if isinstance(prompt_name, str) and prompt_name in ALLOWED_ASK_MCP_PROMPTS:
-        binding = _find_bound_capability(domain_id, "prompt", prompt_name)
-        if binding and binding.get("server_url") and check_mcp_server(binding["server_url"]):
-            from mcp_client import get_prompt_preview
-
-            args: dict[str, str] = {"question": question, "top_k": str(top_k)}
-            if domain_slug and prompt_name == "domain_grounded_answer":
-                args["domain"] = domain_slug
-            try:
-                text = get_prompt_preview(binding["server_url"], prompt_name, args)
-            except Exception:
-                text = None
-            if text and text.strip():
-                enrichment.mcp_prompt_name = prompt_name
-                enrichment.mcp_prompt_text = text
-                enrichment.trace.append(
-                    {
-                        "kind": "prompt",
-                        "prompt": prompt_name,
-                        "mcp_url": binding.get("server_url"),
-                    }
-                )
-    if not enrichment.mcp_prompt_text:
-        text, meta = build_prompt_via_domain_mcp(
-            question,
-            domain_id=domain_id,
-            domain_slug=domain_slug,
-            top_k=top_k,
-        )
-        if text:
-            enrichment.mcp_prompt_name = (meta or {}).get("mcp_prompt")
-            enrichment.mcp_prompt_text = text
-            if meta:
-                enrichment.trace.append({"kind": "prompt", **meta})
+    # Prompt previews run a full RAG pass on the MCP server and duplicate local Ask RAG.
+    # Answer prompts are built locally from retrieved chunks in ask_runner.
 
     return enrichment
 

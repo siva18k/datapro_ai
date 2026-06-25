@@ -6,7 +6,7 @@
 
 **Ask** — chat; you can override the domain, tweak Top K, turn on debug mode to see which chunks came back. Follow-up messages reuse prior SQL results (same session until **New chat**) so refinements like “show that in USD” stay on the same breakdown. After **5 follow-ups** (configurable in Settings), the app summarizes the thread and starts a fresh chat automatically. Unrelated questions are detected as a **new topic** and processed without old context.
 
-**Analytics** — natural-language dashboards (needs Postgres datasets). Follow-up prompts in the same session reuse the prior dashboard data until you click **Clear**; the same auto-summary and new-topic rules apply.
+**Analytics** — natural-language dashboards (needs Postgres datasets). Follow-up prompts in the same session reuse the prior dashboard data until you click **Clear**; the same auto-summary and new-topic rules apply. Time-based questions (quarters, months, last year, etc.) call the MCP **`resolve_time_period`** tool when the MCP server is running; chart and table axes show period labels like **Q1-2024** instead of raw SQL timestamp buckets.
 
 **RAG** — chunk size, overlap, ingest.
 
@@ -46,7 +46,7 @@ For Postgres, pick an existing connection from **Settings → Dataset connection
 
 1. **Connection** — test and save credentials.
 2. **Data** — **Refresh tables** → select → **Add selected**.
-3. Tweak table roles (fact vs lookup), descriptions, column labels — this matters for SQL generation later.
+3. Tweak table roles (fact vs lookup), **table definitions** (status filters, revenue rules, join hints), and column labels — Ask and Analytics use these in SQL generation and answer prompts.
 4. **Definition** — when two or more tables are cataloged, open this tab to auto-append a **Table relationships** section at the bottom. **AI draft** uses only cataloged tables/columns (no invented fields), strips markdown code fences, and refreshes relationships. Use **Refresh relationships** after catalog changes, then **Save definition**. **Ask** blends ingested catalog/document chunks with the definition for SQL when embeddings exist; otherwise it uses the definition and column metadata alone.
 5. **RAG** → **Ingest & embed catalog** — indexes metadata and lookup rows, not whole fact tables.
 6. **Ask** — structured questions against fact data; RAG helps with schema names.

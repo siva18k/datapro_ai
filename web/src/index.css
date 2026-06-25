@@ -2283,6 +2283,17 @@ label.file-upload-btn {
   @apply overflow-hidden rounded-lg;
   border: 1px solid var(--color-border);
 }
+/* table-wrap uses overflow-hidden; picker lists need a scrollable body */
+.table-wrap.catalog-table-picker {
+  max-height: 16rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.table-wrap.catalog-table-picker table.data thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
 table.data {
   @apply w-full text-sm;
 }

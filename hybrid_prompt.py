@@ -56,7 +56,7 @@ def build_sql_rag_supplement(chunks: list[dict[str, Any]] | None) -> str:
     return (
         "## Retrieved context (ingested RAG)\n"
         f"Found {summary}. Use this to interpret business terms, naming, and domain language.\n"
-        "For SQL identifiers and joins, **Allowed tables**, **Dataset definition**, and "
+        "For SQL identifiers and joins, **Allowed tables**, **Dataset definition**, **Table business rules**, and "
         "**Column reference** still override narrative text in retrieved chunks.\n\n"
         f"{body}"
     )

@@ -26,6 +26,78 @@ def count_user_turns(history: list[dict[str, Any]] | None) -> int:
     return sum(1 for turn in history if (turn.get("role") or "").strip().lower() == "user")
 
 
+def _breakdown_dimensions(text: str) -> set[str]:
+    """Rough grouping dimensions mentioned in a question."""
+    lower = (text or "").lower()
+    dims: set[str] = set()
+    markers = {
+        "channel": ("channel", "channels"),
+        "country": ("country", "countries"),
+        "region": ("region", "regions"),
+        "quarter": ("quarter", "quarterly", " q1", " q2", " q3", " q4"),
+        "month": ("month", "monthly"),
+        "year": ("year", "yearly", "annual"),
+        "customer": ("customer", "customers"),
+        "product": ("product", "products"),
+        "category": ("category", "categories"),
+        "department": ("department", "departments"),
+    }
+    for dim, tokens in markers.items():
+        if any(token in lower for token in tokens):
+            dims.add(dim)
+    return dims
+
+
+def _last_user_message(history: list[dict[str, Any]]) -> str:
+    for turn in reversed(history):
+        if (turn.get("role") or "").strip().lower() == "user":
+            return (turn.get("content") or turn.get("question") or "").strip()
+    return ""
+
+
+def _heuristic_message_intent(
+    question: str,
+    history: list[dict[str, Any]],
+) -> Literal["follow_up", "new_topic"] | None:
+    """
+    Fast path before the LLM router.
+
+    Returns new_topic when the latest message clearly changes breakdown or scope.
+    Returns follow_up for obvious refinements. None when uncertain.
+    """
+    last = _last_user_message(history)
+    if not last:
+        return None
+
+    q = question.strip().lower()
+    if not q or q == last.lower():
+        return "follow_up"
+
+    if re.match(
+        r"^(also|and|same|filter|sort|order|convert|exclude|include|only|what about|how about|"
+        r"add|drop|remove|keep|limit|show me that|same query)\b",
+        q,
+    ):
+        return "follow_up"
+
+    if len(q.split()) <= 8 and any(
+        phrase in q for phrase in ("also", "as well", "same data", "same result", "that table")
+    ):
+        return "follow_up"
+
+    cur_dims = _breakdown_dimensions(question)
+    prev_dims = _breakdown_dimensions(last)
+    if cur_dims and prev_dims and cur_dims != prev_dims:
+        return "new_topic"
+
+    # Standalone analytical question with no dependency language → fresh query.
+    if not re.search(r"\b(that|those|same|previous|prior|above|earlier|it|them)\b", q):
+        if cur_dims != prev_dims or (cur_dims and not prev_dims) or (prev_dims and not cur_dims):
+            return "new_topic"
+
+    return None
+
+
 def _parse_json_object(text: str) -> dict[str, Any]:
     text = text.strip()
     if text.startswith("```"):
@@ -63,10 +135,11 @@ def classify_message_intent(
 {question}
 
 Decide whether this message:
-- **follow_up** — continues the same analysis thread (refinement, conversion, filter tweak, clarification, sort, same entities/metrics)
-- **new_topic** — starts a clearly different question (unrelated domain, metric, dataset, or business question with no dependency on prior answers)
+- **follow_up** — continues the SAME analysis on the SAME result or breakdown (refinement, conversion, filter tweak, sort, add/remove column, clarification). Examples: "convert to USD", "sort by revenue", "also filter to SHIPPED", "same but for Q2".
+- **new_topic** — a standalone question or a different breakdown, metric focus, time grain, or dataset. Examples: prior question was revenue by channel and latest asks quarterly revenue; prior was by country and latest asks by customer.
 
-Short acknowledgements like "thanks" after a complete answer are follow_up only if they request more work on the same data; otherwise treat obvious new analytical questions as new_topic.
+Changing grouping (channel → quarter, country → product, monthly → quarterly) is **new_topic**, not follow_up.
+Short acknowledgements like "thanks" after a complete answer are follow_up only if they request more work on the same data.
 
 Return ONLY JSON:
 {{"intent": "follow_up" | "new_topic", "reason": "one short sentence"}}
@@ -163,6 +236,26 @@ def prepare_session_context(
             is_new_topic=False,
             session_reset=True,
             session_summary=summary,
+            prior_turn_count=prior_turn_count,
+        )
+
+    heuristic = _heuristic_message_intent(question, history)
+    if heuristic == "new_topic":
+        return ConversationSessionDecision(
+            effective_history=[],
+            is_follow_up=False,
+            is_new_topic=True,
+            session_reset=True,
+            session_summary=None,
+            prior_turn_count=prior_turn_count,
+        )
+    if heuristic == "follow_up":
+        return ConversationSessionDecision(
+            effective_history=list(history),
+            is_follow_up=True,
+            is_new_topic=False,
+            session_reset=False,
+            session_summary=None,
             prior_turn_count=prior_turn_count,
         )
 

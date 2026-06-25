@@ -5,7 +5,13 @@ import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { PageHeader } from "../components/PageHeader";
 import { SavedConnectionsPanel } from "../components/SavedConnectionsPanel";
 import { useApiPageState } from "../context/ApiConnectionContext";
-import { api, type BackendActionResponse, type BackendStatusResponse } from "../api/client";
+import {
+  api,
+  type BackendActionResponse,
+  type BackendStatusResponse,
+  type DatabaseSettingsPayload,
+  type LlmSettingsPayload,
+} from "../api/client";
 import { devBootstrap, isDevBootstrapAvailable } from "../api/devBootstrap";
 import { parsePostgresUrl } from "../utils/postgresUrl";
 
@@ -58,6 +64,27 @@ function isCatalogConfigured(
   return false;
 }
 
+function buildDatabasePayload(
+  db: DatabaseSettingsPayload,
+  options: { password?: string; preserveUrl?: boolean; urlConfigured?: boolean },
+): DatabaseSettingsPayload {
+  const usingUrl = Boolean(options.preserveUrl && (db.use_database_url || options.urlConfigured));
+  if (usingUrl) {
+    return {
+      ...db,
+      use_database_url: true,
+      database_url: db.database_url?.trim() || "***",
+      password: options.password || undefined,
+    };
+  }
+  return {
+    ...db,
+    use_database_url: false,
+    database_url: "",
+    password: options.password || undefined,
+  };
+}
+
 function formatCatalogSummary(
   db: DatabaseSettingsPayload,
   databaseUrlMasked: boolean,
@@ -104,6 +131,7 @@ export function SettingsPage() {
   const [catalogEditing, setCatalogEditing] = useState(true);
   const [catalogUrlPaste, setCatalogUrlPaste] = useState("");
   const [catalogUrlPasteError, setCatalogUrlPasteError] = useState<string | null>(null);
+  const [catalogDbNotice, setCatalogDbNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mcpNotice, setMcpNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -282,12 +310,11 @@ export function SettingsPage() {
         }
       }
       return api.saveSettings({
-        database: {
-          ...db,
-          use_database_url: false,
-          database_url: "",
+        database: buildDatabasePayload(db, {
           password: db.password || undefined,
-        },
+          preserveUrl: !catalogEditing,
+          urlConfigured: data?.database.database_url === "***",
+        }),
         mcp_url: mcpUrl,
         embedding_model: embeddingModel,
         ask: { conversation_turns: conversationTurns },
@@ -314,18 +341,24 @@ export function SettingsPage() {
 
   const testDb = useMutation({
     mutationFn: () =>
-      api.testDatabase({
-        ...db,
-        use_database_url: false,
-        database_url: "",
-        password: db.password || undefined,
-      }),
+      api.testDatabase(
+        buildDatabasePayload(db, {
+          password: db.password || undefined,
+          preserveUrl: true,
+          urlConfigured: data?.database.database_url === "***",
+        }),
+      ),
+    onMutate: () => {
+      setCatalogDbNotice(null);
+      setError(null);
+    },
     onSuccess: (res) => {
-      setMessage(res.message);
+      setCatalogDbNotice({ ok: true, text: res.message });
+      setMessage(null);
       setError(null);
     },
     onError: (err) => {
-      setError(String(err));
+      setCatalogDbNotice({ ok: false, text: String(err) });
       setMessage(null);
     },
   });
@@ -438,6 +471,11 @@ export function SettingsPage() {
                       {testDb.isPending ? "Testing…" : "Test connection"}
                     </button>
                   </div>
+                  {catalogDbNotice && (
+                    <p className={catalogDbNotice.ok ? "alert-ok mt-3 text-sm" : "alert-error mt-3 text-sm"}>
+                      {catalogDbNotice.text}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <>
@@ -541,6 +579,11 @@ export function SettingsPage() {
                       </button>
                     )}
                   </div>
+                  {catalogDbNotice && (
+                    <p className={catalogDbNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>
+                      {catalogDbNotice.text}
+                    </p>
+                  )}
                 </>
               )}
             </div>

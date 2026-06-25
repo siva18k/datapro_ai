@@ -7,7 +7,7 @@ export function ApiConnectingPanel({ title = "Connecting to API server…" }: Pr
     <div className="card card-pad max-w-xl" role="status" aria-live="polite">
       <p className="text-sm font-medium">{title}</p>
       <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-        Checking every few seconds. This may take up to 10 seconds while the server loads.
+        The dev server starts the API automatically. This usually takes a few seconds.
       </p>
     </div>
   );

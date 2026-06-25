@@ -198,7 +198,12 @@ For **transform**, use your general knowledge where needed (e.g. FX rates). Retu
 - `conversions`: list of {{source_column, target_column, factor, replace?}}
 - optional `rename_columns`, `drop_columns`, `sort_by`: {{column, descending}}
 
-For **sql**, write `refined_question`: a standalone question that preserves prior intent (same scope/filters/grouping) while applying the follow-up.
+For **sql**, write `refined_question`: a standalone question for the follow-up only.
+Preserve prior filters/grouping ONLY when the follow-up explicitly refines the same breakdown
+(e.g. "same but for 2024", "also exclude returns", "add customer count to that table").
+When the follow-up changes breakdown, time grain, or entities, write a fresh question for the new
+request — do NOT carry over dimensions the user did not mention (e.g. do not keep "by channel"
+when they now ask for quarterly totals only).
 
 Return ONLY JSON:
 {{

@@ -426,16 +426,30 @@ def _resolve_db_config(db: dict[str, Any] | None = None) -> dict[str, Any]:
     host = (db.get("host") or current.get("PGHOST", "")).strip()
     user = (db.get("user") or current.get("PGUSER", "")).strip()
     database = (db.get("database") or current.get("PGDATABASE", "")).strip()
+    sslmode = (db.get("sslmode") or current.get("PGSSLMODE") or "require").strip()
+    port = db.get("port") or current.get("PGPORT") or 5432
+
+    # Match db.get_db_config(): fill missing fields from DATABASE_URL when present.
+    if current.get("DATABASE_URL"):
+        parsed = _parse_database_url(current["DATABASE_URL"])
+        host = host or parsed["host"]
+        user = user or parsed["user"]
+        password = password or parsed["password"]
+        database = database or parsed["database"]
+        if not db.get("sslmode") and not current.get("PGSSLMODE"):
+            sslmode = parsed["sslmode"] or sslmode
+        if not db.get("port") and not current.get("PGPORT"):
+            port = parsed["port"] or port
+
     if not all([host, user, password, database]):
         raise ValueError("Host, user, password, and database are required")
-    port = db.get("port") or current.get("PGPORT") or 5432
     return {
         "host": host,
         "port": int(port),
         "user": user,
         "password": password,
         "database": database,
-        "sslmode": (db.get("sslmode") or current.get("PGSSLMODE") or "require").strip(),
+        "sslmode": sslmode,
     }
 
 

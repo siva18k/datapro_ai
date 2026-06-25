@@ -1,25 +1,38 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { devBootstrap, type DevBootstrapResponse } from "../api/devBootstrap";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { devBootstrap, isDevBootstrapAvailable, type DevBootstrapResponse } from "../api/devBootstrap";
 
-const USER_POLL_ATTEMPTS = 5;
-const USER_POLL_INTERVAL_MS = 2000;
+const AUTO_START_WAIT_MS = 5000;
+const MANUAL_START_WAIT_MS = 10000;
+const POLL_INTERVAL_MS = 500;
+const BACKGROUND_PING_MS = 30_000;
+
+export type ApiBootstrapPhase = "checking" | "starting" | "online" | "offline" | "error";
 
 type ApiConnectionContextValue = {
   apiOnline: boolean;
-  checking: boolean;
-  connecting: boolean;
+  bootstrapPhase: ApiBootstrapPhase;
+  bootstrapMessage: string | null;
   starting: boolean;
-  apiPending: boolean;
+  showStartButton: boolean;
+  canStartFromWeb: boolean;
   lastChecked: Date | null;
   refresh: () => Promise<boolean>;
-  waitUntilOnline: (options?: { maxAttempts?: number; intervalMs?: number }) => Promise<boolean>;
-  retryConnection: () => Promise<boolean>;
   startApiServer: () => Promise<DevBootstrapResponse>;
+  retryConnection: () => Promise<boolean>;
 };
 
 const ApiConnectionContext = createContext<ApiConnectionContextValue | null>(null);
 
-async function pingApi(timeoutMs = 3000): Promise<boolean> {
+async function pingApi(timeoutMs = 2000): Promise<boolean> {
   try {
     const res = await fetch("/api/health", { signal: AbortSignal.timeout(timeoutMs) });
     return res.ok;
@@ -28,101 +41,215 @@ async function pingApi(timeoutMs = 3000): Promise<boolean> {
   }
 }
 
-export function ApiConnectionProvider({ children }: { children: ReactNode }) {
-  const [apiOnline, setApiOnline] = useState(false);
-  const [checking, setChecking] = useState(true);
-  const [connecting, setConnecting] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [lastChecked, setLastChecked] = useState<Date | null>(null);
-  const connectingRef = useRef(false);
-  const startingRef = useRef(false);
-  const apiOnlineRef = useRef(false);
-  connectingRef.current = connecting;
-  startingRef.current = starting;
-  apiOnlineRef.current = apiOnline;
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
 
-  const isBusy = useCallback(() => connectingRef.current || startingRef.current, []);
+export function ApiConnectionProvider({ children }: { children: ReactNode }) {
+  const canStartFromWeb = isDevBootstrapAvailable();
+  const [apiOnline, setApiOnline] = useState(false);
+  const [bootstrapPhase, setBootstrapPhase] = useState<ApiBootstrapPhase>("checking");
+  const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const bootstrapRan = useRef(false);
+  const startingRef = useRef(false);
+
+  const markOnline = useCallback(() => {
+    setApiOnline(true);
+    setBootstrapPhase("online");
+    setBootstrapMessage(null);
+    setLastChecked(new Date());
+  }, []);
+
+  const markOffline = useCallback((message: string | null = null) => {
+    setApiOnline(false);
+    setBootstrapPhase("offline");
+    setBootstrapMessage(message);
+    setLastChecked(new Date());
+  }, []);
+
+  const pollUntilOnline = useCallback(async (timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await pingApi()) {
+        markOnline();
+        return true;
+      }
+      await sleep(POLL_INTERVAL_MS);
+    }
+    setLastChecked(new Date());
+    return false;
+  }, [markOnline]);
 
   const refresh = useCallback(async () => {
-    if (isBusy()) return apiOnlineRef.current;
-    setChecking(true);
     const ok = await pingApi();
     setApiOnline(ok);
     setLastChecked(new Date());
-    setChecking(false);
-    return ok;
-  }, [isBusy]);
-
-  const waitUntilOnline = useCallback(async (options?: { maxAttempts?: number; intervalMs?: number }) => {
-    const maxAttempts = options?.maxAttempts ?? USER_POLL_ATTEMPTS;
-    const intervalMs = options?.intervalMs ?? USER_POLL_INTERVAL_MS;
-    setConnecting(true);
-    try {
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const ok = await pingApi(2000);
-        if (ok) {
-          setApiOnline(true);
-          setLastChecked(new Date());
-          return true;
-        }
-        if (attempt < maxAttempts - 1) {
-          await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
-        }
+    if (ok) {
+      setBootstrapPhase("online");
+      setBootstrapMessage(null);
+    } else if (!startingRef.current) {
+      setBootstrapPhase(canStartFromWeb ? "offline" : "error");
+      if (!canStartFromWeb) {
+        setBootstrapMessage("Run uvicorn on port 8080.");
       }
-      setApiOnline(false);
-      setLastChecked(new Date());
-      return false;
-    } finally {
-      setConnecting(false);
     }
-  }, []);
-
-  const retryConnection = useCallback(
-    () => waitUntilOnline({ maxAttempts: USER_POLL_ATTEMPTS, intervalMs: USER_POLL_INTERVAL_MS }),
-    [waitUntilOnline],
-  );
+    return ok;
+  }, [canStartFromWeb]);
 
   const startApiServer = useCallback(async (): Promise<DevBootstrapResponse> => {
-    setStarting(true);
+    if (!canStartFromWeb) {
+      const message = "Start the API from the terminal (uvicorn on port 8080).";
+      setBootstrapPhase("error");
+      setBootstrapMessage(message);
+      return {
+        ok: false,
+        message,
+        reachable: false,
+        url: "http://127.0.0.1:8080",
+        port: 8080,
+        managed: false,
+      };
+    }
+
+    startingRef.current = true;
+    setBootstrapPhase("starting");
+    setBootstrapMessage("Starting API server…");
+
     try {
       const res = await devBootstrap.startApi();
-      if (!res.ok && !res.managed && !res.reachable) {
-        return res;
+      if (res.reachable) {
+        markOnline();
+        return { ...res, ok: true, reachable: true };
       }
-      const online = await waitUntilOnline({
-        maxAttempts: USER_POLL_ATTEMPTS,
-        intervalMs: USER_POLL_INTERVAL_MS,
-      });
-      return { ...res, reachable: online, ok: online };
+
+      const online = await pollUntilOnline(MANUAL_START_WAIT_MS);
+      if (online) {
+        return { ...res, ok: true, reachable: true };
+      }
+
+      const message =
+        res.message ||
+        "API server did not respond in time. Check .api_server.log or try again.";
+      markOffline(message);
+      return { ...res, ok: false, reachable: false, message };
+    } catch (err) {
+      const message =
+        err instanceof Error && !(err instanceof SyntaxError)
+          ? err.message
+          : "Could not start the API server. Check .api_server.log or try again.";
+      setBootstrapPhase("error");
+      setBootstrapMessage(message);
+      setApiOnline(false);
+      setLastChecked(new Date());
+      return {
+        ok: false,
+        message,
+        reachable: false,
+        url: "http://127.0.0.1:8080",
+        port: 8080,
+        managed: false,
+      };
     } finally {
-      setStarting(false);
+      startingRef.current = false;
     }
-  }, [waitUntilOnline]);
+  }, [canStartFromWeb, markOnline, markOffline, pollUntilOnline]);
+
+  const retryConnection = useCallback(async () => {
+    setBootstrapPhase("starting");
+    setBootstrapMessage("Checking API connection…");
+    const online = await pollUntilOnline(AUTO_START_WAIT_MS);
+    if (!online) {
+      markOffline("API server is not reachable.");
+    }
+    return online;
+  }, [markOffline, pollUntilOnline]);
 
   useEffect(() => {
-    void refresh();
-    const id = window.setInterval(() => {
-      if (!isBusy()) void refresh();
-    }, 5000);
-    return () => window.clearInterval(id);
-  }, [refresh, isBusy]);
+    if (bootstrapRan.current) return;
+    bootstrapRan.current = true;
 
-  const apiPending = checking || connecting || starting;
+    void (async () => {
+      if (await pingApi()) {
+        markOnline();
+        return;
+      }
+
+      if (!canStartFromWeb) {
+        markOffline("Run uvicorn on port 8080.");
+        return;
+      }
+
+      setBootstrapPhase("starting");
+      setBootstrapMessage("Starting API server…");
+
+      const online = await pollUntilOnline(AUTO_START_WAIT_MS);
+      if (online) return;
+
+      try {
+        const res = await devBootstrap.startApi();
+        if (res.reachable) {
+          markOnline();
+          return;
+        }
+        if (await pollUntilOnline(2000)) return;
+
+        markOffline(
+          res.message || "API server is not running. Press Start API server below.",
+        );
+      } catch (err) {
+        setBootstrapPhase("error");
+        setBootstrapMessage(err instanceof Error ? err.message : String(err));
+        setApiOnline(false);
+        setLastChecked(new Date());
+      }
+    })();
+  }, [canStartFromWeb, markOffline, markOnline, pollUntilOnline]);
+
+  useEffect(() => {
+    if (!apiOnline) return;
+    const id = window.setInterval(() => {
+      if (startingRef.current) return;
+      void pingApi().then((ok) => {
+        setLastChecked(new Date());
+        if (ok) return;
+        setApiOnline(false);
+        setBootstrapPhase(canStartFromWeb ? "offline" : "error");
+        setBootstrapMessage("API server stopped responding.");
+      });
+    }, BACKGROUND_PING_MS);
+    return () => window.clearInterval(id);
+  }, [apiOnline, canStartFromWeb]);
+
+  const starting = bootstrapPhase === "starting";
+  const showStartButton =
+    canStartFromWeb && !apiOnline && (bootstrapPhase === "offline" || bootstrapPhase === "error");
 
   const value = useMemo(
     () => ({
       apiOnline,
-      checking,
-      connecting,
+      bootstrapPhase,
+      bootstrapMessage,
       starting,
-      apiPending,
+      showStartButton,
+      canStartFromWeb,
       lastChecked,
       refresh,
-      waitUntilOnline,
-      retryConnection,
       startApiServer,
+      retryConnection,
     }),
-    [apiOnline, checking, connecting, starting, apiPending, lastChecked, refresh, waitUntilOnline, retryConnection, startApiServer],
+    [
+      apiOnline,
+      bootstrapPhase,
+      bootstrapMessage,
+      starting,
+      showStartButton,
+      canStartFromWeb,
+      lastChecked,
+      refresh,
+      startApiServer,
+      retryConnection,
+    ],
   );
 
   return <ApiConnectionContext.Provider value={value}>{children}</ApiConnectionContext.Provider>;
@@ -138,12 +265,12 @@ export function useApiConnection() {
 
 /** Gate page content while the API is still starting or being checked. */
 export function useApiPageState() {
-  const { apiOnline, apiPending, starting } = useApiConnection();
+  const { apiOnline, bootstrapPhase, bootstrapMessage, starting } = useApiConnection();
   return {
     apiOnline,
-    apiPending,
-    showConnecting: !apiOnline && apiPending,
-    showOffline: !apiOnline && !apiPending,
-    connectingTitle: starting ? "Starting API server…" : "Connecting to API server…",
+    apiPending: bootstrapPhase === "checking" || starting,
+    showConnecting: starting,
+    showOffline: !apiOnline && (bootstrapPhase === "offline" || bootstrapPhase === "error"),
+    connectingTitle: bootstrapMessage ?? "Starting API server…",
   };
 }

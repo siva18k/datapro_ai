@@ -19,8 +19,24 @@ from mcp_ask_planner import (
     plan_mcp_enrichment,
     resolve_domain_slug,
 )
+from temporal_context import format_query_results_with_time_context
 from query_planner import resolve_query_plan, structured_fallback_available
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
+
+
+def _time_context_from_enrichment(enrichment) -> dict[str, Any] | None:
+    from temporal_context import time_context_from_mcp_enrichment
+
+    return time_context_from_mcp_enrichment(enrichment)
+
+
+def _resolve_time_context(prompt: str, enrichment) -> dict[str, Any] | None:
+    from temporal_context import fetch_time_context
+
+    from_mcp = _time_context_from_enrichment(enrichment)
+    if from_mcp:
+        return from_mcp
+    return fetch_time_context(prompt)
 
 
 def _status(message: str) -> dict[str, Any]:
@@ -194,10 +210,11 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
     else:
         yield _status("Generating SQL from catalog definition…")
 
-    if history and len(history) >= 2:
+    if history and len(history) >= 2 and session.is_follow_up:
         yield _status("Interpreting follow-up in context of the prior dashboard…")
 
     try:
+        sql_history = history if session.is_follow_up else []
         sql, columns, rows, sql_notes = generate_and_execute_readonly_sql(
             prompt,
             sql_plan.source_id,
@@ -207,7 +224,7 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
             base_url=llm_base_url,
             rag_chunks=rag_chunks,
             mcp_supplement=mcp_supplement,
-            conversation_history=history,
+            conversation_history=sql_history,
         )
         sql_plan.sql = sql
     except Exception as exc:
@@ -225,12 +242,25 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         return
 
     yield _status(f"Building dashboard from {len(rows)} row(s)…")
+    time_context = _resolve_time_context(prompt, mcp_enrichment)
+    columns, rows, time_context = format_query_results_with_time_context(
+        prompt,
+        columns,
+        rows,
+        time_context=time_context,
+        enrichment=mcp_enrichment,
+    )
     summary_prompt = build_analytics_summary_prompt(
         question=prompt,
         columns=columns,
         rows=rows,
         gap_notes=sql_notes,
-        conversation_history=[{"role": t["role"], "content": t["content"]} for t in history],
+        conversation_history=(
+            [{"role": t["role"], "content": t["content"]} for t in history]
+            if session.is_follow_up
+            else None
+        ),
+        table_rules=ctx.table_business_rules_block(),
     )
     summary = generate_answer(
         summary_prompt,
@@ -248,6 +278,7 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         routing_method=plan.routing.get("method"),
         sql=sql_plan.sql,
         notes=sql_notes,
+        time_context=time_context,
     )
     yield _result(_attach_session(dash, session))
 

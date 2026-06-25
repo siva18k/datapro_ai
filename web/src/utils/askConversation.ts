@@ -18,6 +18,68 @@ interface AskMessageLike {
   flowRun?: unknown;
 }
 
+const BREAKDOWN_DIMENSIONS: Record<string, string[]> = {
+  channel: ["channel", "channels"],
+  country: ["country", "countries"],
+  region: ["region", "regions"],
+  quarter: ["quarter", "quarterly", " q1", " q2", " q3", " q4"],
+  month: ["month", "monthly"],
+  year: ["year", "yearly", "annual"],
+  customer: ["customer", "customers"],
+  product: ["product", "products"],
+  category: ["category", "categories"],
+  department: ["department", "departments"],
+};
+
+function breakdownDimensions(text: string): Set<string> {
+  const lower = text.toLowerCase();
+  const dims = new Set<string>();
+  for (const [dim, tokens] of Object.entries(BREAKDOWN_DIMENSIONS)) {
+    if (tokens.some((token) => lower.includes(token))) dims.add(dim);
+  }
+  return dims;
+}
+
+function lastUserMessage(messages: AskMessageLike[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") return messages[i].content?.trim() ?? "";
+  }
+  return "";
+}
+
+/** Skip prior turns when the new prompt is clearly a fresh question, not a refinement. */
+export function shouldSendConversationHistory(
+  messages: AskMessageLike[],
+  nextPrompt: string,
+): boolean {
+  if (!messages.length) return false;
+  const last = lastUserMessage(messages);
+  const next = nextPrompt.trim();
+  if (!last || !next) return false;
+  if (last.toLowerCase() === next.toLowerCase()) return true;
+
+  const q = next.toLowerCase();
+  if (/^(also|and|same|filter|sort|order|convert|exclude|include|only|what about|how about|add|drop|remove|keep|limit)\b/.test(q)) {
+    return true;
+  }
+
+  const curDims = breakdownDimensions(next);
+  const prevDims = breakdownDimensions(last);
+  if (curDims.size && prevDims.size && !setsEqual(curDims, prevDims)) return false;
+
+  if (!/\b(that|those|same|previous|prior|above|earlier|it|them)\b/i.test(next)) {
+    if (curDims.size !== prevDims.size) return false;
+  }
+
+  return true;
+}
+
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const value of a) if (!b.has(value)) return false;
+  return true;
+}
+
 /** Build prior turns for follow-up Ask / Analytics requests (excludes agent/flow runs). */
 export function buildAskConversationHistory(
   messages: AskMessageLike[],

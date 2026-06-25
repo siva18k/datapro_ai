@@ -266,6 +266,24 @@ class StructuredSchemaContext:
             if t.get("enabled", True) and (t.get("table_role") or "fact") != "excluded"
         ]
 
+    def table_business_rules_block(self) -> str:
+        """Per-table definitions from catalog metadata (filters, status values, metric rules)."""
+        blocks: list[str] = []
+        for table in self._active_tables():
+            table_def = (table.get("definition") or "").strip()
+            if not table_def:
+                continue
+            rel = f"{table['table_schema']}.{table['table_name']}"
+            blocks.append(f"### `{rel}`\n{table_def}")
+        if not blocks:
+            return ""
+        return (
+            "## Table business rules\n"
+            "Authoritative per-table guidance from the catalog — apply exactly in SQL and answers "
+            "(status filters, revenue definitions, exclusions, join hints).\n\n"
+            + "\n\n".join(blocks)
+        )
+
     def to_llm_prompt_block(self) -> str:
         relations = [f"{t['table_schema']}.{t['table_name']}" for t in self._active_tables()]
         definition = prepare_definition_for_llm(self.dataset_definition_md)
@@ -287,10 +305,19 @@ class StructuredSchemaContext:
                 "Do NOT invent table or column names (e.g. use `customer_profiles`, not `customers`).",
                 "",
                 "## Dataset definition",
-                "Authoritative for dataset scope, join paths (hub/bridge tables), analytics patterns, and caveats.",
-                "Read this before writing SQL — prefer documented join paths over guessing foreign keys.",
+                "Authoritative for dataset scope, documented table relationships (hub/bridge tables), "
+                "analytics patterns, and caveats.",
+                "Join paths describe how real catalog tables connect — they are not table names.",
+                "Read this before writing SQL — prefer documented relationships over guessing foreign keys.",
                 "",
                 definition,
+            ]
+        )
+        table_rules = self.table_business_rules_block()
+        if table_rules:
+            lines.extend(["", table_rules])
+        lines.extend(
+            [
                 "",
                 "## Column reference (exact names and types)",
             ]
@@ -300,7 +327,10 @@ class StructuredSchemaContext:
             lines.append(f"### {table['table_schema']}.{table['table_name']} (role: {role})")
             table_def = (table.get("definition") or "").strip()
             if table_def:
-                lines.append(table_def)
+                lines.append(
+                    "*(Business rules for this table are in **Table business rules** above — "
+                    "follow them for filters and metrics.)*"
+                )
             lines.append("Columns:")
             columns = table.get("columns") or []
             if not columns:
@@ -319,8 +349,9 @@ class StructuredSchemaContext:
             lines.append("")
         lines.append(
             "SQL rules: READ-ONLY SELECT only; schema-qualify every table; use Column reference "
-            "for exact column names; follow Dataset definition join paths; LIMIT rows unless the "
-            "user requests a full export."
+            "for exact column names and labels; follow Dataset definition relationships and Table "
+            "business rules for filters/status values; do not invent tables such as paths or "
+            "join_paths; LIMIT rows unless the user requests a full export."
         )
         return "\n".join(lines)
 
@@ -390,6 +421,23 @@ def pick_structured_dataset(
         query_vector=query_vector,
         chunks=chunks,
     )
+
+
+def load_table_business_rules_for_domain(domain_id: str | None) -> str:
+    """Collect table business rules from all structured postgres datasets in a domain."""
+    if not domain_id:
+        return ""
+    parts: list[str] = []
+    for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
+        if source.get("connector") != "postgres":
+            continue
+        try:
+            block = build_schema_context(source["id"]).table_business_rules_block()
+        except Exception:
+            continue
+        if block:
+            parts.append(f"### Dataset: {source['name']}\n\n{block}")
+    return "\n\n".join(parts).strip()
 
 
 def build_schema_context(source_id: str) -> StructuredSchemaContext:
@@ -514,13 +562,25 @@ class SqlValidationResult:
         return bool(self.phantom_tables)
 
 
+def _neutralize_function_from_keywords(sql: str) -> str:
+    """Prevent EXTRACT(x FROM col) and similar from being parsed as table refs."""
+    text = sql
+
+    def _replace_inner_from(match: re.Match[str]) -> str:
+        return re.sub(r"\sfrom\s", " __expr__ ", match.group(0), flags=re.I)
+
+    for func in ("extract", "substring", "trim", "translate", "position", "overlay"):
+        text = re.sub(rf"\b{func}\s*\([^)]*\)", _replace_inner_from, text, flags=re.I)
+    return text
+
+
 def _extract_sql_identifiers(sql: str) -> tuple[set[str], set[str]]:
     """
     Extract table references and selected column identifiers from SQL text.
     Returns (table_refs, column_refs) as lowercase name sets (unqualified).
     Best-effort — regex-based, not a full parser.
     """
-    normalized = sql.lower()
+    normalized = _neutralize_function_from_keywords(sql.lower())
 
     # Table references: FROM x, JOIN x, from schema.x, join schema.x
     table_pattern = re.compile(
@@ -541,6 +601,14 @@ def _extract_sql_identifiers(sql: str) -> tuple[set[str], set[str]]:
     }
 
     return table_refs, col_refs
+
+
+def _matches_catalog_table_name(name: str, allowed_table_names: set[str]) -> bool:
+    """Accept exact catalog names and unambiguous suffix aliases (e.g. invoices → sales_invoices)."""
+    if name in allowed_table_names:
+        return True
+    suffix_matches = [t for t in allowed_table_names if t.endswith(f"_{name}")]
+    return len(suffix_matches) == 1
 
 
 def validate_generated_sql(
@@ -586,12 +654,15 @@ def validate_generated_sql(
         "order", "having", "limit", "offset", "union", "all", "distinct",
         "null", "true", "false", "case", "when", "then", "else", "end",
         "count", "sum", "avg", "min", "max", "coalesce", "cast", "extract",
-        "date", "now", "interval", "asc", "desc",
+        "date", "now", "interval", "asc", "desc", "the", "this", "that", "with",
     }
     candidate_tables = sql_tables - sql_keywords
     catalog_violations: list[str] = []
     for tname in candidate_tables:
-        if tname not in allowed_table_names:
+        if not _matches_catalog_table_name(tname, allowed_table_names):
+            # EXTRACT(... FROM col) and similar can still leak column names here.
+            if tname in all_column_names:
+                continue
             phantom_tables.append(tname)
             catalog_violations.append(f"Table `{tname}` is not in the catalog Allowed tables")
 
@@ -652,7 +723,7 @@ def generate_and_execute_readonly_sql(
         )
 
     history = conversation_history or []
-    prior = extract_prior_structured_result(history)
+    prior = extract_prior_structured_result(history) if history else None
     active_question = question
     chat_history = [{"role": t["role"], "content": t["content"]} for t in history if t.get("content")]
 

@@ -13,7 +13,8 @@ from api.ask_export import (
     _pick_label_column,
     _pick_value_column,
 )
-from api.analytics_models import AnalyticsChartDefaults, AnalyticsResponse, KpiWidget
+from api.analytics_models import AnalyticsChartDefaults, AnalyticsResponse, KpiWidget, TimeContext, TimePeriod
+from temporal_context import format_query_results_with_time_context
 
 
 def _dashboard_title(prompt: str) -> str:
@@ -47,6 +48,19 @@ def _brief_summary(summary: str) -> str:
     return text
 
 
+def _time_context_model(raw: dict[str, Any] | None) -> TimeContext | None:
+    if not raw or not raw.get("periods"):
+        return None
+    return TimeContext(
+        requirement=str(raw.get("requirement") or ""),
+        reference_date=raw.get("reference_date"),
+        fiscal_year_start_month=int(raw.get("fiscal_year_start_month") or 1),
+        granularity=raw.get("granularity"),
+        source=raw.get("source"),
+        periods=[TimePeriod.model_validate(period) for period in raw["periods"]],
+    )
+
+
 def build_dashboard(
     *,
     prompt: str,
@@ -57,6 +71,7 @@ def build_dashboard(
     routing_method: str | None = None,
     sql: str | None = None,
     notes: list[str] | None = None,
+    time_context: dict[str, Any] | None = None,
 ) -> AnalyticsResponse:
     title = _dashboard_title(prompt)
     brief = _brief_summary(summary) if summary else None
@@ -79,11 +94,22 @@ def build_dashboard(
 
     numeric_idxs = _numeric_columns(columns, rows)
     numeric_set = set(numeric_idxs)
+    display_rows = rows
+    time_context_model = _time_context_model(time_context)
+
+    if time_context_model and columns and rows:
+        _, display_rows, _ = format_query_results_with_time_context(
+            prompt,
+            columns,
+            rows,
+            time_context=time_context or {},
+        )
+
     kpis: list[KpiWidget] = []
 
     if len(rows) == 1 and numeric_idxs:
         for idx in numeric_idxs[:4]:
-            raw = rows[0][idx] if idx < len(rows[0]) else None
+            raw = display_rows[0][idx] if idx < len(display_rows[0]) else None
             try:
                 val = float(raw)
             except (TypeError, ValueError):
@@ -96,13 +122,13 @@ def build_dashboard(
             )
 
     chart_defaults: AnalyticsChartDefaults | None = None
-    if len(rows) > 1 and numeric_idxs:
+    if len(display_rows) > 1 and numeric_idxs:
         label_idx = _pick_label_column(columns, numeric_set)
         value_idx = _pick_value_column(columns, numeric_idxs)
         chart_type = "bar"
         if re.search(r"\b(breakdown|share|distribution|percent)\b", prompt, re.I):
             chart_type = "pie"
-        elif len(rows) > 12:
+        elif len(display_rows) > 12:
             chart_type = "line"
         chart_defaults = AnalyticsChartDefaults(
             chart_type=chart_type,  # type: ignore[arg-type]
@@ -113,7 +139,7 @@ def build_dashboard(
                 columns=columns,
                 label_idx=label_idx,
                 value_idx=value_idx,
-                row_count=min(len(rows), 50),
+                row_count=min(len(display_rows), 50),
             ),
         )
 
@@ -121,9 +147,10 @@ def build_dashboard(
         title=title,
         summary=brief,
         columns=columns,
-        rows=rows[:100],
+        rows=display_rows[:100],
         total_rows=len(rows),
         chart_defaults=chart_defaults,
+        time_context=time_context_model,
         kpis=kpis,
         domain_name=domain_name,
         routing_method=routing_method,

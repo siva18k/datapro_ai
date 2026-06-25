@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mcp_client import check_mcp_server
+from mcp_client import check_mcp_server, invalidate_mcp_reachability_cache
 from mcp_registry import PROJECT_DIR
 
 MANAGED_INTEGRATIONS: dict[str, dict[str, Any]] = {
@@ -212,10 +212,12 @@ def _start_process_integration(slug: str, spec: dict, url: str) -> tuple[bool, s
         start_new_session=True,
     )
     _write_pid(pid_path, proc.pid)
+    invalidate_mcp_reachability_cache(url)
 
-    for _ in range(30):
+    for _ in range(40):
         time.sleep(0.5)
-        if check_mcp_server(url):
+        if check_mcp_server(url, use_cache=False, timeout=1):
+            invalidate_mcp_reachability_cache(url)
             return True, f"Started {slug} (pid {proc.pid}) at {url}"
         if proc.poll() is not None:
             _clear_pid(pid_path)

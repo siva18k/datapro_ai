@@ -63,6 +63,15 @@ REGISTRY_DEFAULTS: dict[str, Any] = {
             "description": "Ingest documents from sample_docs (or docs_path) into the knowledge base.",
             "enabled": True,
         },
+        "resolve_time_period": {
+            "description": (
+                "Resolve calendar or fiscal quarters, months, and year boundaries from a "
+                "natural-language requirement (e.g. 'Q1 2024', 'last year quarterly', 'FY2025'). "
+                "Returns period start/end dates and SQL filter templates — replace <date_column> "
+                "with a catalog date column."
+            ),
+            "enabled": True,
+        },
     },
     "resources": {
         "ragpro://domains": {

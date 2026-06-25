@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from mcp_client import check_mcp_server
+from mcp_client import check_mcp_server, invalidate_mcp_reachability_cache
 from mcp_registry import PROJECT_DIR, build_mcp_url, load_registry
 
 PID_PATH = PROJECT_DIR / ".mcp_server.pid"
@@ -207,10 +207,12 @@ def start_server(registry: dict | None = None) -> tuple[bool, str]:
         start_new_session=True,
     )
     _write_pid(proc.pid)
+    invalidate_mcp_reachability_cache(url)
 
-    for _ in range(30):
+    for _ in range(40):
         time.sleep(0.5)
-        if check_mcp_server(url):
+        if check_mcp_server(url, use_cache=False, timeout=1):
+            invalidate_mcp_reachability_cache(url)
             return True, f"Started MCP server (pid {proc.pid}) at {url}"
         if proc.poll() is not None:
             _clear_pid()
@@ -247,9 +249,10 @@ def stop_server(registry: dict | None = None) -> tuple[bool, str]:
             errors.append(str(exc))
 
     _clear_pid()
+    invalidate_mcp_reachability_cache(url)
     time.sleep(0.5)
 
-    if check_mcp_server(url):
+    if check_mcp_server(url, use_cache=False, timeout=1):
         remaining = find_mcp_server_pids(registry)
         if remaining:
             return False, (

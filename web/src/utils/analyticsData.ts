@@ -1,3 +1,5 @@
+import type { TimeContext } from "../types";
+
 export type ChartType = "bar" | "line" | "pie";
 
 export function humanizeColumn(name: string): string {
@@ -6,8 +8,34 @@ export function humanizeColumn(name: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function formatCell(value: unknown): string {
+function parseTemporalBucket(value: unknown): Date | null {
+  if (value == null || value === "") return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const parsed = Date.parse(text.replace(/Z$/, "Z"));
+  if (Number.isNaN(parsed)) return null;
+  return new Date(parsed);
+}
+
+function displayLabelForBucket(value: unknown, timeContext: TimeContext | undefined): string | null {
+  if (!timeContext?.periods?.length) return null;
+  const bucket = parseTemporalBucket(value);
+  if (!bucket) return null;
+  const bucketTime = bucket.getTime();
+  for (const period of timeContext.periods) {
+    const start = Date.parse(`${period.start}T00:00:00`);
+    const end = Date.parse(`${period.end_exclusive}T00:00:00`);
+    if (!Number.isNaN(start) && !Number.isNaN(end) && bucketTime >= start && bucketTime < end) {
+      return period.label;
+    }
+  }
+  return null;
+}
+
+export function formatCell(value: unknown, timeContext?: TimeContext): string {
   if (value == null) return "—";
+  const periodLabel = displayLabelForBucket(value, timeContext);
+  if (periodLabel) return periodLabel;
   if (typeof value === "number") {
     return Number.isInteger(value)
       ? value.toLocaleString()
@@ -66,13 +94,18 @@ export function buildChartSeries(
   labelIdx: number,
   valueIdx: number,
   maxPoints = 50,
+  timeContext?: TimeContext,
 ): { labels: string[]; values: number[]; valueLabel: string } {
   const slice = rows.slice(0, maxPoints);
   const labels: string[] = [];
   const values: number[] = [];
   for (const row of slice) {
     const rawLabel = labelIdx < row.length ? row[labelIdx] : "";
-    labels.push(rawLabel == null || rawLabel === "" ? "—" : String(rawLabel));
+    const periodLabel = displayLabelForBucket(rawLabel, timeContext);
+    labels.push(
+      periodLabel ??
+        (rawLabel == null || rawLabel === "" ? "—" : String(rawLabel)),
+    );
     const rawVal = valueIdx < row.length ? row[valueIdx] : 0;
     const n = typeof rawVal === "number" ? rawVal : Number(rawVal);
     values.push(Number.isNaN(n) ? 0 : n);

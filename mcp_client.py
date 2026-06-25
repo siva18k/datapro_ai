@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,9 @@ if load_dotenv is not None:
     load_dotenv(override=False)
 
 DEFAULT_MCP_URL = os.environ.get("MCP_URL", "http://127.0.0.1:8000/mcp")
+_REACHABILITY_CACHE: dict[str, tuple[bool, float]] = {}
+_REACHABILITY_OK_TTL_SEC = 60.0
+_REACHABILITY_FAIL_TTL_SEC = 2.0
 
 
 def get_default_mcp_url() -> str:
@@ -98,9 +102,9 @@ async def _call_search_documents(
             return _parse_tool_result(result)
 
 
-async def _ping_mcp(url: str) -> bool:
+async def _ping_mcp(url: str, *, timeout: float = 3) -> bool:
     try:
-        async with streamablehttp_client(url, timeout=3) as (read, write, _):
+        async with streamablehttp_client(url, timeout=timeout) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return True
@@ -115,9 +119,28 @@ def search_documents(
     return asyncio.run(_call_search_documents(url, query, top_k, domain))
 
 
-def check_mcp_server(url: str) -> bool:
+def invalidate_mcp_reachability_cache(url: str | None = None) -> None:
+    """Drop cached reachability results (e.g. after start/stop)."""
+    if url is None:
+        _REACHABILITY_CACHE.clear()
+    else:
+        _REACHABILITY_CACHE.pop(url, None)
+
+
+def check_mcp_server(url: str, *, use_cache: bool = True, timeout: float = 3) -> bool:
     """Return True if the MCP server accepts a session at the given URL."""
-    return asyncio.run(_ping_mcp(url))
+    now = time.monotonic()
+    if use_cache and timeout == 3:
+        cached = _REACHABILITY_CACHE.get(url)
+        if cached:
+            value, cached_at = cached
+            ttl = _REACHABILITY_OK_TTL_SEC if value else _REACHABILITY_FAIL_TTL_SEC
+            if now - cached_at < ttl:
+                return value
+    result = asyncio.run(_ping_mcp(url, timeout=timeout))
+    if use_cache and timeout == 3:
+        _REACHABILITY_CACHE[url] = (result, now)
+    return result
 
 
 def _serialize_model(item) -> dict:
