@@ -21,30 +21,46 @@ REGISTRY_DEFAULTS: dict[str, Any] = {
         "stateless": True,
         "instructions": (
             "DATA Pro multi-domain knowledge base (Postgres/pgvector). "
-            "Domains include HR, Finance, Sales, and General. "
-            "Use list_domains and list_domain_sources to discover scope, then search_documents "
-            "with an optional domain filter. Answer only from retrieved context."
+            "Reference resources: ragpro://domains/{domain}/schema (SQL catalog), calendar, glossary, sql-notes. "
+            "Tools: list_domains, list_domain_sources, search_documents, resolve_time_period. "
+            "Resources = read-only context; tools = actions. Answer only from retrieved context."
         ),
     },
     "tools": {
         "list_domains": {
-            "description": "List enabled business domains (HR, Finance, Sales, etc.).",
+            "description": (
+                "List enabled business domains (HR, Finance, Sales, etc.). "
+                "Use before list_domain_sources when the domain is unknown."
+            ),
             "enabled": True,
         },
         "list_domain_sources": {
-            "description": "List data sources registered under a domain (by slug or name).",
+            "description": (
+                "List catalog datasets (connectors) registered under a business domain. "
+                "Arg: domain (slug, display name, or UUID). "
+                "NOT the same as list_sources (which lists ingested document files)."
+            ),
             "enabled": True,
         },
         "get_rag_profile": {
-            "description": "Return RAG profile settings and instructions for a data source.",
+            "description": (
+                "Return RAG profile settings and instructions for a catalog dataset. "
+                "Args: source_id (UUID or dataset slug), optional domain when using slug."
+            ),
             "enabled": True,
         },
         "search_documents": {
-            "description": "Semantic search over ingested chunks. Optional domain filter (slug or name).",
+            "description": (
+                "Semantic search over ingested document chunks. "
+                "Args: query, optional top_k (1–20), optional domain filter (slug, name, or UUID)."
+            ),
             "enabled": True,
         },
         "list_sources": {
-            "description": "List ingested source files with chunk counts and last-ingested timestamps.",
+            "description": (
+                "List ingested document files in the vector knowledge base with chunk counts. "
+                "NOT catalog datasets — use list_domain_sources for those."
+            ),
             "enabled": True,
         },
         "get_chunk": {
@@ -82,14 +98,53 @@ REGISTRY_DEFAULTS: dict[str, Any] = {
         },
         "ragpro://domains/{domain}/sources": {
             "name": "domain_sources",
-            "description": "Data sources registered under a domain.",
+            "description": (
+                "Catalog datasets under a domain (same shape as list_domain_sources tool). "
+                "URI param: domain slug, name, or UUID."
+            ),
             "mime_type": "application/json",
             "enabled": True,
         },
         "ragpro://domains/{domain}/stats": {
             "name": "domain_stats",
-            "description": "Chunk counts per source within a domain.",
+            "description": "Chunk counts per source within a domain (optional inventory).",
             "mime_type": "application/json",
+            "enabled": True,
+        },
+        "ragpro://domains/{domain}/schema": {
+            "name": "domain_schema",
+            "description": (
+                "Catalog schema for SQL — allowed tables, column names/types, and dataset definitions. "
+                "Authoritative reference for database queries in this domain."
+            ),
+            "mime_type": "text/markdown",
+            "enabled": True,
+        },
+        "ragpro://domains/{domain}/calendar": {
+            "name": "domain_calendar",
+            "description": (
+                "Fiscal/calendar conventions for the domain (FY start, quarters). "
+                "Static reference — pair with resolve_time_period tool for exact SQL filters."
+            ),
+            "mime_type": "text/markdown",
+            "enabled": True,
+        },
+        "ragpro://domains/{domain}/glossary": {
+            "name": "domain_glossary",
+            "description": "Business terms and metric definitions for the domain.",
+            "mime_type": "text/markdown",
+            "enabled": True,
+        },
+        "ragpro://domains/{domain}/sql-notes": {
+            "name": "domain_sql_notes",
+            "description": "SQL conventions, join rules, and filters for this domain.",
+            "mime_type": "text/markdown",
+            "enabled": True,
+        },
+        "ragpro://policy/citation-rules": {
+            "name": "citation_rules",
+            "description": "Grounding and citation policy for document answers.",
+            "mime_type": "text/markdown",
             "enabled": True,
         },
         "ragpro://knowledge-base/stats": {
@@ -166,6 +221,35 @@ User question:
 
 Context:
 {context}""",
+            "enabled": True,
+        },
+        "domain_sql_context": {
+            "description": (
+                "Assemble SQL generation context from reference resources (schema, calendar, glossary) "
+                "without running retrieval on the server."
+            ),
+            "template": """You are a PostgreSQL expert for the {domain_name} domain.
+
+## Catalog schema
+{schema}
+
+## Fiscal / calendar reference
+{calendar}
+
+## Glossary
+{glossary}
+
+## SQL conventions
+{sql_notes}
+
+## MCP tool context
+{tool_context}
+
+User question:
+{question}
+
+Write ONE read-only SELECT query. Use ONLY tables and columns from the schema above.
+Schema-qualify every table. SELECT only — no writes or DDL.""",
             "enabled": True,
         },
     },

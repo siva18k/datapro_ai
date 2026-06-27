@@ -26,6 +26,8 @@
   --color-badge-muted-text: #52525b;
   --color-badge-ok-bg: #ecfdf5;
   --color-badge-ok-text: #047857;
+  --color-badge-warn-bg: #fffbeb;
+  --color-badge-warn-text: #b45309;
   --color-flow-link-0: #2563eb;
   --color-flow-link-1: #0d9488;
   --color-flow-link-2: #7c3aed;
@@ -61,6 +63,8 @@
   --color-badge-muted-text: #d4d4d8;
   --color-badge-ok-bg: #052e16;
   --color-badge-ok-text: #6ee7b7;
+  --color-badge-warn-bg: #422006;
+  --color-badge-warn-text: #fcd34d;
   --color-flow-link-0: #60a5fa;
   --color-flow-link-1: #2dd4bf;
   --color-flow-link-2: #a78bfa;
@@ -692,22 +696,55 @@ button.sidebar-hint {
 .dataset-data-table table.data tbody tr.catalog-table-picker-row--active {
   border-top-color: color-mix(in srgb, var(--color-primary) 32%, var(--color-border));
 }
+.dataset-data-table table.data tbody tr.rag-row-dirty {
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-surface));
+}
+.dataset-data-table table.data tbody tr.rag-row-pending-ingest {
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
 
-/* —— Add dataset row —— */
+/* —— Add dataset form —— */
+.add-dataset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem 1rem;
+  align-items: end;
+}
+.add-dataset-field-wide {
+  grid-column: 1 / -1;
+}
+@media (min-width: 640px) {
+  .add-dataset-field-wide {
+    grid-column: span 2;
+  }
+}
+.add-dataset-upload {
+  @apply rounded-lg px-4 py-3 text-left;
+}
+.add-dataset-form-actions {
+  @apply flex flex-wrap items-center gap-2;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-light);
+}
+.add-dataset-hint {
+  @apply mb-0;
+}
+/* legacy row helpers (kept for compatibility) */
 .add-dataset-row {
-  @apply flex flex-nowrap items-end gap-3 overflow-x-auto;
+  @apply flex flex-wrap items-end gap-3;
 }
 .add-dataset-input {
-  @apply w-40 min-w-[9rem];
+  @apply w-full min-w-[9rem];
 }
 .add-dataset-select {
-  @apply w-36 min-w-[8rem];
+  @apply w-full min-w-[8rem];
 }
 .add-dataset-select--wide {
-  @apply w-52 min-w-[12rem];
+  @apply w-full min-w-[12rem];
 }
 .add-dataset-actions {
-  @apply flex shrink-0 items-center gap-2 self-end pb-0.5;
+  @apply flex shrink-0 items-center gap-2;
 }
 .table-search-input {
   @apply !w-32 max-w-[8rem] shrink-0 flex-none px-2 py-1 text-xs;
@@ -1444,6 +1481,10 @@ label.file-upload-btn {
   background: var(--color-badge-ok-bg);
   color: var(--color-badge-ok-text);
 }
+.badge-warn {
+  background: var(--color-badge-warn-bg);
+  color: var(--color-badge-warn-text);
+}
 
 /* —— Column label bubbles (catalog) —— */
 .column-label-list {
@@ -1935,12 +1976,39 @@ label.file-upload-btn {
   z-index: 40;
   pointer-events: auto;
 }
-.ask-agent-menu .agent-slash-menu-item--active {
-  background: var(--color-primary-soft);
-  color: var(--color-primary-text);
+.ask-agent-menu-portal {
+  position: fixed;
+  z-index: 300;
+  max-height: min(18rem, 42vh);
+  overflow-y: auto;
+  box-shadow:
+    0 10px 28px rgba(15, 23, 42, 0.14),
+    0 2px 8px rgba(15, 23, 42, 0.08);
 }
-.ask-agent-menu .agent-slash-menu-item--active .text-zinc-500 {
-  color: color-mix(in srgb, var(--color-primary-text) 70%, transparent);
+[data-theme="dark"] .ask-agent-menu-portal {
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.ask-agent-menu--above {
+  transform: translateY(-100%);
+}
+.mention-menu-item-meta {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+.mention-menu-empty {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.ask-composer-stack--menu-open {
+  position: relative;
+  z-index: 40;
+}
+.ask-composer--menu-open,
+.ask-chat:has(.ask-composer-inner--menu-open) {
+  overflow: visible;
 }
 .ask-user-agent-tag {
   @apply mr-1.5 inline-block rounded-full px-2 py-0.5 text-xs font-medium;
@@ -1951,6 +2019,13 @@ label.file-upload-btn {
   @apply mr-1.5 inline-block rounded-full px-2 py-0.5 text-xs font-medium;
   background: color-mix(in srgb, #8b5cf6 18%, var(--color-surface));
   color: #6d28d9;
+}
+.ask-agent-menu .agent-slash-menu-item--active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+}
+.ask-agent-menu .agent-slash-menu-item--active .mention-menu-item-meta {
+  color: color-mix(in srgb, var(--color-primary-text) 70%, transparent);
 }
 .ask-composer-flow-chip {
   background: color-mix(in srgb, #8b5cf6 14%, var(--color-surface));

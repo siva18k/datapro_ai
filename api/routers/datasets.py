@@ -9,9 +9,11 @@ from catalog_db import (
     create_source,
     delete_table_metadata,
     get_column_metadata,
+    get_rag_profile,
     get_source,
     get_table_metadata,
     list_column_metadata,
+    list_source_file_rag,
     list_sources,
     list_table_metadata,
     sync_columns_from_introspection,
@@ -21,38 +23,40 @@ from catalog_db import (
     upsert_table_metadata,
 )
 from catalog_service import (
+    build_dataset_schema_context,
     delete_dataset,
     get_dataset_definition_path,
     get_source_data_path,
     get_source_ingest_map,
     ingest_source_files,
+    ingest_source_rag,
+    list_dataset_assets,
     list_source_files,
     load_dataset_definition,
     save_dataset_definition,
     save_dataset_files,
+    save_dataset_rag_settings,
+    sync_dataset_source,
+    test_dataset_connection,
 )
+from dataset_connectors.registry import CONNECTOR_SOURCE_TYPES, is_content_connector, is_remote_connector
 from ingest_service import SUPPORTED_EXTENSIONS
 from structured_db import (
     list_schema_tables,
     list_table_columns,
     postgres_config_from_source,
-    test_postgres_connection,
 )
 from catalog_definition import draft_dataset_definition, strip_markdown_fences
 from relationship_inference import build_relationships_section, merge_relationships_into_definition
-from code_orchestrator import build_file_dataset_context
-from structured_orchestrator import build_schema_context
 
 router = APIRouter(tags=["datasets"])
 
-DATASET_TYPES = {
-    "postgres": "structured",
-    "upload": "unstructured",
-    "file_path": "unstructured",
-    "api": "unstructured",
-    "sharepoint": "unstructured",
-    "web_url": "unstructured",
-}
+DATASET_TYPES = CONNECTOR_SOURCE_TYPES
+
+
+class SyncBody(BaseModel):
+    asset_ids: list[str] | None = None
+    full: bool = False
 
 
 class DatasetCreate(BaseModel):
@@ -67,6 +71,7 @@ class DatasetUpdate(BaseModel):
     description: str | None = None
     config: dict | None = None
     enabled: bool | None = None
+    connector: str | None = None
 
 
 class DefinitionBody(BaseModel):
@@ -81,6 +86,40 @@ class TableUpdate(BaseModel):
     definition: str | None = None
     enabled: bool | None = None
     table_role: str | None = None
+    rag_enabled: bool | None = None
+    chunk_size: int | None = None
+    chunk_overlap: int | None = None
+
+
+class TableRagRow(BaseModel):
+    id: str
+    rag_enabled: bool | None = None
+    chunk_size: int | None = None
+    chunk_overlap: int | None = None
+
+
+class FileRagRow(BaseModel):
+    file_name: str
+    rag_enabled: bool | None = None
+    chunk_size: int | None = None
+    chunk_overlap: int | None = None
+
+
+class RagProfileUpdate(BaseModel):
+    chunk_size: int | None = None
+    chunk_overlap: int | None = None
+    instructions: str | None = None
+
+
+class RagSettingsBody(BaseModel):
+    profile: RagProfileUpdate | None = None
+    tables: list[TableRagRow] = Field(default_factory=list)
+    files: list[FileRagRow] = Field(default_factory=list)
+
+
+class RagIngestBody(BaseModel):
+    table_ids: list[str] | None = None
+    file_names: list[str] | None = None
 
 
 class ColumnUpdate(BaseModel):
@@ -132,6 +171,11 @@ def patch_dataset(dataset_id: str, body: DatasetUpdate):
     if not get_source(source_id=dataset_id):
         raise HTTPException(404, "Dataset not found")
     fields = body.model_dump(exclude_none=True)
+    if "connector" in fields:
+        connector = fields.pop("connector")
+        if connector not in DATASET_TYPES:
+            raise HTTPException(400, f"Unknown connector: {connector}")
+        update_source(dataset_id, connector=connector, source_type=DATASET_TYPES[connector])
     if fields:
         update_source(dataset_id, **fields)
     return get_source(source_id=dataset_id)
@@ -159,13 +203,18 @@ def dataset_summary(dataset_id: str):
         out["host"] = cfg.get("host")
         out["schema"] = cfg.get("schema")
         out["table_count"] = len(list_table_metadata(dataset_id))
-    elif connector in ("upload", "file_path"):
+    elif is_content_connector(connector):
         files = list_source_files(source)
         ingested = get_source_ingest_map(dataset_id)
         out["file_count"] = len(files)
         out["chunk_count"] = sum(int(v["chunk_count"]) for v in ingested.values())
-    elif connector == "api":
-        out["base_url"] = cfg.get("base_url")
+        if is_remote_connector(connector):
+            out["last_sync_at"] = cfg.get("last_sync_at")
+            out["asset_count"] = len(list_dataset_assets(source))
+            if connector == "api":
+                out["base_url"] = cfg.get("base_url")
+            else:
+                out["url"] = cfg.get("url")
     else:
         out["url"] = cfg.get("url")
     return out
@@ -174,11 +223,32 @@ def dataset_summary(dataset_id: str):
 @router.post("/datasets/{dataset_id}/test-connection")
 def test_connection(dataset_id: str):
     source = get_source(source_id=dataset_id)
-    if not source or source["connector"] != "postgres":
-        raise HTTPException(400, "Dataset is not a postgres connection")
-    cfg = postgres_config_from_source(source)
-    ok, msg = test_postgres_connection(cfg)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    ok, msg = test_dataset_connection(source)
     return {"ok": ok, "message": msg}
+
+
+@router.get("/datasets/{dataset_id}/assets")
+def dataset_assets(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    return {"assets": list_dataset_assets(source), "connector": source.get("connector")}
+
+
+@router.post("/datasets/{dataset_id}/sync")
+def sync_dataset(dataset_id: str, body: SyncBody | None = None):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    payload = body or SyncBody()
+    result = sync_dataset_source(
+        source,
+        asset_ids=payload.asset_ids,
+        full=payload.full,
+    )
+    return result
 
 
 @router.get("/datasets/{dataset_id}/remote-tables")
@@ -285,34 +355,10 @@ def schema_context(dataset_id: str):
     source = get_source(source_id=dataset_id)
     if not source:
         raise HTTPException(404, "Dataset not found")
-    if source.get("connector") == "postgres":
-        try:
-            ctx = build_schema_context(dataset_id)
-        except ValueError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        return {
-            "kind": "sql",
-            "source_id": ctx.source_id,
-            "source_name": ctx.source_name,
-            "domain_name": ctx.domain_name,
-            "tables": ctx.tables,
-            "prompt_block": ctx.to_llm_prompt_block(),
-        }
-    if source.get("connector") in ("upload", "file_path"):
-        try:
-            ctx = build_file_dataset_context(dataset_id)
-        except ValueError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        return {
-            "kind": "python",
-            "source_id": ctx.source_id,
-            "source_name": ctx.source_name,
-            "domain_name": ctx.domain_name,
-            "data_dir": ctx.data_dir,
-            "files": ctx.files,
-            "prompt_block": ctx.to_llm_prompt_block(),
-        }
-    raise HTTPException(400, f"Schema context not supported for connector {source.get('connector')}")
+    try:
+        return build_dataset_schema_context(source)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.get("/datasets/{dataset_id}/definition/relationships")
@@ -424,7 +470,7 @@ def ingest(dataset_id: str, body: IngestBody):
     if source.get("source_type") == "structured":
         raise HTTPException(
             400,
-            "Structured datasets use catalog metadata indexing (RAG page), not file ingest.",
+            "Structured datasets use the RAG tab in Catalog for table indexing.",
         )
     base = get_source_data_path(source)
     paths = [base / name for name in body.file_names]
@@ -433,3 +479,98 @@ def ingest(dataset_id: str, body: IngestBody):
         raise HTTPException(400, f"Files not found: {', '.join(missing)}")
     report = ingest_source_files(source, paths, get_embedder())
     return report
+
+
+@router.get("/datasets/{dataset_id}/rag")
+def dataset_rag_settings(dataset_id: str):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    profile = get_rag_profile(dataset_id)
+    if not profile:
+        raise HTTPException(404, "RAG profile not found")
+    ingested = get_source_ingest_map(dataset_id)
+    out: dict = {"source": source, "profile": profile}
+    if source.get("source_type") == "structured":
+        tables = list_table_metadata(dataset_id)
+        for table in tables:
+            prefix = f"catalog_meta/{source.get('domain_slug')}/{source.get('slug')}/{table['table_name']}"
+            lookup = f"lookup_data/{source.get('domain_slug')}/{source.get('slug')}/{table['table_name']}"
+            table["ingested"] = prefix in ingested or lookup in ingested
+            table["chunk_count"] = int(ingested.get(prefix, {}).get("chunk_count", 0)) + int(
+                ingested.get(lookup, {}).get("chunk_count", 0)
+            )
+        out["tables"] = tables
+    else:
+        file_rows = {r["file_name"]: r for r in list_source_file_rag(dataset_id)}
+        files = []
+        for path in list_source_files(source):
+            settings = file_rows.get(path.name, {})
+            row = {
+                "file_name": path.name,
+                "rag_enabled": settings.get("rag_enabled", True),
+                "chunk_size": settings.get("chunk_size"),
+                "chunk_overlap": settings.get("chunk_overlap"),
+                "ingested": path.name in ingested,
+                "chunk_count": int(ingested.get(path.name, {}).get("chunk_count", 0)),
+            }
+            files.append(row)
+        out["files"] = files
+    return out
+
+
+@router.put("/datasets/{dataset_id}/rag/settings")
+def save_rag_settings(dataset_id: str, body: RagSettingsBody):
+    if not get_source(source_id=dataset_id):
+        raise HTTPException(404, "Dataset not found")
+    profile_fields = body.profile.model_dump(exclude_none=True) if body.profile else None
+    table_payload = [t.model_dump() for t in body.tables] if body.tables else None
+    file_payload = [f.model_dump() for f in body.files] if body.files else None
+    result = save_dataset_rag_settings(
+        dataset_id,
+        profile=profile_fields,
+        tables=table_payload,
+        files=file_payload,
+    )
+    return result
+
+
+@router.post("/datasets/{dataset_id}/rag/ingest")
+def rag_ingest(dataset_id: str, body: RagIngestBody | None = None):
+    source = get_source(source_id=dataset_id)
+    if not source:
+        raise HTTPException(404, "Dataset not found")
+    payload = body or RagIngestBody()
+    if source.get("source_type") == "structured":
+        if payload.table_ids is not None and len(payload.table_ids) == 0:
+            return {
+                "skipped": True,
+                "catalog_chunks": 0,
+                "removed_chunks": 0,
+                "message": "No changed tables to ingest.",
+            }
+        table_ids = payload.table_ids
+        file_names = None
+    else:
+        if payload.file_names is not None and len(payload.file_names) == 0:
+            return {
+                "skipped": True,
+                "catalog_chunks": 0,
+                "total_chunks": 0,
+                "message": "No changed files to ingest.",
+            }
+        table_ids = None
+        file_names = payload.file_names
+    refreshed = get_source(source_id=dataset_id)
+    if refreshed and is_remote_connector(refreshed.get("connector", "")) and not list_source_files(refreshed):
+        sync_dataset_source(refreshed)
+        refreshed = get_source(source_id=dataset_id)
+    try:
+        return ingest_source_rag(
+            refreshed or source,
+            get_embedder(),
+            table_ids=table_ids,
+            file_names=file_names,
+        )
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc

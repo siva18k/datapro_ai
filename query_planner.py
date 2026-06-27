@@ -11,13 +11,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from conversation_context import (
+    has_attached_documents,
+)
 from catalog_db import get_domain
 from catalog_service import normalize_domain_overrides
 from code_orchestrator import ExecutionKind, classify_execution_kind
 from dataset_router import pick_rag_dataset
 from domain_router import route_question
-from db import search_chunks
 from query_fuzzy import correct_query_spelling, encode_search_queries
+from scope_resolver import resolve_catalog_scope
 from structured_orchestrator import (
     find_best_structured_domain,
     pick_structured_dataset,
@@ -43,6 +46,9 @@ class QueryPlan:
     rag_source_name: str | None = None
     rag_domain_id: str | None = None
     rag_domain_name: str | None = None
+    table_names: list[str] = field(default_factory=list)
+    file_names: list[str] = field(default_factory=list)
+    column_hints: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
 
@@ -55,58 +61,50 @@ def find_best_rag_domain(
     allowed_domain_ids: list[str] | None = None,
     query_vector=None,
 ) -> tuple[dict | None, list[dict]]:
-    """Domain whose ingested chunks best match the question (single vector search)."""
-    if query_vector is None:
-        query_vector = embedder.encode([question])[0]
+    """Deprecated: domain routing uses catalog metadata only. Returns (domain, [])."""
+    del question, embedder, top_k, query_vector
+    if prefer_domain_id:
+        domain = get_domain(domain_id=prefer_domain_id)
+        return domain, []
+    if allowed_domain_ids and len(allowed_domain_ids) == 1:
+        domain = get_domain(domain_id=allowed_domain_ids[0])
+        return domain, []
+    return None, []
 
-    search_kwargs: dict[str, Any] = {}
-    if allowed_domain_ids:
-        if len(allowed_domain_ids) == 1:
-            search_kwargs["domain_id"] = allowed_domain_ids[0]
-        else:
-            search_kwargs["domain_ids"] = allowed_domain_ids
 
-    chunks = search_chunks(
+def _apply_catalog_scope(
+    question: str,
+    *,
+    domain_id: str | None,
+    source_id: str | None,
+    rag_source_id: str | None,
+    execution_kind: ExecutionPath,
+    embedder=None,
+    routing: dict[str, Any],
+    notes: list[str],
+) -> tuple[list[str], list[str], list[str], dict[str, Any]]:
+    scope = resolve_catalog_scope(
         question,
-        embedder,
-        top_k=max(top_k * 3, 12),
-        query_vector=query_vector,
-        **search_kwargs,
+        domain_id=domain_id,
+        source_id=source_id,
+        rag_source_id=rag_source_id,
+        execution_kind=execution_kind,
+        embedder=embedder,
     )
-    if not chunks:
-        return None, []
-
-    best_by_domain: dict[str, dict] = {}
-    for chunk in chunks:
-        did = chunk.get("domain_id")
-        if not did:
-            continue
-        dist = float(chunk.get("distance", float("inf")))
-        if did == prefer_domain_id:
-            dist -= 0.05
-        prev = best_by_domain.get(did)
-        if prev is None or dist < float(prev.get("_score", float("inf"))):
-            best_by_domain[did] = {**chunk, "_score": dist}
-
-    if not best_by_domain:
-        domain_id = chunks[0].get("domain_id")
-        if domain_id:
-            domain = get_domain(domain_id=domain_id)
-            if domain:
-                return domain, chunks[:top_k]
-        return None, chunks[:top_k]
-
-    winner_id = min(best_by_domain, key=lambda did: best_by_domain[did]["_score"])
-    domain = get_domain(domain_id=winner_id)
-    if not domain:
-        return None, []
-
-    winner_chunks = [
-        {k: v for k, v in c.items() if k != "_score"}
-        for c in chunks
-        if c.get("domain_id") == winner_id
-    ][:top_k]
-    return domain, winner_chunks
+    routing = {
+        **routing,
+        "scope_method": scope.method,
+        "scope_confidence": round(scope.confidence, 3) if scope.confidence else None,
+    }
+    if scope.table_names:
+        notes.append(f"Narrowed to table(s): {', '.join(scope.table_names)}.")
+        routing["table_names"] = scope.table_names
+    if scope.file_names:
+        notes.append(f"Narrowed to file(s): {', '.join(scope.file_names)}.")
+        routing["file_names"] = scope.file_names
+    if scope.column_hints:
+        routing["column_hints"] = scope.column_hints
+    return scope.table_names, scope.file_names, scope.column_hints, routing
 
 
 def _domain_row(domain_id: str | None) -> dict | None:
@@ -131,7 +129,18 @@ def resolve_query_plan(
 
     When domain_overrides is set, search is limited to those domains and cross-domain
     auto-routing is skipped.
+
+    When the user attached files in Ask (``[Attached documents]`` block), routing skips
+    catalog SQL — the answer should use the upload as context, not postgres tables.
     """
+    if has_attached_documents(question):
+        return QueryPlan(
+            question=question,
+            execution_kind="attachment",
+            routing={"method": "attachment"},
+            notes=["Attached file(s) — answering from upload only."],
+        )
+
     _, spelling_fixes = correct_query_spelling(question)
     query_vector = (
         encode_search_queries(embedder, question)[0]
@@ -238,45 +247,18 @@ def resolve_query_plan(
             else:
                 execution_kind = "rag"
         elif execution_kind == "python":
-            notes.append("File-based analytics detected; using document search until Python curation is enabled.")
+            notes.append("File-based analytics detected; using document/RAG path until Python curation is enabled.")
             execution_kind = "rag"
 
-        if embedder is not None and execution_kind in ("rag", "hybrid"):
-            rag_domain, rag_chunks = find_best_rag_domain(
-                question,
-                embedder,
-                prefer_domain_id=domain_id,
-                allowed_domain_ids=allowed_domain_ids if scope_locked else None,
-                query_vector=query_vector,
-            )
-            if rag_domain and rag_chunks:
-                rag_domain_id = rag_domain["id"]
-                rag_domain_name = rag_domain["name"]
-                if rag_domain_id != domain_id and not scope_locked:
-                    notes.append(
-                        f"Best document match is in {rag_domain_name} "
-                        f"(keyword router chose {domain_name or 'all domains'})."
-                    )
-                    domain_id = rag_domain_id
-                    domain_name = rag_domain_name
-                    domain_slug = rag_domain.get("slug")
-                    routing = {
-                        **routing,
-                        "domain_id": domain_id,
-                        "domain_name": domain_name,
-                        "domain_slug": domain_slug,
-                        "method": f"{routing.get('method', 'none')}+rag_catalog",
-                    }
-
     if embedder is not None and domain_id and execution_kind in ("rag", "hybrid"):
-        rag_dataset, rag_conf, rag_method, rag_pick_chunks = pick_rag_dataset(
+        rag_dataset, rag_conf, rag_method, _rag_pick_chunks = pick_rag_dataset(
             question,
             domain_id,
             embedder,
             query_vector=query_vector,
             allowed_domain_ids=allowed_domain_ids if scope_locked else None,
         )
-        if rag_dataset and (rag_conf >= 0.12 or rag_method in ("rag_metadata", "embedding_metadata", "keyword_metadata")):
+        if rag_dataset and (rag_conf >= 0.12 or rag_method in ("embedding_metadata", "keyword_metadata", "weak_metadata")):
             rag_source_id = rag_dataset["id"]
             rag_source_name = rag_dataset["name"]
             routing = {
@@ -291,13 +273,12 @@ def resolve_query_plan(
                 f"Auto-selected dataset «{rag_source_name}» "
                 f"(matched via {rag_method.replace('_', ' ')})."
             )
-        elif execution_kind == "hybrid" and rag_pick_chunks:
+        elif execution_kind == "hybrid":
             sql_dataset = pick_structured_dataset(
                 question,
                 domain_id,
                 embedder,
                 query_vector=query_vector,
-                chunks=rag_pick_chunks,
             )
             if sql_dataset:
                 source_id = sql_dataset["id"]
@@ -307,6 +288,17 @@ def resolve_query_plan(
         domain_id = structured_domain["id"]
         domain_name = structured_domain["name"]
         domain_slug = structured_domain.get("slug")
+
+    table_names, file_names, column_hints, routing = _apply_catalog_scope(
+        question,
+        domain_id=domain_id,
+        source_id=source_id,
+        rag_source_id=rag_source_id,
+        execution_kind=execution_kind,
+        embedder=embedder,
+        routing=routing,
+        notes=notes,
+    )
 
     return QueryPlan(
         question=question,
@@ -321,6 +313,9 @@ def resolve_query_plan(
         rag_source_name=rag_source_name,
         rag_domain_id=rag_domain_id,
         rag_domain_name=rag_domain_name,
+        table_names=table_names,
+        file_names=file_names,
+        column_hints=column_hints,
         notes=notes,
     )
 
@@ -344,14 +339,29 @@ def structured_fallback_available(
     )
     if not dataset:
         return None
+    scope = resolve_catalog_scope(
+        question,
+        domain_id=structured_domain["id"],
+        source_id=dataset["id"],
+        rag_source_id=None,
+        execution_kind="sql",
+        embedder=embedder,
+    )
     return QueryPlan(
         question=question,
         domain_id=structured_domain["id"],
         domain_name=structured_domain["name"],
         domain_slug=structured_domain.get("slug"),
         execution_kind="sql",
-        routing={"method": "structured_fallback", "domain_id": structured_domain["id"]},
+        routing={
+            "method": "structured_fallback",
+            "domain_id": structured_domain["id"],
+            "scope_method": scope.method,
+        },
         source_id=dataset["id"],
         source_name=dataset["name"],
+        table_names=scope.table_names,
+        file_names=scope.file_names,
+        column_hints=scope.column_hints,
         notes=["No matching documents — querying catalog database instead."],
     )

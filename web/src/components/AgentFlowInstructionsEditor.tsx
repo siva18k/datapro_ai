@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api/client";
 import type { Agent } from "../types";
+import { computeMentionMenuPos, type MentionMenuPos } from "../utils/mentionMenuPosition";
 
 type Props = {
   value: string;
@@ -10,7 +12,7 @@ type Props = {
   disabled?: boolean;
 };
 
-type MenuPos = { top: number; left: number };
+type MenuPos = MentionMenuPos;
 
 const DEFAULT_PLACEHOLDER =
   "Describe how agents interact. Type @ to mention agents — e.g. Run @kpi-checker first, pass KPI summary to @report-writer…";
@@ -25,6 +27,7 @@ export function AgentFlowInstructionsEditor({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
   const atMarkerRef = useRef<HTMLSpanElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuFilter, setMenuFilter] = useState("");
@@ -56,15 +59,8 @@ export function AgentFlowInstructionsEditor({
 
   const syncMenuPosition = useCallback(() => {
     const marker = atMarkerRef.current;
-    const container = containerRef.current;
-    if (!marker || !container || !menuOpen || atStart === null) return;
-    const markerRect = marker.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    const maxLeft = Math.max(0, container.clientWidth - 220);
-    setMenuPos({
-      top: markerRect.bottom - containerRect.top + 2,
-      left: Math.min(Math.max(0, markerRect.left - containerRect.left), maxLeft),
-    });
+    if (!marker || !menuOpen || atStart === null) return;
+    setMenuPos(computeMentionMenuPos(marker));
   }, [menuOpen, atStart]);
 
   const detectAtMenu = useCallback((text: string, pos: number) => {
@@ -175,7 +171,8 @@ export function AgentFlowInstructionsEditor({
   useEffect(() => {
     if (!menuOpen) return;
     const close = (e: MouseEvent) => {
-      if (containerRef.current?.contains(e.target as Node)) return;
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
       setMenuOpen(false);
       setAtStart(null);
       setMenuPos(null);
@@ -185,7 +182,61 @@ export function AgentFlowInstructionsEditor({
     return () => document.removeEventListener("mousedown", close);
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onViewportChange = () => syncMenuPosition();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [menuOpen, syncMenuPosition]);
+
   const atMirrorText = atStart !== null ? value.slice(0, atStart) : "";
+
+  const mentionMenuPortal =
+    menuOpen && menuPos
+      ? createPortal(
+          visibleAgents.length > 0 ? (
+            <div
+              ref={menuRef}
+              className={`agent-slash-menu ask-agent-menu ask-agent-menu-portal${menuPos.placement === "above" ? " ask-agent-menu--above" : ""}`}
+              role="listbox"
+              style={{ top: menuPos.top, left: menuPos.left }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {visibleAgents.map((a, index) => (
+                <button
+                  key={a.id}
+                  ref={(el) => {
+                    menuItemRefs.current[index] = el;
+                  }}
+                  type="button"
+                  className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
+                  role="option"
+                  aria-selected={index === menuHighlightIndex}
+                  onMouseEnter={() => setMenuHighlightIndex(index)}
+                  onClick={() => insertAgent(a)}
+                >
+                  <span className="font-medium">@{a.slug}</span>
+                  <span className="mention-menu-item-meta">{a.name}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div
+              ref={menuRef}
+              className={`agent-slash-menu ask-agent-menu ask-agent-menu-portal${menuPos.placement === "above" ? " ask-agent-menu--above" : ""}`}
+              style={{ top: menuPos.top, left: menuPos.left }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <p className="mention-menu-empty">No agents match</p>
+            </div>
+          ),
+          document.body,
+        )
+      : null;
 
   return (
     <div className="agent-flow-instructions">
@@ -213,42 +264,8 @@ export function AgentFlowInstructionsEditor({
           onScroll={syncMenuPosition}
           disabled={disabled}
         />
-        {menuOpen && visibleAgents.length > 0 && menuPos && (
-          <div
-            className="agent-slash-menu"
-            role="listbox"
-            style={{ top: menuPos.top, left: menuPos.left }}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            {visibleAgents.map((a, index) => (
-              <button
-                key={a.id}
-                ref={(el) => {
-                  menuItemRefs.current[index] = el;
-                }}
-                type="button"
-                className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
-                role="option"
-                aria-selected={index === menuHighlightIndex}
-                onMouseEnter={() => setMenuHighlightIndex(index)}
-                onClick={() => insertAgent(a)}
-              >
-                <span className="font-medium">@{a.slug}</span>
-                <span className="text-zinc-500">{a.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {menuOpen && filteredAgents.length === 0 && menuPos && (
-          <div
-            className="agent-slash-menu"
-            style={{ top: menuPos.top, left: menuPos.left }}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            <p className="px-3 py-2 text-xs text-zinc-500">No agents match</p>
-          </div>
-        )}
       </div>
+      {mentionMenuPortal}
     </div>
   );
 }

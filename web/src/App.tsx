@@ -12,7 +12,6 @@ import { AskDebugPage } from "./pages/AskDebugPage";
 import { AskPage } from "./pages/AskPage";
 import { CatalogPage } from "./pages/CatalogPage";
 import { McpPage } from "./pages/McpPage";
-import { RagPage } from "./pages/RagPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 const queryClient = new QueryClient({
@@ -41,7 +40,7 @@ export default function App() {
             <Route path="analytics" element={<AnalyticsPage />} />
             <Route path="agents" element={<AgentsPage />} />
             <Route path="agent-flows" element={<AgentFlowsPage />} />
-            <Route path="rag" element={<RagPage />} />
+            <Route path="rag" element={<Navigate to="/" replace />} />
             <Route path="mcp" element={<McpPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

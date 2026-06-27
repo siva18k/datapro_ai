@@ -100,6 +100,33 @@ def vector_literal(values):
 
 _CATALOG_COLUMNS: bool | None = None
 _SOURCE_CHUNK_UNIQUE: bool | None = None
+_TABLE_METADATA_COLUMN: bool | None = None
+
+
+def knowledge_chunks_has_table_metadata_column() -> bool:
+    global _TABLE_METADATA_COLUMN
+    if _TABLE_METADATA_COLUMN is not None:
+        return _TABLE_METADATA_COLUMN
+    try:
+        conn, schema = connect()
+        try:
+            rows = conn.run(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = :schema
+                  AND table_name = 'knowledge_chunks'
+                  AND column_name = 'table_metadata_id'
+                LIMIT 1
+                """,
+                schema=schema,
+            )
+            _TABLE_METADATA_COLUMN = bool(rows)
+        finally:
+            conn.close()
+    except Exception:
+        _TABLE_METADATA_COLUMN = False
+    return _TABLE_METADATA_COLUMN
 
 
 def knowledge_chunks_has_catalog_columns() -> bool:
@@ -178,6 +205,7 @@ def search_chunks(
     domain_ids: list[str] | None = None,
     source_id: str | None = None,
     source_ids: list[str] | None = None,
+    source_files: list[str] | None = None,
     fuzzy: bool = True,
 ):
     from query_fuzzy import encode_search_queries, get_search_query_variants, merge_ranked_chunks
@@ -195,6 +223,7 @@ def search_chunks(
                     domain_ids=domain_ids,
                     source_id=source_id,
                     source_ids=source_ids,
+                    source_files=source_files,
                 )
                 for vector in vectors
             ]
@@ -209,6 +238,7 @@ def search_chunks(
         domain_ids=domain_ids,
         source_id=source_id,
         source_ids=source_ids,
+        source_files=source_files,
     )
 
 
@@ -220,6 +250,7 @@ def _search_chunks_with_vector(
     domain_ids: list[str] | None = None,
     source_id: str | None = None,
     source_ids: list[str] | None = None,
+    source_files: list[str] | None = None,
 ):
     embedding = vector_literal(query_vector)
     conn, schema = connect()
@@ -244,6 +275,11 @@ def _search_chunks_with_vector(
                 clauses.append(f"source_id IN ({placeholders})")
                 for i, sid in enumerate(source_ids):
                     params[f"sid_{i}"] = sid
+            if source_files:
+                placeholders = ", ".join(f":sf_{i}" for i in range(len(source_files)))
+                clauses.append(f"source_file IN ({placeholders})")
+                for i, sf in enumerate(source_files):
+                    params[f"sf_{i}"] = sf
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         catalog_cols = ", domain_id::text, source_id::text" if has_catalog else ", NULL::text, NULL::text"
 
@@ -310,6 +346,7 @@ def upsert_chunks(items, embedder):
     conn, schema = connect()
     try:
         has_catalog = knowledge_chunks_has_catalog_columns()
+        has_table_meta = knowledge_chunks_has_table_metadata_column()
         conflict_on_source_chunk = knowledge_chunks_has_source_chunk_unique()
         for item in items:
             embedding = vector_literal(embedder.encode([item["content"]])[0])
@@ -319,14 +356,33 @@ def upsert_chunks(items, embedder):
                     if conflict_on_source_chunk
                     else "(id)"
                 )
+                table_meta_col = ", table_metadata_id" if has_table_meta else ""
+                table_meta_val = ", :table_metadata_id::uuid" if has_table_meta else ""
+                table_meta_set = (
+                    ", table_metadata_id = EXCLUDED.table_metadata_id"
+                    if has_table_meta
+                    else ""
+                )
+                params = {
+                    "id": item["id"],
+                    "source_file": item["source_file"],
+                    "chunk_id": item["chunk_id"],
+                    "content": item["content"],
+                    "embedding": embedding,
+                    "domain_id": item.get("domain_id"),
+                    "source_id": item.get("source_id"),
+                    "rag_profile_id": item.get("rag_profile_id"),
+                }
+                if has_table_meta:
+                    params["table_metadata_id"] = item.get("table_metadata_id")
                 conn.run(
                     f"""
                     INSERT INTO {schema}.knowledge_chunks
                         (id, source_file, chunk_id, content, embedding,
-                         domain_id, source_id, rag_profile_id)
+                         domain_id, source_id, rag_profile_id{table_meta_col})
                     VALUES
                         (:id, :source_file, :chunk_id, :content, :embedding::vector,
-                         :domain_id::uuid, :source_id::uuid, :rag_profile_id::uuid)
+                         :domain_id::uuid, :source_id::uuid, :rag_profile_id::uuid{table_meta_val})
                     ON CONFLICT {conflict} DO UPDATE SET
                         id = EXCLUDED.id,
                         source_file = EXCLUDED.source_file,
@@ -335,17 +391,10 @@ def upsert_chunks(items, embedder):
                         embedding = EXCLUDED.embedding,
                         domain_id = EXCLUDED.domain_id,
                         source_id = EXCLUDED.source_id,
-                        rag_profile_id = EXCLUDED.rag_profile_id,
+                        rag_profile_id = EXCLUDED.rag_profile_id{table_meta_set},
                         updated_at = now()
                     """,
-                    id=item["id"],
-                    source_file=item["source_file"],
-                    chunk_id=item["chunk_id"],
-                    content=item["content"],
-                    embedding=embedding,
-                    domain_id=item.get("domain_id"),
-                    source_id=item.get("source_id"),
-                    rag_profile_id=item.get("rag_profile_id"),
+                    **params,
                 )
             else:
                 conflict = (

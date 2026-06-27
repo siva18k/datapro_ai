@@ -6,12 +6,17 @@ from typing import Any
 
 from catalog_db import ensure_builtin_mcp_server, get_domain, list_domain_mcp_capabilities, list_mcp_servers
 from mcp_client import (
-    call_tool,
     check_mcp_server,
     get_default_mcp_url,
-    get_prompt_preview,
     read_resource_preview,
     search_documents,
+)
+from mcp_reference_service import (
+    REFERENCE_RESOURCE_URIS,
+    expand_domain_uri,
+    is_reference_resource_uri,
+    read_reference_resource_content,
+    reference_uris_for_execution,
 )
 
 
@@ -28,6 +33,110 @@ def domain_mcp_capabilities(domain_id: str | None, capability_type: str) -> list
         return []
     caps = list_domain_mcp_capabilities(domain_id, capability_type, enabled_only=True)
     return [c for c in caps if c.get("server_enabled", True)]
+
+
+def _binding_covers_uri(binding_uri: str, target_uri: str, domain_slug: str | None) -> bool:
+    if binding_uri == target_uri:
+        return True
+    if domain_slug and "{domain}" in binding_uri:
+        return binding_uri.replace("{domain}", domain_slug) == target_uri
+    return False
+
+
+def _is_reference_bound(bound_uris: set[str], target_uri: str, domain_slug: str | None) -> bool:
+    return any(_binding_covers_uri(uri, target_uri, domain_slug) for uri in bound_uris)
+
+
+def load_domain_reference_resources(
+    domain_id: str | None,
+    *,
+    domain_slug: str | None,
+    execution_kind: str,
+) -> list[dict[str, Any]]:
+    """Load application-controlled reference resources (schema, calendar, glossary, …)."""
+    if not domain_id:
+        return []
+
+    bound = {
+        c["capability_name"]
+        for c in domain_mcp_capabilities(domain_id, "resource")
+        if c.get("capability_name")
+    }
+    if not bound:
+        return []
+
+    builtin_url = _builtin_server_url()
+    out: list[dict[str, Any]] = []
+
+    for key in reference_uris_for_execution(execution_kind):
+        if key == "citation_rules":
+            uri = REFERENCE_RESOURCE_URIS["citation_rules"]
+        else:
+            uri = expand_domain_uri(REFERENCE_RESOURCE_URIS[key], domain_slug)
+
+        if not _is_reference_bound(bound, uri, domain_slug):
+            continue
+
+        try:
+            content = read_reference_resource_content(
+                uri, domain_id=domain_id, domain_slug=domain_slug
+            )
+        except Exception as exc:
+            content = f"[reference error: {exc}]"
+
+        if content:
+            out.append(
+                {
+                    "uri": uri,
+                    "kind": "reference",
+                    "reference_key": key,
+                    "server": "datapro",
+                    "mcp_url": builtin_url,
+                    "content": content[:12000],
+                }
+            )
+    return out
+
+
+def read_optional_resources_for_domain(
+    domain_id: str | None,
+    *,
+    domain_slug: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load dynamic inventory resources when planner requests use_resources."""
+    if not domain_id:
+        return []
+    out: list[dict] = []
+    for resource in domain_mcp_capabilities(domain_id, "resource"):
+        uri = resource.get("capability_name")
+        if not uri:
+            continue
+        resolved_uri = expand_domain_uri(uri, domain_slug)
+        if is_reference_resource_uri(resolved_uri):
+            continue
+        url = resource["server_url"]
+        if not url or not check_mcp_server(url):
+            continue
+        try:
+            content = read_resource_preview(url, resolved_uri)
+        except Exception:
+            if resolved_uri != uri:
+                try:
+                    content = read_resource_preview(url, uri)
+                except Exception:
+                    continue
+            else:
+                continue
+        if content:
+            out.append(
+                {
+                    "uri": resolved_uri,
+                    "kind": "optional",
+                    "server": resource.get("server_slug"),
+                    "content": content[:4000],
+                }
+            )
+    return out
 
 
 def retrieve_chunks_for_domain(
@@ -110,95 +219,6 @@ def retrieve_chunks_for_scope(
             trace = trace or meta
     merged.sort(key=lambda c: float(c.get("distance", float("inf"))))
     return merged[:top_k], trace
-
-
-def build_prompt_via_domain_mcp(
-    question: str,
-    *,
-    domain_id: str | None,
-    domain_slug: str | None,
-    top_k: int = 3,
-) -> tuple[str | None, dict[str, Any] | None]:
-    """
-    If domain binds a grounded-answer prompt, render it from the bound MCP server.
-    Returns (prompt_text, trace_meta) or (None, None) to fall back to local RAG prompt.
-    """
-    if not domain_id:
-        return None, None
-
-    preferred = ("domain_grounded_answer", "grounded_answer")
-    prompts = domain_mcp_capabilities(domain_id, "prompt")
-    ordered = sorted(
-        prompts,
-        key=lambda p: preferred.index(p["capability_name"])
-        if p["capability_name"] in preferred
-        else len(preferred),
-    )
-
-    for prompt in ordered:
-        if prompt["capability_name"] not in preferred:
-            continue
-        url = prompt["server_url"]
-        if not url or not check_mcp_server(url):
-            continue
-        args: dict[str, str] = {"question": question, "top_k": str(top_k)}
-        if domain_slug and prompt["capability_name"] == "domain_grounded_answer":
-            args["domain"] = domain_slug
-        try:
-            text = get_prompt_preview(url, prompt["capability_name"], args)
-        except Exception:
-            continue
-        if text and text.strip():
-            return text, {
-                "mcp_url": url,
-                "mcp_prompt": prompt["capability_name"],
-                "mcp_server": prompt.get("server_slug") or prompt.get("server_name"),
-                "mcp_server_id": prompt.get("mcp_server_id"),
-            }
-
-    return None, None
-
-
-def _expand_resource_uri(uri: str, domain_slug: str | None) -> str:
-    if domain_slug and "{domain}" in uri:
-        return uri.replace("{domain}", domain_slug)
-    return uri
-
-
-def read_bound_resources_for_domain(
-    domain_id: str | None,
-    *,
-    domain_slug: str | None = None,
-) -> list[dict[str, Any]]:
-    """Optional context from bound MCP resources (best-effort)."""
-    if not domain_id:
-        return []
-    out: list[dict] = []
-    for resource in domain_mcp_capabilities(domain_id, "resource"):
-        url = resource["server_url"]
-        uri = resource.get("capability_name")
-        if not url or not uri or not check_mcp_server(url):
-            continue
-        resolved_uri = _expand_resource_uri(uri, domain_slug)
-        try:
-            content = read_resource_preview(url, resolved_uri)
-        except Exception:
-            if resolved_uri != uri:
-                try:
-                    content = read_resource_preview(url, uri)
-                except Exception:
-                    continue
-            else:
-                continue
-        if content:
-            out.append(
-                {
-                    "uri": resolved_uri,
-                    "server": resource.get("server_slug"),
-                    "content": content[:4000],
-                }
-            )
-    return out
 
 
 def ensure_mcp_catalog_ready() -> None:

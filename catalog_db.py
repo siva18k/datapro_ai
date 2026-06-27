@@ -88,10 +88,17 @@ DEFAULT_SOURCES = [
 ]
 
 DEFAULT_MCP_BINDINGS = [
+    ("list_domains", "tool"),
     ("search_documents", "tool"),
     ("list_domain_sources", "tool"),
+    ("resolve_time_period", "tool"),
+    ("ragpro://domains/{domain}/schema", "resource"),
+    ("ragpro://domains/{domain}/calendar", "resource"),
+    ("ragpro://domains/{domain}/glossary", "resource"),
+    ("ragpro://domains/{domain}/sql-notes", "resource"),
+    ("ragpro://policy/citation-rules", "resource"),
+    ("domain_sql_context", "prompt"),
     ("domain_grounded_answer", "prompt"),
-    ("ragpro://domains", "resource"),
 ]
 
 DEFAULT_OPTIONAL_MCP_SERVERS = [
@@ -168,6 +175,11 @@ def apply_migrations() -> dict[str, bool]:
             "007_mcp_server_opt_out.sql",
             "008_agents.sql",
             "009_agent_flows.sql",
+            "010_table_rag_settings.sql",
+            "011_mcp_list_domains_binding.sql",
+            "012_domain_mcp_references.sql",
+            "013_mcp_reference_bindings.sql",
+            "014_domain_prompts.sql",
         ):
             migration = MIGRATIONS_DIR / migration_name
             if not migration.exists():
@@ -708,6 +720,307 @@ def get_domain(*, domain_id: str | None = None, slug: str | None = None) -> dict
     return _row_to_dict(cols, rows[0])
 
 
+def list_domain_reference_docs(domain_id: str) -> list[dict]:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            SELECT doc_type, content, updated_at
+            FROM {schema}.domain_reference_docs
+            WHERE domain_id = :domain_id::uuid
+            ORDER BY doc_type
+            """,
+            domain_id=domain_id,
+        )
+    finally:
+        conn.close()
+    return [
+        {
+            "doc_type": row[0],
+            "content": row[1],
+            "updated_at": str(row[2]) if row[2] else None,
+        }
+        for row in (rows or [])
+    ]
+
+
+def get_domain_reference_doc(domain_id: str, doc_type: str) -> dict | None:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            SELECT doc_type, content, updated_at
+            FROM {schema}.domain_reference_docs
+            WHERE domain_id = :domain_id::uuid AND doc_type = :doc_type
+            """,
+            domain_id=domain_id,
+            doc_type=doc_type,
+        )
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    return {
+        "doc_type": rows[0][0],
+        "content": rows[0][1],
+        "updated_at": str(rows[0][2]) if rows[0][2] else None,
+    }
+
+
+def upsert_domain_reference_doc(domain_id: str, doc_type: str, content: str) -> dict:
+    if doc_type not in ("calendar", "glossary", "sql_notes"):
+        raise ValueError(f"Invalid doc_type: {doc_type}")
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            INSERT INTO {schema}.domain_reference_docs (domain_id, doc_type, content)
+            VALUES (:domain_id::uuid, :doc_type, :content)
+            ON CONFLICT (domain_id, doc_type) DO UPDATE SET
+                content = EXCLUDED.content,
+                updated_at = now()
+            RETURNING doc_type, content, updated_at
+            """,
+            domain_id=domain_id,
+            doc_type=doc_type,
+            content=content,
+        )
+    finally:
+        conn.close()
+    return {
+        "doc_type": rows[0][0],
+        "content": rows[0][1],
+        "updated_at": str(rows[0][2]) if rows[0][2] else None,
+    }
+
+
+def _normalize_prompt_slug(slug: str) -> str:
+    normalized = _slugify(slug.strip())
+    if not normalized:
+        raise ValueError("Prompt slug is required")
+    return normalized
+
+
+def list_domain_prompts(domain_id: str) -> list[dict]:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            SELECT id::text, slug, name, description, template, enabled, created_at, updated_at
+            FROM {schema}.domain_prompts
+            WHERE domain_id = :domain_id::uuid
+            ORDER BY name
+            """,
+            domain_id=domain_id,
+        )
+    finally:
+        conn.close()
+    cols = ["id", "slug", "name", "description", "template", "enabled", "created_at", "updated_at"]
+    return [_row_to_dict(cols, row) for row in (rows or [])]
+
+
+def get_domain_prompt(
+    domain_id: str,
+    *,
+    prompt_id: str | None = None,
+    slug: str | None = None,
+) -> dict | None:
+    conn, schema = connect()
+    try:
+        if prompt_id:
+            rows = conn.run(
+                f"""
+                SELECT id::text, domain_id::text, slug, name, description, template, enabled,
+                       created_at, updated_at
+                FROM {schema}.domain_prompts
+                WHERE id = :id::uuid AND domain_id = :domain_id::uuid
+                """,
+                id=prompt_id,
+                domain_id=domain_id,
+            )
+        elif slug:
+            rows = conn.run(
+                f"""
+                SELECT id::text, domain_id::text, slug, name, description, template, enabled,
+                       created_at, updated_at
+                FROM {schema}.domain_prompts
+                WHERE domain_id = :domain_id::uuid AND slug = :slug
+                """,
+                domain_id=domain_id,
+                slug=slug,
+            )
+        else:
+            return None
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    cols = [
+        "id", "domain_id", "slug", "name", "description", "template", "enabled",
+        "created_at", "updated_at",
+    ]
+    return _row_to_dict(cols, rows[0])
+
+
+def create_domain_prompt(
+    domain_id: str,
+    *,
+    slug: str,
+    name: str,
+    description: str = "",
+    template: str = "",
+    enabled: bool = True,
+    bind: bool = True,
+) -> dict:
+    slug = _normalize_prompt_slug(slug)
+    name = name.strip()
+    if not name:
+        raise ValueError("Prompt name is required")
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            INSERT INTO {schema}.domain_prompts
+                (domain_id, slug, name, description, template, enabled)
+            VALUES
+                (:domain_id::uuid, :slug, :name, :description, :template, :enabled)
+            RETURNING id::text, domain_id::text, slug, name, description, template, enabled,
+                      created_at, updated_at
+            """,
+            domain_id=domain_id,
+            slug=slug,
+            name=name,
+            description=description,
+            template=template,
+            enabled=enabled,
+        )
+        if bind:
+            from domain_prompt_service import binding_name_for_local
+
+            builtin_id = _ensure_builtin_mcp_server_conn(conn, schema)
+            _upsert_binding(
+                conn,
+                schema,
+                domain_id,
+                None,
+                "prompt",
+                binding_name_for_local(slug),
+                True,
+                builtin_id,
+            )
+    finally:
+        conn.close()
+    cols = [
+        "id", "domain_id", "slug", "name", "description", "template", "enabled",
+        "created_at", "updated_at",
+    ]
+    return _row_to_dict(cols, rows[0])
+
+
+def update_domain_prompt(
+    domain_id: str,
+    prompt_id: str,
+    *,
+    slug: str | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    template: str | None = None,
+    enabled: bool | None = None,
+) -> dict | None:
+    existing = get_domain_prompt(domain_id, prompt_id=prompt_id)
+    if not existing:
+        return None
+    fields: dict[str, object] = {}
+    if slug is not None:
+        fields["slug"] = _normalize_prompt_slug(slug)
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValueError("Prompt name is required")
+        fields["name"] = name
+    if description is not None:
+        fields["description"] = description
+    if template is not None:
+        fields["template"] = template
+    if enabled is not None:
+        fields["enabled"] = enabled
+    if not fields:
+        return existing
+
+    conn, schema = connect()
+    try:
+        set_parts = [f"{key} = :{key}" for key in fields]
+        set_parts.append("updated_at = now()")
+        rows = conn.run(
+            f"""
+            UPDATE {schema}.domain_prompts
+            SET {", ".join(set_parts)}
+            WHERE id = :id::uuid AND domain_id = :domain_id::uuid
+            RETURNING id::text, domain_id::text, slug, name, description, template, enabled,
+                      created_at, updated_at
+            """,
+            id=prompt_id,
+            domain_id=domain_id,
+            **fields,
+        )
+        if slug is not None and slug != existing["slug"]:
+            from domain_prompt_service import binding_name_for_local
+
+            conn.run(
+                f"""
+                UPDATE {schema}.mcp_bindings
+                SET capability_name = :new_name
+                WHERE domain_id = :domain_id::uuid
+                  AND capability_type = 'prompt'
+                  AND capability_name = :old_name
+                """,
+                domain_id=domain_id,
+                new_name=binding_name_for_local(fields["slug"]),
+                old_name=binding_name_for_local(existing["slug"]),
+            )
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    cols = [
+        "id", "domain_id", "slug", "name", "description", "template", "enabled",
+        "created_at", "updated_at",
+    ]
+    return _row_to_dict(cols, rows[0])
+
+
+def delete_domain_prompt(domain_id: str, prompt_id: str) -> bool:
+    existing = get_domain_prompt(domain_id, prompt_id=prompt_id)
+    if not existing:
+        return False
+    from domain_prompt_service import binding_name_for_local
+
+    conn, schema = connect()
+    try:
+        conn.run(
+            f"""
+            DELETE FROM {schema}.mcp_bindings
+            WHERE domain_id = :domain_id::uuid
+              AND capability_type = 'prompt'
+              AND capability_name = :capability_name
+            """,
+            domain_id=domain_id,
+            capability_name=binding_name_for_local(existing["slug"]),
+        )
+        rows = conn.run(
+            f"""
+            DELETE FROM {schema}.domain_prompts
+            WHERE id = :id::uuid AND domain_id = :domain_id::uuid
+            RETURNING id::text
+            """,
+            id=prompt_id,
+            domain_id=domain_id,
+        )
+    finally:
+        conn.close()
+    return bool(rows)
+
+
 def create_domain(name: str, description: str = "", color: str = "#2563eb") -> dict:
     slug = _slugify(name)
     conn, schema = connect()
@@ -883,12 +1196,16 @@ def create_source(
     cfg = config or {}
     if connector == "upload" and "path" not in cfg:
         cfg["path"] = f"data/{domain['slug']}/{slug}"
+    if connector in ("file_path", "api", "web_url", "sharepoint") and "path" not in cfg:
+        cfg["path"] = f"data/{domain['slug']}/{slug}"
     if connector == "postgres" and "schema" not in cfg:
         cfg["schema"] = "public"
     if connector in ("sharepoint", "web_url") and "url" not in cfg:
         cfg["url"] = ""
     if connector == "api" and "base_url" not in cfg:
         cfg["base_url"] = ""
+    if connector == "api" and "endpoints" not in cfg:
+        cfg["endpoints"] = [""]
     conn, schema = connect()
     try:
         rows = conn.run(
@@ -916,7 +1233,7 @@ def create_source(
 
 
 def update_source(source_id: str, **fields) -> None:
-    allowed = {"name", "description", "config", "enabled", "connector"}
+    allowed = {"name", "description", "config", "enabled", "connector", "source_type"}
     updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if "config" in updates and isinstance(updates["config"], dict):
         updates["config"] = json.dumps(updates["config"])
@@ -1404,7 +1721,7 @@ def list_table_metadata(source_id: str) -> list[dict]:
         rows = conn.run(
             f"""
             SELECT id::text, source_id::text, table_schema, table_name, definition,
-                   enabled, table_role
+                   enabled, table_role, rag_enabled, chunk_size, chunk_overlap
             FROM {schema}.table_metadata
             WHERE source_id = :source_id::uuid
             ORDER BY table_name
@@ -1415,6 +1732,7 @@ def list_table_metadata(source_id: str) -> list[dict]:
         conn.close()
     cols = [
         "id", "source_id", "table_schema", "table_name", "definition", "enabled", "table_role",
+        "rag_enabled", "chunk_size", "chunk_overlap",
     ]
     return [_row_to_dict(cols, row) for row in rows]
 
@@ -1425,7 +1743,7 @@ def get_table_metadata(table_id: str) -> dict | None:
         rows = conn.run(
             f"""
             SELECT id::text, source_id::text, table_schema, table_name, definition,
-                   enabled, table_role
+                   enabled, table_role, rag_enabled, chunk_size, chunk_overlap
             FROM {schema}.table_metadata WHERE id = :id::uuid
             """,
             id=table_id,
@@ -1436,6 +1754,7 @@ def get_table_metadata(table_id: str) -> dict | None:
         return None
     cols = [
         "id", "source_id", "table_schema", "table_name", "definition", "enabled", "table_role",
+        "rag_enabled", "chunk_size", "chunk_overlap",
     ]
     return _row_to_dict(cols, rows[0])
 
@@ -1475,10 +1794,14 @@ def upsert_table_metadata(
 
 
 def update_table_metadata(table_id: str, **fields) -> None:
-    allowed = {"definition", "enabled", "table_role"}
+    allowed = {
+        "definition", "enabled", "table_role", "rag_enabled", "chunk_size", "chunk_overlap",
+    }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
+    if updates.get("table_role") == "excluded":
+        updates["rag_enabled"] = False
     sets = ", ".join(f"{k} = :{k}" for k in updates)
     conn, schema = connect()
     try:
@@ -1493,6 +1816,104 @@ def update_table_metadata(table_id: str, **fields) -> None:
     finally:
         conn.close()
     _invalidate_routing_cache()
+
+
+def list_source_file_rag(source_id: str) -> list[dict]:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            SELECT id::text, source_id::text, file_name, rag_enabled,
+                   chunk_size, chunk_overlap, last_ingested_at, created_at, updated_at
+            FROM {schema}.source_file_rag
+            WHERE source_id = :source_id::uuid
+            ORDER BY file_name
+            """,
+            source_id=source_id,
+        )
+    finally:
+        conn.close()
+    cols = [
+        "id", "source_id", "file_name", "rag_enabled",
+        "chunk_size", "chunk_overlap", "last_ingested_at", "created_at", "updated_at",
+    ]
+    return [_row_to_dict(cols, row) for row in rows]
+
+
+def upsert_source_file_rag(
+    source_id: str,
+    file_name: str,
+    *,
+    rag_enabled: bool | None = None,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+    touch_ingested: bool = False,
+) -> dict:
+    conn, schema = connect()
+    try:
+        rows = conn.run(
+            f"""
+            INSERT INTO {schema}.source_file_rag
+                (source_id, file_name, rag_enabled, chunk_size, chunk_overlap)
+            VALUES (
+                :source_id::uuid, :file_name,
+                COALESCE(:rag_enabled, TRUE),
+                :chunk_size, :chunk_overlap
+            )
+            ON CONFLICT (source_id, file_name) DO UPDATE SET
+                rag_enabled = EXCLUDED.rag_enabled,
+                chunk_size = EXCLUDED.chunk_size,
+                chunk_overlap = EXCLUDED.chunk_overlap,
+                last_ingested_at = CASE WHEN :touch_ingested THEN now()
+                    ELSE {schema}.source_file_rag.last_ingested_at END,
+                updated_at = now()
+            RETURNING id::text, source_id::text, file_name, rag_enabled,
+                      chunk_size, chunk_overlap, last_ingested_at
+            """,
+            source_id=source_id,
+            file_name=file_name,
+            rag_enabled=rag_enabled,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            touch_ingested=touch_ingested,
+        )
+    finally:
+        conn.close()
+    cols = [
+        "id", "source_id", "file_name", "rag_enabled",
+        "chunk_size", "chunk_overlap", "last_ingested_at",
+    ]
+    return _row_to_dict(cols, rows[0])
+
+
+def bulk_update_table_rag(source_id: str, tables: list[dict]) -> list[dict]:
+    for item in tables:
+        table_id = item.get("id")
+        if not table_id:
+            continue
+        fields = {
+            k: item[k]
+            for k in ("rag_enabled", "chunk_size", "chunk_overlap")
+            if k in item
+        }
+        if fields:
+            update_table_metadata(table_id, **fields)
+    return list_table_metadata(source_id)
+
+
+def bulk_update_source_file_rag(source_id: str, files: list[dict]) -> list[dict]:
+    for item in files:
+        file_name = (item.get("file_name") or "").strip()
+        if not file_name:
+            continue
+        upsert_source_file_rag(
+            source_id,
+            file_name,
+            rag_enabled=item.get("rag_enabled"),
+            chunk_size=item.get("chunk_size"),
+            chunk_overlap=item.get("chunk_overlap"),
+        )
+    return list_source_file_rag(source_id)
 
 
 def delete_table_metadata(table_id: str) -> None:
@@ -1746,7 +2167,7 @@ def get_agent(agent_id: str) -> dict | None:
         tool_rows = conn.run(
             f"""
             SELECT t.id::text, t.agent_id::text, t.mcp_server_id::text, t.tool_name,
-                   s.name AS server_name, s.slug AS server_slug
+                   s.name AS server_name, s.slug AS server_slug, s.url AS server_url
             FROM {schema}.agent_mcp_tools t
             JOIN {schema}.mcp_servers s ON s.id = t.mcp_server_id
             WHERE t.agent_id = :agent_id::uuid
@@ -1756,7 +2177,10 @@ def get_agent(agent_id: str) -> dict | None:
         )
     finally:
         conn.close()
-    tool_cols = ["id", "agent_id", "mcp_server_id", "tool_name", "server_name", "server_slug"]
+    tool_cols = [
+        "id", "agent_id", "mcp_server_id", "tool_name",
+        "server_name", "server_slug", "server_url",
+    ]
     agent["tools"] = [_row_to_dict(tool_cols, row) for row in tool_rows]
     return agent
 

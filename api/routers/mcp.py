@@ -9,6 +9,8 @@ from catalog_db import (
     add_mcp_binding,
     create_mcp_server,
     delete_mcp_server,
+    get_domain,
+    get_domain_prompt,
     get_mcp_server,
     list_domains,
     list_mcp_bindings,
@@ -18,6 +20,12 @@ from catalog_db import (
     restore_optional_mcp_server,
     set_mcp_binding,
     update_mcp_server,
+)
+from domain_prompt_service import (
+    is_local_prompt_name,
+    local_prompt_slug,
+    prompt_template_parameters,
+    render_domain_local_prompt,
 )
 from mcp_client import check_mcp_server, get_default_mcp_url, get_prompt_preview, list_server_capabilities, read_resource_preview
 from integration_mcp_process import enrich_server_runtime, start_integration, stop_integration
@@ -78,11 +86,13 @@ class McpPromptUpdate(BaseModel):
 
 class McpPromptPreviewBody(BaseModel):
     arguments: dict[str, str] | None = None
+    domain_id: str | None = None
 
 
 class McpResourcePreviewBody(BaseModel):
     uri: str
     params: dict[str, str] | None = None
+    domain_id: str | None = None
 
 
 def _resource_uri_parameters(uri_template: str) -> list[str]:
@@ -100,6 +110,102 @@ def _resolve_resource_uri(uri_template: str, params: dict[str, str] | None) -> s
             )
         resolved = resolved.replace("{" + key + "}", str(params[key]).strip())
     return resolved
+
+
+def _mcp_client_error_message(exc: BaseException) -> str:
+    """Surface MCP client failures without opaque TaskGroup wrappers."""
+    from mcp.shared.exceptions import McpError
+
+    if isinstance(exc, McpError):
+        return str(exc)
+    if isinstance(exc, BaseExceptionGroup):
+        for sub in exc.exceptions:
+            msg = _mcp_client_error_message(sub)
+            if msg:
+                return msg
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if cause and cause is not exc:
+        return _mcp_client_error_message(cause)
+    return str(exc)
+
+
+_BUILTIN_PROMPT_ARGUMENTS: dict[str, list[str]] = {
+    "citation_rules": [],
+    "grounded_answer": ["question", "top_k"],
+    "summarize_document": ["source_file"],
+    "domain_grounded_answer": ["question", "domain", "top_k"],
+    "domain_sql_context": [
+        "question",
+        "domain_name",
+        "schema",
+        "calendar",
+        "glossary",
+        "sql_notes",
+        "tool_context",
+    ],
+}
+
+_DOMAIN_CONTEXT_PROMPT_ARGS: dict[str, frozenset[str]] = {
+    "domain_grounded_answer": frozenset({"domain"}),
+    "domain_sql_context": frozenset(
+        {"domain_name", "schema", "calendar", "glossary", "sql_notes", "tool_context"}
+    ),
+}
+
+_SAMPLE_PROMPT_QUESTION = "What datasets and tables are in this domain?"
+_SAMPLE_SUMMARIZE_SOURCE = "travel_policy.md"
+
+
+def _prompt_arguments_from_live(registry: dict, name: str) -> list[str]:
+    status = get_server_status(registry)
+    if status["reachable"]:
+        try:
+            caps = list_server_capabilities(status["url"])
+            for prompt in caps.get("prompts", []):
+                if prompt.get("name") == name:
+                    return [arg["name"] for arg in prompt.get("arguments", []) if arg.get("name")]
+        except Exception:
+            pass
+    return list(_BUILTIN_PROMPT_ARGUMENTS.get(name, []))
+
+
+def _build_prompt_preview_arguments(
+    name: str,
+    domain_id: str | None,
+    user_args: dict[str, str] | None,
+) -> dict[str, str]:
+    args = {key: str(value).strip() for key, value in (user_args or {}).items() if str(value).strip()}
+
+    if name == "grounded_answer":
+        args.setdefault("question", _SAMPLE_PROMPT_QUESTION)
+        args.setdefault("top_k", "3")
+    elif name == "summarize_document":
+        args.setdefault("source_file", _SAMPLE_SUMMARIZE_SOURCE)
+
+    if domain_id:
+        from catalog_db import get_domain
+
+        row = get_domain(domain_id=domain_id) or {}
+        slug = str(row.get("slug") or "").strip()
+        domain_name = str(row.get("name") or slug or "Domain").strip()
+        if name == "domain_grounded_answer":
+            args.setdefault("question", _SAMPLE_PROMPT_QUESTION)
+            args.setdefault("top_k", "3")
+            if slug:
+                args.setdefault("domain", slug)
+        elif name == "domain_sql_context":
+            from mcp_reference_service import gather_domain_reference_texts
+
+            refs = gather_domain_reference_texts(domain_id, domain_slug=slug or None)
+            args.setdefault("question", _SAMPLE_PROMPT_QUESTION)
+            args.setdefault("domain_name", domain_name)
+            args.setdefault("schema", refs.get("schema", "")[:8000])
+            args.setdefault("calendar", refs.get("calendar", "")[:4000])
+            args.setdefault("glossary", refs.get("glossary", "")[:4000])
+            args.setdefault("sql_notes", refs.get("sql_notes", "")[:4000])
+            args.setdefault("tool_context", "(none)")
+
+    return args
 
 
 def _binding_enabled(
@@ -121,7 +227,7 @@ def _binding_enabled(
     return False
 
 
-def _group_bindings(bindings: list[dict]) -> dict[str, list[dict]]:
+def _group_bindings(bindings: list[dict], *, domain_id: str | None = None) -> dict[str, list[dict]]:
     grouped: dict[str, list[dict]] = {"tools": [], "resources": [], "prompts": []}
     type_key = {"tool": "tools", "resource": "resources", "prompt": "prompts"}
     for row in bindings:
@@ -130,18 +236,30 @@ def _group_bindings(bindings: list[dict]) -> dict[str, list[dict]]:
         key = type_key.get(row.get("capability_type", ""))
         if not key:
             continue
-        grouped[key].append(
-            {
-                "id": row.get("id"),
-                "name": row.get("capability_name"),
-                "enabled": bool(row.get("enabled", True)),
-                "mcp_server_id": row.get("mcp_server_id"),
-                "server_name": row.get("server_name"),
-                "server_slug": row.get("server_slug"),
-                "server_url": row.get("server_url"),
-                "server_kind": row.get("server_kind"),
-            }
-        )
+        cap_name = row.get("capability_name") or ""
+        display_name = cap_name
+        item = {
+            "id": row.get("id"),
+            "name": display_name,
+            "capability_name": cap_name,
+            "enabled": bool(row.get("enabled", True)),
+            "mcp_server_id": row.get("mcp_server_id"),
+            "server_name": row.get("server_name"),
+            "server_slug": row.get("server_slug"),
+            "server_url": row.get("server_url"),
+            "server_kind": row.get("server_kind"),
+            "prompt_kind": "global",
+        }
+        if key == "prompts" and is_local_prompt_name(cap_name) and domain_id:
+            slug = local_prompt_slug(cap_name)
+            local = get_domain_prompt(domain_id, slug=slug)
+            item["prompt_kind"] = "local"
+            item["local_slug"] = slug
+            if local:
+                item["name"] = local["name"]
+                item["description"] = local.get("description") or ""
+                item["local_prompt_id"] = local["id"]
+        grouped[key].append(item)
     return grouped
 
 
@@ -285,16 +403,36 @@ def mcp_resource_preview(body: McpResourcePreviewBody):
     if body.uri not in REGISTRY_DEFAULTS["resources"]:
         raise HTTPException(404, f"Unknown resource: {body.uri}")
     registry = load_registry()
-    status = get_server_status(registry)
-    if not status["reachable"]:
-        raise HTTPException(503, "MCP server is not reachable — start it to preview resources.")
     try:
         resolved = _resolve_resource_uri(body.uri, body.params)
-        content = read_resource_preview(status["url"], resolved)
     except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(502, str(exc)) from exc
+
+    from mcp_reference_service import is_reference_resource_uri, read_reference_resource_content
+
+    if is_reference_resource_uri(resolved):
+        domain_slug = str((body.params or {}).get("domain", "")).strip() or None
+        domain_id = body.domain_id
+        if not domain_id and domain_slug:
+            row = get_domain(slug=domain_slug)
+            domain_id = row["id"] if row else None
+        try:
+            content = read_reference_resource_content(
+                resolved,
+                domain_id=domain_id,
+                domain_slug=domain_slug,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    else:
+        status = get_server_status(registry)
+        if not status["reachable"]:
+            raise HTTPException(503, "MCP server is not reachable — start it to preview resources.")
+        try:
+            content = read_resource_preview(status["url"], resolved)
+        except Exception as exc:
+            raise HTTPException(502, _mcp_client_error_message(exc)) from exc
+
     max_len = 50_000
     truncated = len(content) > max_len
     return {
@@ -386,19 +524,93 @@ def update_registry_prompt(name: str, body: McpPromptUpdate):
     }
 
 
+@router.get("/prompts/{name}/meta")
+def mcp_prompt_meta(name: str, domain_id: str | None = Query(default=None)):
+    if is_local_prompt_name(name):
+        if not domain_id:
+            raise HTTPException(400, "domain_id is required for local prompts")
+        slug = local_prompt_slug(name)
+        local = get_domain_prompt(domain_id, slug=slug)
+        if not local:
+            raise HTTPException(404, f"Unknown local prompt: {slug}")
+        template = local.get("template") or ""
+        params = prompt_template_parameters(template)
+        auto_filled = {
+            "domain",
+            "domain_name",
+            "schema",
+            "calendar",
+            "glossary",
+            "sql_notes",
+            "tool_context",
+            "citation_rules",
+        }
+        domain_filled = sorted(p for p in params if p in auto_filled)
+        return {
+            "name": name,
+            "description": local.get("description") or "",
+            "parameters": params,
+            "domain_context": bool(domain_filled),
+            "domain_filled_parameters": domain_filled,
+            "enabled": bool(local.get("enabled", True)),
+            "prompt_kind": "local",
+            "local_slug": slug,
+            "local_prompt_id": local["id"],
+        }
+    if name not in REGISTRY_DEFAULTS["prompts"]:
+        raise HTTPException(404, f"Unknown prompt: {name}")
+    registry = load_registry()
+    meta = get_prompt_meta(name, registry)
+    domain_filled = sorted(_DOMAIN_CONTEXT_PROMPT_ARGS.get(name, frozenset()))
+    return {
+        "name": name,
+        "description": meta["description"],
+        "parameters": _prompt_arguments_from_live(registry, name),
+        "domain_context": bool(domain_filled),
+        "domain_filled_parameters": domain_filled,
+        "enabled": meta["enabled"],
+        "prompt_kind": "global",
+    }
+
+
 @router.post("/prompts/{name}/preview")
 def preview_prompt(name: str, body: McpPromptPreviewBody | None = None):
+    domain_id = body.domain_id if body else None
+    user_args = (body.arguments if body else None) or {}
+
+    if is_local_prompt_name(name):
+        if not domain_id:
+            raise HTTPException(400, "domain_id is required for local prompts")
+        slug = local_prompt_slug(name)
+        if not get_domain_prompt(domain_id, slug=slug):
+            raise HTTPException(404, f"Unknown local prompt: {slug}")
+        domain = get_domain(domain_id=domain_id) or {}
+        try:
+            preview = render_domain_local_prompt(
+                domain_id,
+                slug,
+                domain_slug=domain.get("slug"),
+                user_args=user_args,
+            )
+        except Exception as exc:
+            raise HTTPException(502, str(exc)) from exc
+        from domain_prompt_service import build_local_prompt_context
+
+        args = build_local_prompt_context(domain_id, domain_slug=domain.get("slug"), user_args=user_args)
+        return {"preview": preview, "arguments": args, "prompt_kind": "local"}
+
     if name not in REGISTRY_DEFAULTS["prompts"]:
         raise HTTPException(404, f"Unknown prompt: {name}")
     registry = load_registry()
     status = get_server_status(registry)
     if not status["reachable"]:
         raise HTTPException(503, "MCP server is not reachable — start it to preview live prompts.")
+    args = _build_prompt_preview_arguments(name, domain_id, user_args)
     try:
-        preview = get_prompt_preview(status["url"], name, (body.arguments if body else None) or {})
+        preview = get_prompt_preview(status["url"], name, args)
     except Exception as exc:
         raise HTTPException(502, str(exc)) from exc
-    return {"preview": preview}
+    return {"preview": preview, "arguments": args, "prompt_kind": "global"}
 
 
 @router.get("/binding-catalog")
@@ -528,7 +740,7 @@ def mcp_bindings(domain_id: str):
     if not any(d["id"] == domain_id for d in list_domains(enabled_only=False)):
         raise HTTPException(404, "Domain not found")
     bindings = list_mcp_bindings(domain_id)
-    return {"domain_id": domain_id, "bindings": _group_bindings(bindings)}
+    return {"domain_id": domain_id, "bindings": _group_bindings(bindings, domain_id=domain_id)}
 
 
 @router.post("/bindings")

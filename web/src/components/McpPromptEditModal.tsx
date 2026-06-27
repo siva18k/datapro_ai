@@ -52,11 +52,13 @@ export function McpPromptEditModal({
   const previewLive = useMutation({
     mutationFn: () =>
       api.previewMcpPrompt(saved.name, {
-        question: "What is our travel policy?",
-        context: "[travel_policy.md - chunk_00] Sample context…",
-        domain_name: "HR",
-        source_file: "travel_policy.md",
-        body: "Sample document body…",
+        arguments: {
+          question: "What is our travel policy?",
+          context: "[travel_policy.md - chunk_00] Sample context…",
+          domain_name: "HR",
+          source_file: "travel_policy.md",
+          body: "Sample document body…",
+        },
       }),
     onSuccess: (res) => setPreview(res.preview),
   });

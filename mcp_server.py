@@ -6,17 +6,18 @@ import json
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 from sentence_transformers import SentenceTransformer
 
 from catalog_db import (
     get_domain_stats,
     get_rag_profile,
     list_domains,
-    list_sources as catalog_list_sources,
 )
-from catalog_service import resolve_domain
+from catalog_service import resolve_domain, sync_dataset_source
 from db import connect, get_total_chunk_count, list_ingested_sources, search_chunks
 from domain_router import route_question
 from ingest_service import (
@@ -32,6 +33,18 @@ from mcp_registry import (
     get_tool_description,
     is_enabled,
     load_registry,
+)
+from mcp_tool_contracts import (
+    DOMAIN_ARG,
+    SEARCH_DOMAIN_ARG,
+    SEARCH_QUERY_ARG,
+    SEARCH_TOP_K_ARG,
+    SOURCE_DOMAIN_ARG,
+    SOURCE_ID_ARG,
+    TIME_REQUIREMENT_ARG,
+    domain_sources_payload,
+    resolve_source_identifier,
+    serialize_domain,
 )
 from temporal_context import resolve_time_period
 
@@ -168,7 +181,7 @@ if is_enabled("resources", "ragpro://domains", REGISTRY):
         mime_type=_domains_meta["mime_type"],
     )
     def resource_domains() -> str:
-        return _json_resource(list_domains())
+        return _json_resource([serialize_domain(d) for d in list_domains()])
 
 
 if is_enabled("resources", "ragpro://domains/{domain}/sources", REGISTRY):
@@ -183,8 +196,8 @@ if is_enabled("resources", "ragpro://domains/{domain}/sources", REGISTRY):
     def resource_domain_sources(domain: str) -> str:
         row = resolve_domain(domain)
         if not row:
-            return _json_resource({"error": f"Domain not found: {domain!r}"})
-        return _json_resource(catalog_list_sources(domain_id=row["id"]))
+            raise ValueError(f"Domain not found: {domain!r}")
+        return _json_resource(domain_sources_payload(row["id"]))
 
 
 if is_enabled("resources", "ragpro://domains/{domain}/stats", REGISTRY):
@@ -200,6 +213,89 @@ if is_enabled("resources", "ragpro://domains/{domain}/stats", REGISTRY):
         row = resolve_domain(domain)
         slug = row["slug"] if row else domain
         return _json_resource(get_domain_stats(slug))
+
+
+def _domain_row_or_raise(domain: str) -> dict:
+    row = resolve_domain(domain)
+    if not row:
+        raise ValueError(f"Domain not found: {domain!r}")
+    return row
+
+
+if is_enabled("resources", "ragpro://domains/{domain}/schema", REGISTRY):
+    _schema_meta = get_resource_meta("ragpro://domains/{domain}/schema", REGISTRY)
+
+    @mcp.resource(
+        "ragpro://domains/{domain}/schema",
+        name=_schema_meta["name"],
+        description=_schema_meta["description"],
+        mime_type="text/markdown",
+    )
+    def resource_domain_schema(domain: Annotated[str, Field(description=DOMAIN_ARG)]) -> str:
+        """Catalog schema for SQL — tables, columns, types, and definitions."""
+        from mcp_reference_service import build_domain_schema_markdown
+
+        return build_domain_schema_markdown(_domain_row_or_raise(domain)["id"])
+
+
+if is_enabled("resources", "ragpro://domains/{domain}/calendar", REGISTRY):
+    _cal_meta = get_resource_meta("ragpro://domains/{domain}/calendar", REGISTRY)
+
+    @mcp.resource(
+        "ragpro://domains/{domain}/calendar",
+        name=_cal_meta["name"],
+        description=_cal_meta["description"],
+        mime_type="text/markdown",
+    )
+    def resource_domain_calendar(domain: Annotated[str, Field(description=DOMAIN_ARG)]) -> str:
+        from mcp_reference_service import build_domain_calendar_markdown
+
+        row = _domain_row_or_raise(domain)
+        return build_domain_calendar_markdown(row["id"], domain_slug=row.get("slug"))
+
+
+if is_enabled("resources", "ragpro://domains/{domain}/glossary", REGISTRY):
+    _gl_meta = get_resource_meta("ragpro://domains/{domain}/glossary", REGISTRY)
+
+    @mcp.resource(
+        "ragpro://domains/{domain}/glossary",
+        name=_gl_meta["name"],
+        description=_gl_meta["description"],
+        mime_type="text/markdown",
+    )
+    def resource_domain_glossary(domain: Annotated[str, Field(description=DOMAIN_ARG)]) -> str:
+        from mcp_reference_service import build_domain_glossary_markdown
+
+        row = _domain_row_or_raise(domain)
+        return build_domain_glossary_markdown(row["id"], domain_slug=row.get("slug"))
+
+
+if is_enabled("resources", "ragpro://domains/{domain}/sql-notes", REGISTRY):
+    _sql_meta = get_resource_meta("ragpro://domains/{domain}/sql-notes", REGISTRY)
+
+    @mcp.resource(
+        "ragpro://domains/{domain}/sql-notes",
+        name=_sql_meta["name"],
+        description=_sql_meta["description"],
+        mime_type="text/markdown",
+    )
+    def resource_domain_sql_notes(domain: Annotated[str, Field(description=DOMAIN_ARG)]) -> str:
+        from mcp_reference_service import build_domain_sql_notes_markdown
+
+        return build_domain_sql_notes_markdown(_domain_row_or_raise(domain)["id"])
+
+
+if is_enabled("resources", "ragpro://policy/citation-rules", REGISTRY):
+    _cite_res_meta = get_resource_meta("ragpro://policy/citation-rules", REGISTRY)
+
+    @mcp.resource(
+        "ragpro://policy/citation-rules",
+        name=_cite_res_meta["name"],
+        description=_cite_res_meta["description"],
+        mime_type="text/markdown",
+    )
+    def resource_citation_rules() -> str:
+        return _citation_rules_text()
 
 
 if is_enabled("resources", "ragpro://knowledge-base/stats", REGISTRY):
@@ -402,51 +498,88 @@ if is_enabled("prompts", "domain_grounded_answer", REGISTRY):
         )
 
 
+if is_enabled("prompts", "domain_sql_context", REGISTRY):
+    _sql_ctx_meta = get_prompt_meta("domain_sql_context", REGISTRY)
+
+    @mcp.prompt(
+        name="domain_sql_context",
+        description=_sql_ctx_meta["description"],
+    )
+    def prompt_domain_sql_context(
+        question: str,
+        domain_name: str = "Domain",
+        schema: str = "",
+        calendar: str = "",
+        glossary: str = "",
+        sql_notes: str = "",
+        tool_context: str = "(none)",
+    ) -> str:
+        """Assemble SQL generation context from reference resources (no retrieval)."""
+        from mcp_reference_service import build_domain_sql_context_prompt
+
+        return build_domain_sql_context_prompt(
+            question,
+            domain_name=domain_name,
+            schema_text=schema,
+            calendar_text=calendar,
+            glossary_text=glossary,
+            sql_notes_text=sql_notes,
+            tool_context=tool_context,
+        )
+
+
 # --- Tools (actions the agent can invoke) ---
 
 if is_enabled("tools", "list_domains", REGISTRY):
 
     @mcp.tool(description=get_tool_description("list_domains", REGISTRY))
     def list_domains_tool() -> list[dict]:
-        """List enabled business domains."""
-        return [
-            {
-                "id": d["id"],
-                "slug": d["slug"],
-                "name": d["name"],
-                "description": d["description"],
-            }
-            for d in list_domains()
-        ]
+        """List enabled business domains (HR, Finance, Sales, etc.)."""
+        return [serialize_domain(d) for d in list_domains()]
 
 
 if is_enabled("tools", "list_domain_sources", REGISTRY):
 
     @mcp.tool(description=get_tool_description("list_domain_sources", REGISTRY))
-    def list_domain_sources(domain: str) -> list[dict]:
-        """List data sources under a domain (slug or name)."""
+    def list_domain_sources(
+        domain: Annotated[str, Field(description=DOMAIN_ARG)],
+    ) -> list[dict]:
+        """List catalog datasets registered under a business domain."""
         row = resolve_domain(domain)
         if not row:
             raise ValueError(f"Domain not found: {domain!r}")
-        return [
-            {
-                "id": s["id"],
-                "slug": s["slug"],
-                "name": s["name"],
-                "description": s["description"],
-                "source_type": s["source_type"],
-                "connector": s["connector"],
-            }
-            for s in catalog_list_sources(domain_id=row["id"])
-        ]
+        return domain_sources_payload(row["id"])
+
+
+if is_enabled("tools", "sync_dataset", REGISTRY):
+
+    @mcp.tool(description=get_tool_description("sync_dataset", REGISTRY))
+    def sync_dataset_tool(
+        source_id: Annotated[str, Field(description=SOURCE_ID_ARG)],
+        domain: Annotated[str | None, Field(description=SOURCE_DOMAIN_ARG)] = None,
+        full: Annotated[bool, Field(description="Replace cached files before fetching.")] = False,
+    ) -> dict:
+        """Sync a catalog dataset from its connector (API, web link, SharePoint, or rescan local files)."""
+        source = resolve_source_identifier(source_id, domain)
+        if not source:
+            hint = f" with domain={domain!r}" if domain else " (pass domain when source_id is a slug)"
+            raise ValueError(f"Source not found: {source_id!r}{hint}")
+        return sync_dataset_source(source, full=full)
 
 
 if is_enabled("tools", "get_rag_profile", REGISTRY):
 
     @mcp.tool(description=get_tool_description("get_rag_profile", REGISTRY))
-    def get_rag_profile_tool(source_id: str) -> dict:
-        """Return RAG profile for a data source UUID."""
-        profile = get_rag_profile(source_id)
+    def get_rag_profile_tool(
+        source_id: Annotated[str, Field(description=SOURCE_ID_ARG)],
+        domain: Annotated[str | None, Field(description=SOURCE_DOMAIN_ARG)] = None,
+    ) -> dict:
+        """Return RAG profile settings and instructions for a catalog dataset."""
+        source = resolve_source_identifier(source_id, domain)
+        if not source:
+            hint = f" with domain={domain!r}" if domain else " (pass domain when source_id is a slug)"
+            raise ValueError(f"Source not found: {source_id!r}{hint}")
+        profile = get_rag_profile(source["id"])
         if not profile:
             raise ValueError(f"No RAG profile for source {source_id!r}")
         return profile
@@ -455,7 +588,11 @@ if is_enabled("tools", "get_rag_profile", REGISTRY):
 if is_enabled("tools", "search_documents", REGISTRY):
 
     @mcp.tool(description=get_tool_description("search_documents", REGISTRY))
-    def search_documents(query: str, top_k: int = 3, domain: str | None = None) -> list[dict]:
+    def search_documents(
+        query: Annotated[str, Field(description=SEARCH_QUERY_ARG)],
+        top_k: Annotated[int, Field(description=SEARCH_TOP_K_ARG)] = 3,
+        domain: Annotated[str | None, Field(description=SEARCH_DOMAIN_ARG)] = None,
+    ) -> list[dict]:
         """Semantic search over ingested document chunks. Optional domain filter."""
         if top_k < 1 or top_k > 20:
             raise ValueError("top_k must be between 1 and 20")
@@ -477,7 +614,7 @@ if is_enabled("tools", "list_sources", REGISTRY):
 
     @mcp.tool(description=get_tool_description("list_sources", REGISTRY))
     def list_sources() -> list[dict]:
-        """List ingested source files with chunk counts and last-ingested timestamps."""
+        """List ingested document files in the vector knowledge base (not catalog datasets)."""
         return [
             {
                 "source_file": row["source_file"],
@@ -553,9 +690,15 @@ if is_enabled("tools", "resolve_time_period", REGISTRY):
 
     @mcp.tool(description=get_tool_description("resolve_time_period", REGISTRY))
     def resolve_time_period_tool(
-        requirement: str,
-        reference_date: str | None = None,
-        fiscal_year_start_month: int = 1,
+        requirement: Annotated[str, Field(description=TIME_REQUIREMENT_ARG)],
+        reference_date: Annotated[
+            str | None,
+            Field(description="Optional ISO date (YYYY-MM-DD) as the reference 'today'."),
+        ] = None,
+        fiscal_year_start_month: Annotated[
+            int,
+            Field(description="Fiscal year start month (1=Jan, 4=Apr, etc.). Default 1."),
+        ] = 1,
     ) -> dict:
         """
         Resolve calendar/fiscal periods and SQL date-filter templates from natural language.

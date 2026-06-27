@@ -12,8 +12,6 @@ Analytics:
 Show me total AP bill amount by country and include customer count
 
 
-
-
 cd /Users/siva/develop/upskill/project2/datapro
 uvicorn api.main:app --reload --host 127.0.0.1 --port 8080
 
@@ -23,7 +21,6 @@ source .venv/bin/activate
 uvicorn api.main:app --reload --host 127.0.0.1 --port 8080
 
 cd web && npm run dev
-
 
 
 curl http://127.0.0.1:8080/api/health

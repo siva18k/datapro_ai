@@ -463,18 +463,25 @@ def load_table_business_rules_for_domain(domain_id: str | None) -> str:
     return "\n\n".join(parts).strip()
 
 
-def build_schema_context(source_id: str) -> StructuredSchemaContext:
+def build_schema_context(
+    source_id: str,
+    *,
+    table_names: list[str] | None = None,
+) -> StructuredSchemaContext:
     """Assemble catalog metadata for LLM SQL generation."""
     source = get_source(source_id=source_id)
     if not source:
         raise ValueError(f"Dataset not found: {source_id}")
 
+    allowed = {t.lower() for t in table_names} if table_names else None
     columns_by_table = list_columns_by_source(source_id)
     tables_out: list[dict[str, Any]] = []
     for table in list_table_metadata(source_id):
         if not table.get("enabled", True):
             continue
         if (table.get("table_role") or "fact") == "excluded":
+            continue
+        if allowed is not None and table["table_name"].lower() not in allowed:
             continue
         tables_out.append(
             {
@@ -494,12 +501,18 @@ def build_schema_context(source_id: str) -> StructuredSchemaContext:
     )
 
 
-def build_domain_schema_context(domain_id: str, primary_source_id: str) -> StructuredSchemaContext:
-    """All cataloged postgres tables in a domain — for cross-dataset SQL (e.g. sales + countries)."""
+def build_domain_schema_context(
+    domain_id: str,
+    primary_source_id: str,
+    *,
+    table_names: list[str] | None = None,
+) -> StructuredSchemaContext:
+    """Postgres tables in a domain — optionally narrowed to table_names."""
     primary = get_source(source_id=primary_source_id)
     if not primary:
         raise ValueError(f"Dataset not found: {primary_source_id}")
 
+    allowed = {t.lower() for t in table_names} if table_names else None
     definition_parts: list[str] = []
     tables_out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -515,6 +528,8 @@ def build_domain_schema_context(domain_id: str, primary_source_id: str) -> Struc
             if not table.get("enabled", True):
                 continue
             if (table.get("table_role") or "fact") == "excluded":
+                continue
+            if allowed is not None and table["table_name"].lower() not in allowed:
                 continue
             key = (table["table_schema"], table["table_name"])
             if key in seen:
@@ -926,6 +941,8 @@ def plan_structured_query(
     domain_override: str | None = None,
     routing: dict[str, Any] | None = None,
     domain_id: str | None = None,
+    source_id: str | None = None,
+    table_names: list[str] | None = None,
     force_structured: bool = False,
 ) -> StructuredQueryPlan | None:
     """
@@ -947,11 +964,16 @@ def plan_structured_query(
         if mode == "unstructured":
             return None
 
-    dataset = pick_structured_dataset(question, domain_id, embedder)
+    dataset = None
+    if source_id:
+        dataset = get_source(source_id=source_id)
+    if not dataset:
+        dataset = pick_structured_dataset(question, domain_id, embedder)
     if not dataset:
         return None
 
-    ctx = build_domain_schema_context(domain_id, dataset["id"])
+    narrowed = table_names or (routing or {}).get("table_names")
+    ctx = build_domain_schema_context(domain_id, dataset["id"], table_names=narrowed)
     return StructuredQueryPlan(
         question=question,
         domain_id=domain_id,

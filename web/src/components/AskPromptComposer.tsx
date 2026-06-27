@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api/client";
 import type { Agent, AgentFlow } from "../types";
+import { computeMentionMenuPos, type MentionMenuPos } from "../utils/mentionMenuPosition";
 import { DomainScopePromptOptions } from "./DomainScopePromptOptions";
 import { IconDebug } from "./SidebarNavIcons";
 
@@ -13,7 +15,7 @@ export interface AskAttachment {
   text: string;
 }
 
-type MenuPos = { top: number; left: number };
+type MenuPos = MentionMenuPos;
 
 interface AskPromptComposerProps {
   value: string;
@@ -81,6 +83,7 @@ export function AskPromptComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
   const atMarkerRef = useRef<HTMLSpanElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const wasPendingRef = useRef(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -134,7 +137,6 @@ export function AskPromptComposer({
   const visibleAgents = useMemo(() => filteredAgents.slice(0, 8), [filteredAgents]);
   const visibleFlows = useMemo(() => filteredFlows.slice(0, 8), [filteredFlows]);
   const visibleMenuItems = menuKind === "flow" ? visibleFlows : visibleAgents;
-  const filteredMenuCount = menuKind === "flow" ? filteredFlows.length : filteredAgents.length;
 
   const canSend = Boolean((value.trim() || selectedAgent || selectedFlow) && !isPending);
   const hasContent = value.length > 0 || attachments.length > 0 || Boolean(selectedAgent) || Boolean(selectedFlow);
@@ -150,15 +152,8 @@ export function AskPromptComposer({
 
   const syncMenuPosition = useCallback(() => {
     const marker = atMarkerRef.current;
-    const container = containerRef.current;
-    if (!marker || !container || !menuOpen || atStart === null) return;
-    const markerRect = marker.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    const maxLeft = Math.max(0, container.clientWidth - 220);
-    setMenuPos({
-      top: markerRect.bottom - containerRect.top + 2,
-      left: Math.min(Math.max(0, markerRect.left - containerRect.left), maxLeft),
-    });
+    if (!marker || !menuOpen || atStart === null) return;
+    setMenuPos(computeMentionMenuPos(marker));
   }, [menuOpen, atStart]);
 
   const detectAtMenu = useCallback((text: string, pos: number) => {
@@ -338,7 +333,8 @@ export function AskPromptComposer({
   useEffect(() => {
     if (!menuOpen) return;
     const close = (e: MouseEvent) => {
-      if (containerRef.current?.contains(e.target as Node)) return;
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
       setMenuOpen(false);
       setAtStart(null);
       setMenuPos(null);
@@ -347,6 +343,17 @@ export function AskPromptComposer({
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onViewportChange = () => syncMenuPosition();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [menuOpen, syncMenuPosition]);
 
   const onPickFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -373,8 +380,74 @@ export function AskPromptComposer({
   const atMirrorText = atStart !== null ? value.slice(0, atStart) : "";
   const atMirrorSuffix = menuKind === "flow" ? "@@" : "@";
 
+  const mentionMenuPortal =
+    menuOpen && menuPos
+      ? createPortal(
+          visibleMenuItems.length > 0 ? (
+            <div
+              id="ask-agent-menu"
+              ref={menuRef}
+              className={`agent-slash-menu ask-agent-menu ask-agent-menu-portal${menuPos.placement === "above" ? " ask-agent-menu--above" : ""}`}
+              role="listbox"
+              style={{ top: menuPos.top, left: menuPos.left }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {menuKind === "flow"
+                ? visibleFlows.map((f, index) => (
+                    <button
+                      key={f.id}
+                      id={`ask-menu-option-flow-${index}`}
+                      ref={(el) => {
+                        menuItemRefs.current[index] = el;
+                      }}
+                      type="button"
+                      className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
+                      role="option"
+                      aria-selected={index === menuHighlightIndex}
+                      onMouseEnter={() => setMenuHighlightIndex(index)}
+                      onClick={() => insertFlow(f)}
+                    >
+                      <span className="font-medium">@@{f.slug}</span>
+                      <span className="mention-menu-item-meta">{f.name}</span>
+                    </button>
+                  ))
+                : visibleAgents.map((a, index) => (
+                    <button
+                      key={a.id}
+                      id={`ask-menu-option-agent-${index}`}
+                      ref={(el) => {
+                        menuItemRefs.current[index] = el;
+                      }}
+                      type="button"
+                      className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
+                      role="option"
+                      aria-selected={index === menuHighlightIndex}
+                      onMouseEnter={() => setMenuHighlightIndex(index)}
+                      onClick={() => insertAgent(a)}
+                    >
+                      <span className="font-medium">@{a.slug}</span>
+                      <span className="mention-menu-item-meta">{a.name}</span>
+                    </button>
+                  ))}
+            </div>
+          ) : (
+            <div
+              ref={menuRef}
+              className={`agent-slash-menu ask-agent-menu ask-agent-menu-portal${menuPos.placement === "above" ? " ask-agent-menu--above" : ""}`}
+              style={{ top: menuPos.top, left: menuPos.left }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <p className="mention-menu-empty">
+                {menuKind === "flow" ? "No flows match" : "No agents match"}
+              </p>
+            </div>
+          ),
+          document.body,
+        )
+      : null;
+
   return (
-    <div className="ask-composer-stack">
+    <div className={`ask-composer-stack${menuOpen ? " ask-composer-stack--menu-open" : ""}`}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -464,64 +537,6 @@ export function AskPromptComposer({
                   : undefined
               }
             />
-            {menuOpen && visibleMenuItems.length > 0 && menuPos && (
-              <div
-                id="ask-agent-menu"
-                className="agent-slash-menu ask-agent-menu"
-                role="listbox"
-                style={{ top: menuPos.top, left: menuPos.left }}
-                onMouseDown={(e) => e.preventDefault()}
-              >
-                {menuKind === "flow"
-                  ? visibleFlows.map((f, index) => (
-                      <button
-                        key={f.id}
-                        id={`ask-menu-option-flow-${index}`}
-                        ref={(el) => {
-                          menuItemRefs.current[index] = el;
-                        }}
-                        type="button"
-                        className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
-                        role="option"
-                        aria-selected={index === menuHighlightIndex}
-                        onMouseEnter={() => setMenuHighlightIndex(index)}
-                        onClick={() => insertFlow(f)}
-                      >
-                        <span className="font-medium">@@{f.slug}</span>
-                        <span className="text-zinc-500">{f.name}</span>
-                      </button>
-                    ))
-                  : visibleAgents.map((a, index) => (
-                      <button
-                        key={a.id}
-                        id={`ask-menu-option-agent-${index}`}
-                        ref={(el) => {
-                          menuItemRefs.current[index] = el;
-                        }}
-                        type="button"
-                        className={`agent-slash-menu-item${index === menuHighlightIndex ? " agent-slash-menu-item--active" : ""}`}
-                        role="option"
-                        aria-selected={index === menuHighlightIndex}
-                        onMouseEnter={() => setMenuHighlightIndex(index)}
-                        onClick={() => insertAgent(a)}
-                      >
-                        <span className="font-medium">@{a.slug}</span>
-                        <span className="text-zinc-500">{a.name}</span>
-                      </button>
-                    ))}
-              </div>
-            )}
-            {menuOpen && filteredMenuCount === 0 && menuPos && (
-              <div
-                className="agent-slash-menu ask-agent-menu"
-                style={{ top: menuPos.top, left: menuPos.left }}
-                onMouseDown={(e) => e.preventDefault()}
-              >
-                <p className="px-3 py-2 text-xs text-zinc-500">
-                  {menuKind === "flow" ? "No flows match" : "No agents match"}
-                </p>
-              </div>
-            )}
           </div>
 
           <div className="ask-composer-toolbar">
@@ -576,6 +591,7 @@ export function AskPromptComposer({
       </div>
 
       {error && <p className="alert-error mt-2 text-sm">{error}</p>}
+      {mentionMenuPortal}
     </div>
   );
 }

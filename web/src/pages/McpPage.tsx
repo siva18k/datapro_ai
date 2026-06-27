@@ -3,13 +3,18 @@ import { useMemo, useState } from "react";
 import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { McpAddBindingModal } from "../components/McpAddBindingModal";
+import { McpAddPromptModal } from "../components/McpAddPromptModal";
+import { McpLocalPromptEditModal } from "../components/McpLocalPromptEditModal";
 import { McpPromptEditModal } from "../components/McpPromptEditModal";
+import { McpPromptPreviewModal } from "../components/McpPromptPreviewModal";
 import { McpResourcePreviewModal } from "../components/McpResourcePreviewModal";
 import { McpServersPanel } from "../components/McpServersPanel";
 import { McpToolViewModal } from "../components/McpToolViewModal";
 import { PageHeader } from "../components/PageHeader";
 import { useApiPageState } from "../context/ApiConnectionContext";
-import { api, type McpBindingItem, type McpRegistryPrompt, type McpStatusResponse } from "../api/client";
+import { api, type DomainPrompt, type McpBindingItem, type McpRegistryPrompt, type McpStatusResponse } from "../api/client";
+import { expandMcpResourceUri } from "../utils/mcpServerUi";
+import { bindingCapabilityName, isLocalPromptBinding } from "../utils/mcpBindingUi";
 
 type BindingTab = "tools" | "resources" | "prompts";
 
@@ -28,6 +33,8 @@ export function McpPage() {
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
   const [viewingTool, setViewingTool] = useState<string | null>(null);
   const [viewingResource, setViewingResource] = useState<McpBindingItem | null>(null);
+  const [viewingPrompt, setViewingPrompt] = useState<McpBindingItem | null>(null);
+  const [editingLocalPrompt, setEditingLocalPrompt] = useState<DomainPrompt | null>(null);
   const [addBindingOpen, setAddBindingOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -85,6 +92,14 @@ export function McpPage() {
   });
 
   const activeDomainId = domainId || domains?.[0]?.id || "";
+  const activeDomainSlug = useMemo(
+    () => domains?.find((d) => d.id === activeDomainId)?.slug ?? null,
+    [domains, activeDomainId],
+  );
+  const activeDomainName = useMemo(
+    () => domains?.find((d) => d.id === activeDomainId)?.name ?? null,
+    [domains, activeDomainId],
+  );
 
   const { data: registry } = useQuery({
     queryKey: ["mcp", "registry"],
@@ -123,6 +138,12 @@ export function McpPage() {
     enabled: !!status?.running,
   });
 
+  const { data: localPrompts } = useQuery({
+    queryKey: ["domains", activeDomainId, "prompts"],
+    queryFn: () => api.listDomainPrompts(activeDomainId),
+    enabled: !!activeDomainId && apiOnline,
+  });
+
   const boundKeys = useMemo(() => {
     const keys = new Set<string>();
     if (!bindings) return keys;
@@ -130,7 +151,7 @@ export function McpPage() {
       for (const item of bindings.bindings[tab]) {
         if (!item.mcp_server_id) continue;
         const type = TAB_TO_TYPE[tab];
-        keys.add(`${item.mcp_server_id}:${type}:${item.name}`);
+        keys.add(`${item.mcp_server_id}:${type}:${bindingCapabilityName(item)}`);
       }
     }
     return keys;
@@ -147,6 +168,7 @@ export function McpPage() {
     mutationFn: api.addMcpBinding,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["mcp", "bindings", activeDomainId] });
+      void qc.invalidateQueries({ queryKey: ["domains", activeDomainId, "prompts"] });
     },
   });
 
@@ -259,16 +281,27 @@ export function McpPage() {
             <BindingList
               items={bindings.bindings[bindingTab]}
               showUri={bindingTab === "resources"}
+              domainSlug={bindingTab === "resources" ? activeDomainSlug : null}
               allowToolView={bindingTab === "tools"}
               allowResourcePreview={bindingTab === "resources"}
+              allowPromptPreview={bindingTab === "prompts"}
               saving={setBinding.isPending || removeBinding.isPending}
               onViewTool={(name) => setViewingTool(name)}
               onPreviewResource={(item) => setViewingResource(item)}
+              onPreviewPrompt={(item) => setViewingPrompt(item)}
+              onEditLocalPrompt={(item) => {
+                const localId = item.local_prompt_id;
+                const slug = item.local_slug;
+                const found =
+                  (localId && localPrompts?.find((p) => p.id === localId)) ||
+                  (slug && localPrompts?.find((p) => p.slug === slug));
+                if (found) setEditingLocalPrompt(found);
+              }}
               onToggle={(item, enabled) =>
                 setBinding.mutate({
                   domain_id: activeDomainId,
                   capability_type: TAB_TO_TYPE[bindingTab],
-                  capability_name: item.name,
+                  capability_name: bindingCapabilityName(item),
                   enabled,
                   mcp_server_id: item.mcp_server_id,
                 })
@@ -311,28 +344,70 @@ export function McpPage() {
         </div>
       </div>
 
-      <McpAddBindingModal
-        open={addBindingOpen}
-        tab={bindingTab}
-        catalog={bindingCatalog?.servers}
-        boundKeys={boundKeys}
-        saving={addBinding.isPending}
-        onClose={() => setAddBindingOpen(false)}
-        onAdd={(serverId, capabilityName) =>
-          addBinding.mutate({
-            domain_id: activeDomainId,
-            mcp_server_id: serverId,
-            capability_type: TAB_TO_TYPE[bindingTab],
-            capability_name: capabilityName,
-          })
-        }
-      />
+      {bindingTab === "prompts" ? (
+        <McpAddPromptModal
+          open={addBindingOpen}
+          domainId={activeDomainId}
+          catalog={bindingCatalog?.servers}
+          registryPrompts={registry?.prompts}
+          boundKeys={boundKeys}
+          saving={addBinding.isPending}
+          onClose={() => setAddBindingOpen(false)}
+          onAddGlobal={(serverId, capabilityName) =>
+            addBinding.mutate({
+              domain_id: activeDomainId,
+              mcp_server_id: serverId,
+              capability_type: "prompt",
+              capability_name: capabilityName,
+            })
+          }
+        />
+      ) : (
+        <McpAddBindingModal
+          open={addBindingOpen}
+          tab={bindingTab}
+          catalog={bindingCatalog?.servers}
+          boundKeys={boundKeys}
+          saving={addBinding.isPending}
+          onClose={() => setAddBindingOpen(false)}
+          onAdd={(serverId, capabilityName) =>
+            addBinding.mutate({
+              domain_id: activeDomainId,
+              mcp_server_id: serverId,
+              capability_type: TAB_TO_TYPE[bindingTab],
+              capability_name: capabilityName,
+            })
+          }
+        />
+      )}
+
+      {editingLocalPrompt && (
+        <McpLocalPromptEditModal
+          open={editingLocalPrompt != null}
+          domainId={activeDomainId}
+          prompt={editingLocalPrompt}
+          onClose={() => setEditingLocalPrompt(null)}
+        />
+      )}
+
+      {viewingPrompt && (
+        <McpPromptPreviewModal
+          open={viewingPrompt != null}
+          prompt={viewingPrompt}
+          serverReachable={!!status?.reachable}
+          domainId={activeDomainId}
+          domainName={activeDomainName}
+          onClose={() => setViewingPrompt(null)}
+        />
+      )}
 
       {viewingResource && (
         <McpResourcePreviewModal
           open={viewingResource != null}
           resource={viewingResource}
           serverReachable={!!status?.reachable}
+          domainSlug={activeDomainSlug}
+          domainId={activeDomainId}
           onClose={() => setViewingResource(null)}
         />
       )}
@@ -533,38 +608,50 @@ function GlobalPromptsCard({
 function BindingList({
   items,
   showUri,
+  domainSlug,
   allowToolView,
   allowResourcePreview,
+  allowPromptPreview,
   saving,
   onViewTool,
   onPreviewResource,
+  onPreviewPrompt,
+  onEditLocalPrompt,
   onToggle,
   onRemove,
 }: {
   items: McpBindingItem[];
   showUri?: boolean;
+  domainSlug?: string | null;
   allowToolView?: boolean;
   allowResourcePreview?: boolean;
+  allowPromptPreview?: boolean;
   saving: boolean;
   onViewTool?: (name: string) => void;
   onPreviewResource?: (item: McpBindingItem) => void;
+  onPreviewPrompt?: (item: McpBindingItem) => void;
+  onEditLocalPrompt?: (item: McpBindingItem) => void;
   onToggle: (item: McpBindingItem, enabled: boolean) => void;
   onRemove: (item: McpBindingItem) => void;
 }) {
   if (!items.length) {
     return (
       <p className="text-sm text-zinc-500">
-        No {showUri ? "resources" : allowToolView ? "tools" : "prompts"} bound yet. Use Add to attach
-        capabilities from any server.
+        No{" "}
+        {showUri ? "resources" : allowToolView ? "tools" : allowPromptPreview ? "prompts" : "items"} bound yet.
+        Use Add to attach capabilities from any server.
       </p>
     );
   }
 
   return (
     <div className="space-y-2">
-      {items.map((item) => (
+      {items.map((item) => {
+        const capName = bindingCapabilityName(item);
+        const localPrompt = isLocalPromptBinding(item);
+        return (
         <div
-          key={item.id ?? `${item.mcp_server_id}-${item.name}`}
+          key={item.id ?? `${item.mcp_server_id}-${capName}`}
           className="mcp-list-item mcp-list-item--interactive"
         >
           <input
@@ -578,16 +665,25 @@ function BindingList({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">{item.name}</span>
+              {allowPromptPreview && (
+                <span className="badge-muted badge text-xs">{localPrompt ? "Local" : "Global"}</span>
+              )}
               {item.server_name && (
                 <span className="badge-muted badge text-xs">{item.server_name}</span>
               )}
             </div>
+            {localPrompt && (
+              <span className="mt-0.5 block truncate font-mono mcp-text-faint">{capName}</span>
+            )}
+            {item.description && allowPromptPreview && (
+              <span className="mt-0.5 block text-sm mcp-text-muted">{item.description}</span>
+            )}
             {showUri && (
               <span className="mt-0.5 block truncate font-mono mcp-text-faint">
-                {item.uri ?? item.name}
+                {expandMcpResourceUri(item.uri ?? item.name, domainSlug ? { domain: domainSlug } : {})}
               </span>
             )}
-            {item.server_url && (
+            {item.server_url && !localPrompt && (
               <span className="mt-0.5 block truncate font-mono mcp-text-faint">
                 {item.server_url}
               </span>
@@ -597,9 +693,18 @@ function BindingList({
             <button
               type="button"
               className="btn btn-secondary btn-sm shrink-0 self-center"
-              onClick={() => onViewTool(item.name)}
+              onClick={() => onViewTool(capName)}
             >
               View code
+            </button>
+          )}
+          {allowPromptPreview && localPrompt && onEditLocalPrompt && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm shrink-0 self-center"
+              onClick={() => onEditLocalPrompt(item)}
+            >
+              Edit
             </button>
           )}
           {allowResourcePreview && onPreviewResource && (
@@ -607,6 +712,15 @@ function BindingList({
               type="button"
               className="btn btn-secondary btn-sm shrink-0 self-center"
               onClick={() => onPreviewResource({ ...item, uri: item.uri ?? item.name })}
+            >
+              Preview
+            </button>
+          )}
+          {allowPromptPreview && onPreviewPrompt && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm shrink-0 self-center"
+              onClick={() => onPreviewPrompt({ ...item, capability_name: capName })}
             >
               Preview
             </button>
@@ -620,7 +734,8 @@ function BindingList({
             Remove
           </button>
         </div>
-      ))}
+      );
+      })}
     </div>
   );
 }

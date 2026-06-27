@@ -21,6 +21,7 @@ from mcp_ask_planner import (
 )
 from temporal_context import format_query_results_with_time_context
 from query_planner import resolve_query_plan, structured_fallback_available
+from scope_resolver import chunk_source_files_for_scope
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
 
 
@@ -158,6 +159,8 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         embedder,
         domain_id=plan.domain_id,
         routing=plan.routing,
+        source_id=plan.source_id,
+        table_names=plan.table_names,
         force_structured=True,
     )
     if not sql_plan:
@@ -191,6 +194,7 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         domain_id=plan.domain_id,
         domain_slug=domain_slug,
         top_k=5,
+        execution_kind=plan.execution_kind,
     )
     mcp_supplement = format_mcp_context_supplement(mcp_enrichment)
     if mcp_enrichment.trace:
@@ -203,6 +207,15 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
             domain_id=plan.domain_id,
             source_id=sql_plan.source_id,
             top_k=5,
+            table_names=plan.table_names,
+            file_names=plan.file_names,
+            source_files=chunk_source_files_for_scope(
+                domain_id=plan.domain_id,
+                source_id=sql_plan.source_id,
+                table_names=plan.table_names,
+                file_names=plan.file_names,
+            )
+            or None,
         )
     )
     if rag_chunks:

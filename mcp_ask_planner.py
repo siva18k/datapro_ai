@@ -13,8 +13,10 @@ from catalog_db import get_domain
 from mcp_client import call_tool_text, check_mcp_server, get_default_mcp_url
 from mcp_domain_service import (
     domain_mcp_capabilities,
-    read_bound_resources_for_domain,
+    load_domain_reference_resources,
+    read_optional_resources_for_domain,
 )
+from mcp_tool_contracts import MCP_TOOL_GUIDE
 from temporal_context import format_time_period_hints, has_temporal_signal
 
 # Read-only MCP tools safe to invoke during question answering.
@@ -24,6 +26,7 @@ ALLOWED_ASK_MCP_TOOLS = frozenset(
         "list_domains",
         "list_domain_sources",
         "get_rag_profile",
+        "sync_dataset",
         "list_sources",
         "get_chunk",
         "knowledge_base_stats",
@@ -66,8 +69,6 @@ class McpAskEnrichment:
     reasoning: str = ""
     resources: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[McpToolResult] = field(default_factory=list)
-    mcp_prompt_name: str | None = None
-    mcp_prompt_text: str | None = None
     trace: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -209,10 +210,24 @@ def _heuristic_mcp_plan(
         bound_prompts = {c["capability_name"] for c in bindings.get("prompt", [])}
 
         lower = question.lower()
+        if "list_domains" in bound_tools and any(
+            word in lower
+            for word in ("which domain", "what domain", "list domain", "all domain", "other domain")
+        ):
+            tools.append({"name": "list_domains", "arguments": {}})
         if "list_domain_sources" in bound_tools and domain_slug and any(
             word in lower for word in ("source", "dataset", "table", "catalog")
         ):
             tools.append({"name": "list_domain_sources", "arguments": {"domain": domain_slug}})
+        if "sync_dataset" in bound_tools and domain_slug and any(
+            word in lower for word in ("sync", "refresh", "fetch", "update dataset", "pull")
+        ):
+            tools.append({"name": "list_domain_sources", "arguments": {"domain": domain_slug}})
+        if "list_sources" in bound_tools and any(
+            word in lower
+            for word in ("ingested file", "chunk count", "knowledge base file", "embedded document")
+        ):
+            tools.append({"name": "list_sources", "arguments": {}})
         if "knowledge_base_stats" in bound_tools and any(
             word in lower for word in ("how many", "chunk", "document", "ingested")
         ):
@@ -302,6 +317,8 @@ def plan_mcp_enrichment(
 
 Execution path already chosen: **{execution_kind}** (sql = live database, rag = documents only, hybrid = SQL + documents).
 
+{MCP_TOOL_GUIDE}
+
 Domain MCP bindings:
 {binding_summary}
 
@@ -309,9 +326,12 @@ User question:
 {question}
 
 Decide which bound MCP capabilities would help answer accurately. Prefer:
+- **list_domains** when scope spans multiple business domains
+- **list_domain_sources** for catalog datasets under the current domain (NOT list_sources)
+- **sync_dataset** to refresh remote datasets (API, web link, SharePoint) before RAG ingest
+- **list_sources** only for ingested document files / chunk inventory (NOT catalog datasets)
+- **get_rag_profile** when a specific dataset slug is named; pass source_id=slug and domain=domain slug
 - **resources** for domain/source/stats URIs when scope or inventory is unclear
-- **list_domain_sources** when the question mentions datasets, sources, or what is cataloged
-- **get_rag_profile** only when a specific source slug is named in the question
 - **domain_grounded_answer** prompt for rag/hybrid document answers when bound
 - Do NOT choose ingest or write tools
 
@@ -362,11 +382,20 @@ def _normalize_tool_arguments(
     *,
     domain_slug: str | None,
 ) -> dict[str, str]:
-    out = {str(k): str(v) for k, v in (arguments or {}).items()}
-    if tool_name in ("list_domain_sources", "get_rag_profile", "search_documents") and domain_slug:
+    out = {str(k): str(v) for k, v in (arguments or {}).items() if v is not None and str(v).strip()}
+
+    if tool_name == "list_domain_sources" and domain_slug:
         out.setdefault("domain", domain_slug)
-    if tool_name == "search_documents":
+    elif tool_name == "search_documents":
         out.setdefault("top_k", "5")
+        if domain_slug:
+            out.setdefault("domain", domain_slug)
+    elif tool_name == "get_rag_profile" and domain_slug:
+        # domain scopes slug lookup; never copy domain into source_id.
+        out.setdefault("domain", domain_slug)
+    elif tool_name == "resolve_time_period":
+        out.setdefault("requirement", out.get("requirement", ""))
+
     return out
 
 
@@ -377,18 +406,33 @@ def execute_mcp_enrichment(
     domain_id: str | None,
     domain_slug: str | None,
     top_k: int = 5,
+    execution_kind: str = "rag",
 ) -> McpAskEnrichment:
     """Run the planned MCP resources, tools, and prompts (best-effort)."""
     enrichment = McpAskEnrichment(reasoning=str(plan.get("reasoning") or ""))
     if not domain_id:
         return enrichment
 
+    for item in load_domain_reference_resources(
+        domain_id, domain_slug=domain_slug, execution_kind=execution_kind
+    ):
+        enrichment.resources.append(item)
+        enrichment.trace.append(
+            {
+                "kind": "resource",
+                "resource_kind": "reference",
+                "uri": item.get("uri"),
+                "server": item.get("server"),
+            }
+        )
+
     if plan.get("use_resources"):
-        for item in read_bound_resources_for_domain(domain_id, domain_slug=domain_slug):
+        for item in read_optional_resources_for_domain(domain_id, domain_slug=domain_slug):
             enrichment.resources.append(item)
             enrichment.trace.append(
                 {
                     "kind": "resource",
+                    "resource_kind": "optional",
                     "uri": item.get("uri"),
                     "server": item.get("server"),
                 }
@@ -403,7 +447,7 @@ def execute_mcp_enrichment(
         binding = _find_bound_capability(domain_id, "tool", tool_name)
         url = binding.get("server_url") if binding else None
         server_label = (binding.get("server_slug") or binding.get("server_name")) if binding else None
-        if not url and tool_name == "resolve_time_period":
+        if not url and tool_name in ("resolve_time_period", "list_domains"):
             url = get_default_mcp_url()
             server_label = "datapro"
         if not url or not check_mcp_server(url):
@@ -452,13 +496,24 @@ def format_mcp_context_supplement(enrichment: McpAskEnrichment | None) -> str:
         parts.append(f"Planner note: {enrichment.reasoning.strip()}")
 
     if enrichment.resources:
-        parts.append("## MCP resources (domain bindings)")
-        for item in enrichment.resources[:6]:
-            uri = item.get("uri", "")
-            content = (item.get("content") or "").strip()
-            if len(content) > 2500:
-                content = content[:2500] + "…"
-            parts.append(f"### `{uri}`\n{content}")
+        ref_items = [i for i in enrichment.resources if i.get("kind") == "reference"]
+        opt_items = [i for i in enrichment.resources if i.get("kind") != "reference"]
+        if ref_items:
+            parts.append("## MCP reference resources (domain context)")
+            for item in ref_items[:8]:
+                uri = item.get("uri", "")
+                content = (item.get("content") or "").strip()
+                if len(content) > 3500:
+                    content = content[:3500] + "…"
+                parts.append(f"### `{uri}`\n{content}")
+        if opt_items:
+            parts.append("## MCP inventory resources")
+            for item in opt_items[:4]:
+                uri = item.get("uri", "")
+                content = (item.get("content") or "").strip()
+                if len(content) > 2500:
+                    content = content[:2500] + "…"
+                parts.append(f"### `{uri}`\n{content}")
 
     if enrichment.tool_results:
         parts.append("## MCP tool results")
@@ -473,8 +528,9 @@ def format_mcp_context_supplement(enrichment: McpAskEnrichment | None) -> str:
         return ""
     return (
         "## MCP domain context\n"
-        "Supplementary metadata from bound MCP servers. Use with catalog definition and retrieved chunks; "
-        "SQL identifiers still come from Allowed tables / Column reference.\n\n"
+        "Reference resources (schema, calendar, glossary) and tool results from bound MCP servers. "
+        "For SQL paths, treat the schema resource as authoritative for table and column names; "
+        "catalog definition in the main prompt remains the primary join/business-rules source.\n\n"
         + "\n\n".join(parts)
     )
 

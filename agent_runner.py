@@ -8,6 +8,11 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
+from agent_mcp_runner import (
+    format_agent_mcp_context,
+    mcp_summary_for_report,
+    run_agent_mcp_enrichment,
+)
 from api.analytics_models import AnalyticsRequest
 from api.analytics_runner import run_analytics_events
 from api.ask_export import build_html_page
@@ -134,9 +139,6 @@ def run_agent_events(
     yield _status(f"Running agent «{agent['name']}» — domains: {domain_names}")
 
     tools = agent.get("tools") or []
-    if tools:
-        tool_list = ", ".join(f"{t['server_name']}.{t['tool_name']}" for t in tools)
-        yield _step("tools", f"Bound MCP tools: {tool_list}", payload={"tools": tools})
 
     llm_backend, llm_model, llm_base_url = resolve_llm_runtime(
         backend=backend,
@@ -144,11 +146,82 @@ def run_agent_events(
         base_url=ollama_base_url,
     )
 
+    mcp_enrichment = None
+    mcp_context = ""
+    if tools or resolved:
+        yield _status("Loading MCP tools, resources, and prompts…")
+        mcp_enrichment = run_agent_mcp_enrichment(
+            instructions,
+            agent_tools=tools,
+            resolved_domains=resolved,
+            model=llm_model,
+            backend=llm_backend,
+            base_url=llm_base_url,
+        )
+        mcp_context = format_agent_mcp_context(mcp_enrichment)
+        if mcp_enrichment.trace:
+            if tools:
+                tool_list = ", ".join(
+                    f"{t['server_name']}.{t['tool_name']}" for t in tools
+                )
+                yield _step(
+                    "mcp_catalog",
+                    f"Bound MCP tools: {tool_list}",
+                    payload={"tools": tools},
+                )
+            for entry in mcp_enrichment.trace:
+                kind = entry.get("kind")
+                if kind == "tool":
+                    tool = entry.get("tool", "tool")
+                    source = entry.get("source") or entry.get("domain") or entry.get("server") or "mcp"
+                    status = "warn" if entry.get("status") == "unreachable" else "ok"
+                    yield _step(
+                        f"mcp:{tool}",
+                        f"MCP tool «{tool}» ({source})"
+                        + (" — server unreachable" if status == "warn" else ""),
+                        status=status,
+                        payload=entry,
+                    )
+                elif kind == "resource":
+                    yield _step(
+                        "mcp:resource",
+                        f"MCP resource «{entry.get('uri', 'resource')}»",
+                        payload=entry,
+                    )
+                elif kind == "prompt":
+                    yield _step(
+                        f"mcp:prompt:{entry.get('prompt', 'prompt')}",
+                        f"MCP prompt «{entry.get('prompt', 'prompt')}»",
+                        payload=entry,
+                    )
+            yield _step(
+                "mcp",
+                f"MCP enrichment complete ({len(mcp_enrichment.tool_results)} tool result(s))",
+                payload={
+                    "reasoning": mcp_enrichment.reasoning,
+                    "tool_count": len(mcp_enrichment.tool_results),
+                    "resource_count": len(mcp_enrichment.resources),
+                    "prompt_count": len(mcp_enrichment.prompt_results),
+                },
+            )
+        elif tools:
+            tool_list = ", ".join(f"{t['server_name']}.{t['tool_name']}" for t in tools)
+            yield _step(
+                "tools",
+                f"Bound MCP tools: {tool_list} (no reachable MCP servers)",
+                status="warn",
+                payload={"tools": tools},
+            )
+
+    instructions_with_mcp = (
+        f"{instructions}\n\n{mcp_context}" if mcp_context else instructions
+    )
+
     yield _status("Planning workflow from instructions…")
     plan_prompt = (
         "Summarize the workflow steps for this agent in 3-6 bullet points. "
         f"Capabilities enabled: KPI check={kpi_check}, generate report={generate_report}, "
-        f"send email={send_email}.\n\n## Instructions\n{instructions}"
+        f"send email={send_email}.\n\n## Instructions\n{instructions_with_mcp}"
     )
     plan_text = generate_answer(
         plan_prompt,
@@ -187,7 +260,9 @@ def run_agent_events(
             summary = dash_data.get("summary") or ""
             columns = dash_data.get("columns")
             rows = dash_data.get("rows")
-            kpi_passed, kpi_explanation = _kpi_pass_fail(instructions, summary, columns, rows)
+            kpi_passed, kpi_explanation = _kpi_pass_fail(
+                instructions_with_mcp, summary, columns, rows
+            )
             status = "ok" if kpi_passed else "warn"
             yield _step(
                 "kpi",
@@ -208,7 +283,7 @@ def run_agent_events(
         if not dash_data:
             report_prompt = (
                 "From the agent instructions, write one analytics question for the report data.\n\n"
-                f"{instructions}"
+                f"{instructions_with_mcp}"
             )
             domain_overrides = [d["slug"] for d in resolved] if resolved else None
             req = AnalyticsRequest(
@@ -254,7 +329,27 @@ def run_agent_events(
                 },
             )
         else:
-            yield _step("report", "Could not generate report — no data returned", status="warn")
+            mcp_summary = mcp_summary_for_report(mcp_enrichment)
+            if mcp_summary:
+                title = agent.get("name") or "Agent report"
+                report_html = build_html_page(
+                    question=title,
+                    answer=mcp_summary,
+                    domain_name=domain_names if domain_names != "Auto" else None,
+                    include_chart=_instructions_want_chart(instructions),
+                )
+                yield _step(
+                    "report",
+                    "Report generated from MCP context",
+                    payload={
+                        "html": report_html,
+                        "title": title,
+                        "summary": mcp_summary,
+                        "source": "mcp",
+                    },
+                )
+            else:
+                yield _step("report", "Could not generate report — no data returned", status="warn")
 
     if send_email:
         yield _status("Preparing email preview…")
@@ -264,6 +359,8 @@ def run_agent_events(
             body_summary = dash_data.get("summary") or ""
         elif kpi_explanation:
             body_summary = kpi_explanation
+        elif mcp_enrichment:
+            body_summary = mcp_summary_for_report(mcp_enrichment) or plan_text[:500]
         else:
             body_summary = plan_text[:500]
 
@@ -292,6 +389,7 @@ def run_agent_events(
             "kpi_passed": kpi_passed,
             "report_generated": bool(report_html),
             "email_preview": send_email,
+            "mcp_tool_results": len(mcp_enrichment.tool_results) if mcp_enrichment else 0,
         }
     )
 

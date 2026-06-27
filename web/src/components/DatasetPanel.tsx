@@ -6,15 +6,42 @@ import type { ColumnMeta, Dataset, TableMeta, TableRole } from "../types";
 import { CONNECTOR_LABELS } from "../types";
 import { mergeRelationshipsSection } from "../utils/definitionRelationships";
 
-type Tab = "definition" | "connection" | "data";
+import { DatasetRagTab } from "./DatasetRagTab";
+
+type Tab = "definition" | "connection" | "data" | "rag";
 
 type PgForm = Record<string, string | number>;
 
-function visibleTabs(connector: string): Tab[] {
-  if (connector === "upload" || connector === "file_path") {
-    return ["definition", "data"];
+function tabLabel(tab: Tab): string {
+  if (tab === "rag") return "RAG";
+  return tab;
+}
+
+function visibleTabs(_connector: string): Tab[] {
+  return ["definition", "data", "rag", "connection"];
+}
+
+const CONNECTOR_OPTIONS = ["postgres", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
+
+function normalizeConnectionConfig(connector: string, form: PgForm, existing: PgForm, dataset?: Dataset): Record<string, unknown> {
+  const merged = { ...existing, ...form };
+  if (connector === "api") {
+    const raw = form.endpoints ?? existing.endpoints ?? "";
+    const paths =
+      typeof raw === "string"
+        ? raw
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : Array.isArray(raw)
+          ? raw
+          : [""];
+    merged.endpoints = paths.length ? paths : [""];
   }
-  return ["definition", "data", "connection"];
+  if (connector !== "postgres" && dataset && !merged.path) {
+    merged.path = `data/${dataset.domain_slug}/${dataset.slug}`;
+  }
+  return merged;
 }
 
 function tableRoleLabel(role?: TableRole): string {
@@ -34,19 +61,21 @@ function dataTabHint(connector: string): string {
     case "postgres":
       return "Discover tables and edit column labels.";
     case "upload":
-      return "Upload files, then ingest to RAG.";
+      return "Upload files for this dataset.";
     case "file_path":
-      return "Files in dataset folder — ingest to RAG.";
+      return "Set folder path and refresh files.";
     case "api":
-      return "API endpoints (coming soon).";
+      return "Sync API endpoints into the dataset cache, then ingest on RAG.";
     case "sharepoint":
-      return "SharePoint libraries (coming soon).";
+      return "Sync SharePoint content, then ingest on RAG.";
     case "web_url":
-      return "Web URLs (coming soon).";
+      return "Sync web URLs into the dataset cache, then ingest on RAG.";
     default:
       return "";
   }
 }
+
+const REMOTE_CONNECTORS = new Set(["api", "web_url", "sharepoint"]);
 
 function SaveNotice({ show, message = "Saved" }: { show: boolean; message?: string }) {
   if (!show) return null;
@@ -75,16 +104,45 @@ function useSaveFlash(saveCount: number, ms = 3000) {
 }
 
 /** Persist connection form to API before operations that read stored config. */
-async function persistConnection(datasetId: string, form: Record<string, string | number>) {
-  return api.updateDataset(datasetId, { config: form });
+async function persistConnection(
+  datasetId: string,
+  connector: string,
+  form: Record<string, string | number>,
+  existing: Record<string, unknown>,
+  dataset?: Dataset,
+) {
+  return api.updateDataset(datasetId, {
+    config: normalizeConnectionConfig(connector, form, existing as PgForm, dataset),
+  });
 }
 
-export function DatasetPanel({ dataset }: { dataset: Dataset }) {
-  const tabs = visibleTabs(dataset.connector);
-  const [tab, setTab] = useState<Tab>("definition");
+export function DatasetPanel({
+  dataset,
+  initialTab,
+}: {
+  dataset: Dataset;
+  initialTab?: Tab;
+}) {
+  const tabs = useMemo(() => visibleTabs(dataset.connector), [dataset.connector]);
+  const [tab, setTab] = useState<Tab>(() =>
+    initialTab && visibleTabs(dataset.connector).includes(initialTab) ? initialTab : "definition",
+  );
+  const initialTabApplied = useRef(false);
   const qc = useQueryClient();
   const [desc, setDesc] = useState(dataset.description || "");
   const [pgForm, setPgForm] = useState<PgForm>(() => ({ ...(dataset.config as PgForm) }));
+
+  useEffect(() => {
+    initialTabApplied.current = false;
+  }, [dataset.id]);
+
+  useEffect(() => {
+    if (!initialTab || initialTabApplied.current) return;
+    if (tabs.includes(initialTab)) {
+      setTab(initialTab);
+      initialTabApplied.current = true;
+    }
+  }, [dataset.id, initialTab, tabs]);
 
   useEffect(() => {
     setPgForm({ ...(dataset.config as PgForm) });
@@ -215,10 +273,10 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
           <button
             key={t}
             type="button"
-            className={`tab capitalize ${tab === t ? "tab-active" : ""}`}
+            className={`tab ${tab === "rag" ? "" : "capitalize"} ${tab === t ? "tab-active" : ""}`}
             onClick={() => setTab(t)}
           >
-            {t}
+            {tabLabel(t)}
           </button>
         ))}
       </div>
@@ -284,6 +342,7 @@ export function DatasetPanel({ dataset }: { dataset: Dataset }) {
 
       {tab === "connection" && <ConnectionTab dataset={dataset} pgForm={pgForm} setPgForm={setPgForm} />}
       {tab === "data" && <DataTab dataset={dataset} pgForm={pgForm} />}
+      {tab === "rag" && <DatasetRagTab dataset={dataset} />}
     </div>
   );
 }
@@ -297,114 +356,224 @@ function ConnectionTab({
   pgForm: PgForm;
   setPgForm: (f: PgForm) => void;
 }) {
-  const [form, setForm] = useState<PgForm>({ ...(dataset.config as PgForm) });
+  const connector = dataset.connector;
+  const existingConfig = (dataset.config ?? {}) as PgForm;
+  const [form, setForm] = useState<PgForm>(() => ({ ...existingConfig }));
   const qc = useQueryClient();
 
   useEffect(() => {
-    setForm({ ...(dataset.config as PgForm) });
-  }, [dataset.id, dataset.config]);
+    const cfg = { ...(dataset.config as PgForm) };
+    if (connector === "api" && Array.isArray(cfg.endpoints)) {
+      cfg.endpoints = cfg.endpoints.join(", ");
+    }
+    setForm(cfg);
+  }, [dataset.id, dataset.config, connector]);
 
   const [connSaveCount, setConnSaveCount] = useState(0);
 
+  const saveConfig = async () => {
+    const payload = normalizeConnectionConfig(
+      connector,
+      connector === "postgres" ? pgForm : form,
+      existingConfig,
+      dataset,
+    );
+    return api.updateDataset(dataset.id, { config: payload });
+  };
+
   const save = useMutation({
-    mutationFn: () => persistConnection(dataset.id, dataset.connector === "postgres" ? pgForm : form),
+    mutationFn: saveConfig,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["datasets"] });
+      qc.invalidateQueries({ queryKey: ["summary", dataset.id] });
       setConnSaveCount((n) => n + 1);
     },
   });
 
   const connectionSaved = useSaveFlash(connSaveCount);
 
+  const changeConnector = useMutation({
+    mutationFn: (next: string) => api.updateDataset(dataset.id, { connector: next }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["datasets"] });
+      qc.invalidateQueries({ queryKey: ["summary", dataset.id] });
+    },
+  });
+
   const test = useMutation({
     mutationFn: async () => {
-      const cfg = dataset.connector === "postgres" ? pgForm : form;
-      await persistConnection(dataset.id, cfg);
+      await saveConfig();
       return api.testConnection(dataset.id);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["datasets"] }),
   });
 
-  if (dataset.connector === "postgres") {
-    const connName = String(pgForm.connection_name ?? "");
-    return (
-      <div className="space-y-5">
-        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-          Database credentials for this dataset. Use the <strong>Data</strong> tab to discover and catalog tables.
-          {connName ? ` Linked from saved connection «${connName}».` : ""}
-        </p>
+  const connName = String(pgForm.connection_name ?? "");
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {(
-            [
-              ["host", "Host / endpoint"],
-              ["port", "Port"],
-              ["database", "Database"],
-              ["user", "Username"],
-              ["password", "Password"],
-              ["schema", "Schema"],
-            ] as const
-          ).map(([key, label]) => (
-            <div key={key} className="field mb-0">
-              <label className="label">{label}</label>
-              <input
-                className="input"
-                type={key === "password" ? "password" : key === "port" ? "number" : "text"}
-                value={String(pgForm[key] ?? "")}
-                onChange={(e) =>
-                  setPgForm({
-                    ...pgForm,
-                    [key]: key === "port" ? Number(e.target.value) : e.target.value,
-                  })
-                }
-              />
-            </div>
+  return (
+    <div className="max-w-3xl space-y-5">
+      <div className="field mb-0 max-w-md">
+        <label className="label">Connection type</label>
+        <select
+          className="select"
+          value={connector}
+          disabled={changeConnector.isPending}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (next !== connector && window.confirm(`Change connection type to ${CONNECTOR_LABELS[next] ?? next}?`)) {
+              changeConnector.mutate(next);
+            }
+          }}
+        >
+          {CONNECTOR_OPTIONS.map((c) => (
+            <option key={c} value={c}>
+              {CONNECTOR_LABELS[c]}
+            </option>
           ))}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn" onClick={() => save.mutate()} disabled={save.isPending}>
-            {save.isPending ? "Saving…" : "Save connection"}
-          </button>
-          <button type="button" className="btn btn-secondary" onClick={() => test.mutate()} disabled={test.isPending}>
-            {test.isPending ? "Testing…" : "Test connection"}
-          </button>
-          <SaveNotice show={connectionSaved} message="Connection saved" />
-        </div>
-        <ErrorNotice error={save.isError ? save.error : null} />
-        {test.data && <p className={test.data.ok ? "alert-ok" : "alert-error"}>{test.data.message}</p>}
-        <ErrorNotice error={test.isError ? test.error : null} />
+        </select>
+        <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+          {CONNECTOR_LABELS[connector] ?? connector} — {dataset.source_type}
+        </p>
       </div>
-    );
-  }
 
-  if (dataset.connector === "api" || dataset.connector === "sharepoint" || dataset.connector === "web_url") {
-    return (
-      <div className="max-w-lg space-y-4">
-        <p className="text-sm text-zinc-500">Endpoint — configure data in the Data tab.</p>
+      {connector === "postgres" && (
+        <>
+          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+            Database credentials. Use the <strong>Data</strong> tab to discover tables.
+            {connName ? ` Linked from «${connName}».` : ""}
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(
+              [
+                ["host", "Host / endpoint"],
+                ["port", "Port"],
+                ["database", "Database"],
+                ["user", "Username"],
+                ["password", "Password"],
+                ["schema", "Schema"],
+              ] as const
+            ).map(([key, label]) => (
+              <div key={key} className="field mb-0">
+                <label className="label">{label}</label>
+                <input
+                  className="input"
+                  type={key === "password" ? "password" : key === "port" ? "number" : "text"}
+                  value={String(pgForm[key] ?? "")}
+                  onChange={(e) =>
+                    setPgForm({
+                      ...pgForm,
+                      [key]: key === "port" ? Number(e.target.value) : e.target.value,
+                    })
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {connector === "upload" && (
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+          Files upload to <code className="text-xs">{String(existingConfig.path ?? "data/…")}</code>. Use the{" "}
+          <strong>Data</strong> tab to add files, then <strong>RAG</strong> to embed.
+        </p>
+      )}
+
+      {connector === "file_path" && (
         <div className="field mb-0">
-          <label className="label">{dataset.connector === "api" ? "Base URL" : "URL"}</label>
+          <label className="label">Folder path</label>
           <input
             className="input"
-            value={String(form.base_url ?? form.url ?? "")}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                ...(dataset.connector === "api" ? { base_url: e.target.value } : { url: e.target.value }),
-              })
-            }
+            placeholder="sample_docs or data/domain/dataset"
+            value={String(form.path ?? "")}
+            onChange={(e) => setForm({ ...form, path: e.target.value })}
           />
         </div>
+      )}
+
+      {(connector === "web_url" || connector === "sharepoint") && (
+        <>
+          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+            {connector === "sharepoint" ? "SharePoint or direct document URL." : "Public web page URL."} Sync on the{" "}
+            <strong>Data</strong> tab after saving.
+          </p>
+          <div className="field mb-0">
+            <label className="label">URL</label>
+            <input
+              className="input"
+              type="url"
+              placeholder="https://…"
+              value={String(form.url ?? "")}
+              onChange={(e) => setForm({ ...form, url: e.target.value })}
+            />
+          </div>
+          {connector === "sharepoint" && (
+            <div className="field mb-0">
+              <label className="label">Auth token (optional Bearer)</label>
+              <input
+                className="input"
+                type="password"
+                value={String(form.auth_token ?? "")}
+                onChange={(e) => setForm({ ...form, auth_token: e.target.value })}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      {connector === "api" && (
+        <>
+          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+            REST API source. Sync on the <strong>Data</strong> tab after saving.
+          </p>
+          <div className="field mb-0">
+            <label className="label">Base URL</label>
+            <input
+              className="input"
+              type="url"
+              placeholder="https://api.example.com"
+              value={String(form.base_url ?? "")}
+              onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+            />
+          </div>
+          <div className="field mb-0">
+            <label className="label">Endpoints (comma-separated paths)</label>
+            <input
+              className="input"
+              placeholder="/v1/products, /v1/pricing"
+              value={String(form.endpoints ?? "")}
+              onChange={(e) => setForm({ ...form, endpoints: e.target.value })}
+            />
+          </div>
+          <div className="field mb-0">
+            <label className="label">Auth token (optional Bearer)</label>
+            <input
+              className="input"
+              type="password"
+              value={String(form.auth_token ?? "")}
+              onChange={(e) => setForm({ ...form, auth_token: e.target.value })}
+            />
+          </div>
+        </>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn" onClick={() => save.mutate()} disabled={save.isPending}>
           {save.isPending ? "Saving…" : "Save connection"}
         </button>
+        {connector !== "upload" && (
+          <button type="button" className="btn btn-secondary" onClick={() => test.mutate()} disabled={test.isPending}>
+            {test.isPending ? "Testing…" : "Test connection"}
+          </button>
+        )}
         <SaveNotice show={connectionSaved} message="Connection saved" />
-        <ErrorNotice error={save.isError ? save.error : null} />
       </div>
-    );
-  }
-
-  return null;
+      <ErrorNotice error={save.isError ? save.error : null} />
+      {test.data && <p className={test.data.ok ? "alert-ok" : "alert-error"}>{test.data.message}</p>}
+      <ErrorNotice error={test.isError ? test.error : null} />
+      <ErrorNotice error={changeConnector.isError ? changeConnector.error : null} />
+    </div>
+  );
 }
 
 function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm }) {
@@ -415,7 +584,7 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
 
   const refresh = useMutation({
     mutationFn: async () => {
-      await persistConnection(dataset.id, pgForm);
+      await persistConnection(dataset.id, "postgres", pgForm, dataset.config ?? {}, dataset);
       return api.remoteTables(dataset.id);
     },
   });
@@ -428,7 +597,7 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
   const [selectedRemote, setSelectedRemote] = useState<string[]>([]);
   const addTables = useMutation({
     mutationFn: async () => {
-      await persistConnection(dataset.id, pgForm);
+      await persistConnection(dataset.id, "postgres", pgForm, dataset.config ?? {}, dataset);
       return api.addTables(dataset.id, selectedRemote);
     },
     onSuccess: async () => {
@@ -905,18 +1074,163 @@ function DataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm }) {
       {(dataset.connector === "upload" || dataset.connector === "file_path") && (
         <FileDataTab dataset={dataset} />
       )}
-      {(dataset.connector === "api" || dataset.connector === "sharepoint" || dataset.connector === "web_url") && (
-        <ConnectorDataPlaceholder connector={dataset.connector} />
-      )}
+      {REMOTE_CONNECTORS.has(dataset.connector) && <RemoteDataTab dataset={dataset} />}
     </div>
   );
 }
 
-function ConnectorDataPlaceholder({ connector }: { connector: string }) {
+function CachedFilesTable({
+  files,
+}: {
+  files: { name: string; size: number; ingested: boolean; chunks: number }[] | undefined;
+}) {
+  if (!files?.length) {
+    return (
+      <p className="catalog-themed-box--dashed py-10 text-sm" style={{ color: "var(--color-text-muted)" }}>
+        No cached files yet. Sync or upload content, then configure RAG on the RAG tab.
+      </p>
+    );
+  }
   return (
-    <div className="catalog-themed-box--dashed">
-      <p className="text-sm font-medium" style={{ color: "var(--color-text)" }}>{CONNECTOR_LABELS[connector] ?? connector} data sources</p>
-      <p className="mt-2 text-sm" style={{ color: "var(--color-text-muted)" }}>Not wired yet — set endpoint in Connection.</p>
+    <div className="table-wrap dataset-data-table">
+      <table className="data">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Status</th>
+            <th>Chunks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {files.map((f) => (
+            <tr key={f.name}>
+              <td>{f.name}</td>
+              <td>{f.ingested ? <span className="badge-ok badge">In DB</span> : <span className="badge-muted badge">Pending</span>}</td>
+              <td>{f.chunks}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function formatSyncError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg === "Not Found" || msg.includes("404")) {
+    return "Sync failed (404). Check the URL on the Connection tab, or restart the API server if you recently updated the app.";
+  }
+  return msg;
+}
+
+function RemoteDataTab({ dataset }: { dataset: Dataset }) {
+  const qc = useQueryClient();
+  const configuredUrl = String((dataset.config?.url as string | undefined) ?? (dataset.config?.base_url as string | undefined) ?? "");
+  const { data: assets } = useQuery({
+    queryKey: ["assets", dataset.id],
+    queryFn: () => api.listDatasetAssets(dataset.id),
+  });
+  const { data: files } = useQuery({
+    queryKey: ["files", dataset.id],
+    queryFn: () => api.listFiles(dataset.id),
+  });
+
+  const sync = useMutation({
+    mutationFn: () => api.syncDataset(dataset.id, { full: false }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["assets", dataset.id] });
+      qc.invalidateQueries({ queryKey: ["files", dataset.id] });
+      qc.invalidateQueries({ queryKey: ["summary", dataset.id] });
+      qc.invalidateQueries({ queryKey: ["dataset-rag", dataset.id] });
+      qc.invalidateQueries({ queryKey: ["datasets"] });
+    },
+  });
+
+  const lastSync = (dataset.config?.last_sync_at as string | undefined) ?? undefined;
+  const syncFailed =
+    sync.isSuccess &&
+    (sync.data?.errors?.length ?? 0) > 0 &&
+    !(sync.data?.assets_added.length || sync.data?.assets_updated.length);
+  const syncPartial =
+    sync.isSuccess &&
+    (sync.data?.errors?.length ?? 0) > 0 &&
+    ((sync.data?.assets_added.length ?? 0) > 0 || (sync.data?.assets_updated.length ?? 0) > 0);
+
+  return (
+    <div className="space-y-5">
+      {!configuredUrl.trim() && (
+        <p className="alert-error text-sm">
+          No URL configured — open the <strong>Connection</strong> tab, enter the web link, and save before syncing.
+        </p>
+      )}
+      <div className="catalog-themed-box">
+        <p className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+          Sync from {CONNECTOR_LABELS[dataset.connector] ?? dataset.connector}
+        </p>
+        <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+          Fetches remote content into the dataset cache. Use the <strong>RAG</strong> tab to embed cached files.
+          {configuredUrl.trim() ? (
+            <>
+              {" "}
+              Source: <span className="break-all">{configuredUrl}</span>
+            </>
+          ) : null}
+          {lastSync ? ` Last sync: ${new Date(lastSync).toLocaleString()}.` : ""}
+        </p>
+        <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+          Many sites (e.g. Amazon) block automated downloads. If sync fails, upload a PDF/export instead (Uploaded files format).
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={sync.isPending || !configuredUrl.trim()}
+            onClick={() => sync.mutate()}
+          >
+            {sync.isPending ? "Syncing…" : "Sync now"}
+          </button>
+          <SaveNotice
+            show={sync.isSuccess && !syncFailed && !syncPartial && !!(sync.data?.assets_added.length || sync.data?.assets_updated.length)}
+            message={`Synced ${(sync.data?.assets_added.length ?? 0) + (sync.data?.assets_updated.length ?? 0)} file(s)`}
+          />
+        </div>
+        {syncFailed && (
+          <p className="alert-error mt-2 text-sm">
+            {(sync.data?.errors ?? []).map((e) => e.error || `${e.asset_id}: failed`).join(" ")}
+          </p>
+        )}
+        {syncPartial && (
+          <p className="alert-error mt-2 text-sm">
+            Partial sync: {(sync.data?.errors ?? []).map((e) => e.error).join("; ")}
+          </p>
+        )}
+        <ErrorNotice error={sync.isError ? new Error(formatSyncError(sync.error)) : null} />
+      </div>
+
+      {!!assets?.assets.length && (
+        <div className="table-wrap dataset-data-table">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Kind</th>
+                <th>Cached</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assets.assets.map((asset) => (
+                <tr key={asset.id}>
+                  <td className="font-medium">{asset.name}</td>
+                  <td>{asset.kind}</td>
+                  <td>{asset.synced ? <span className="badge badge-ok">Yes</span> : <span className="badge badge-muted">No</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <CachedFilesTable files={files} />
     </div>
   );
 }
@@ -931,28 +1245,29 @@ function FileDataTab({ dataset }: { dataset: Dataset }) {
     queryFn: () => api.supportedFileTypes(),
   });
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pendingUploads, setPendingUploads] = useState<File[]>([]);
+  const [folderPath, setFolderPath] = useState(String((dataset.config?.path as string | undefined) ?? ""));
   const qc = useQueryClient();
+
+  useEffect(() => {
+    setFolderPath(String((dataset.config?.path as string | undefined) ?? ""));
+  }, [dataset.id, dataset.config]);
+
+  const savePath = useMutation({
+    mutationFn: () => api.updateDataset(dataset.id, { config: { ...dataset.config, path: folderPath } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["datasets"] });
+      qc.invalidateQueries({ queryKey: ["files", dataset.id] });
+    },
+  });
 
   const upload = useMutation({
     mutationFn: () => api.uploadFiles(dataset.id, pendingUploads),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["files", dataset.id] });
       qc.invalidateQueries({ queryKey: ["summary", dataset.id] });
+      qc.invalidateQueries({ queryKey: ["dataset-rag", dataset.id] });
       setPendingUploads([]);
-      if (res.saved.length) {
-        setSelected(new Set(res.saved));
-      }
-    },
-  });
-
-  const ingest = useMutation({
-    mutationFn: () => api.ingest(dataset.id, [...selected]),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["files", dataset.id] });
-      qc.invalidateQueries({ queryKey: ["summary", dataset.id] });
-      setSelected(new Set());
     },
   });
 
@@ -961,12 +1276,30 @@ function FileDataTab({ dataset }: { dataset: Dataset }) {
 
   return (
     <div className="space-y-5">
+      {dataset.connector === "file_path" && (
+        <div className="catalog-themed-box">
+          <div className="field mb-0">
+            <label className="label">Folder path</label>
+            <input
+              className="input"
+              value={folderPath}
+              onChange={(e) => setFolderPath(e.target.value)}
+              placeholder="sample_docs or data/domain/dataset"
+            />
+          </div>
+          <button type="button" className="btn btn-sm mt-3" disabled={savePath.isPending} onClick={() => savePath.mutate()}>
+            {savePath.isPending ? "Saving…" : "Save path"}
+          </button>
+          <ErrorNotice error={savePath.isError ? savePath.error : null} />
+        </div>
+      )}
+      {dataset.connector === "upload" && (
       <div className="rounded-xl border border-dashed p-4" style={{ borderColor: "var(--color-border)" }}>
         <p className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
           Upload files
         </p>
         <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-          Supported: {typeHint}. Word (.doc) is not supported yet — convert to PDF or text first.
+          Supported: {typeHint}. Use the <strong>RAG</strong> tab to choose files and run Ingest &amp; embed.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <label className="btn btn-secondary btn-sm file-upload-btn">
@@ -1005,52 +1338,9 @@ function FileDataTab({ dataset }: { dataset: Dataset }) {
         <SaveNotice show={upload.isSuccess && !!upload.data?.saved.length} message={`Uploaded ${upload.data?.saved.length} file(s)`} />
         <ErrorNotice error={upload.isError ? upload.error : null} />
       </div>
-
-      {!files?.length ? (
-        <p className="catalog-themed-box--dashed py-10 text-sm" style={{ color: "var(--color-text-muted)" }}>
-          No files yet. Upload documents above, then ingest them into the knowledge base.
-        </p>
-      ) : (
-        <>
-          <div className="table-wrap dataset-data-table">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th className="w-10" />
-                  <th>File</th>
-                  <th>Status</th>
-                  <th>Chunks</th>
-                </tr>
-              </thead>
-              <tbody>
-                {files.map((f) => (
-                  <tr key={f.name}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(f.name)}
-                        onChange={(e) => {
-                          const next = new Set(selected);
-                          if (e.target.checked) next.add(f.name);
-                          else next.delete(f.name);
-                          setSelected(next);
-                        }}
-                      />
-                    </td>
-                    <td>{f.name}</td>
-                    <td>{f.ingested ? <span className="badge-ok badge">In DB</span> : <span className="badge-muted badge">Pending</span>}</td>
-                    <td>{f.chunks}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <button type="button" className="btn mt-4" disabled={!selected.size || ingest.isPending} onClick={() => ingest.mutate()}>
-            {ingest.isPending ? "Ingesting…" : `Ingest selected (${selected.size})`}
-          </button>
-          <ErrorNotice error={ingest.isError ? ingest.error : null} />
-        </>
       )}
+
+      <CachedFilesTable files={files} />
     </div>
   );
 }

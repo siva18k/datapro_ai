@@ -31,6 +31,26 @@ export interface DatasetSummary {
   chunk_count?: number;
   base_url?: string;
   url?: string;
+  last_sync_at?: string;
+  asset_count?: number;
+}
+
+export interface DatasetAsset {
+  id: string;
+  name: string;
+  kind: string;
+  size_bytes?: number | null;
+  synced?: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export interface DatasetSyncResult {
+  assets_added: string[];
+  assets_updated: string[];
+  assets_removed: string[];
+  errors: { asset_id?: string; url?: string; error: string }[];
+  cache_path?: string | null;
+  connector?: string;
 }
 
 export type TableRole = "fact" | "lookup" | "excluded";
@@ -43,6 +63,27 @@ export interface TableMeta {
   definition: string;
   enabled: boolean;
   table_role?: TableRole;
+  rag_enabled?: boolean;
+  chunk_size?: number | null;
+  chunk_overlap?: number | null;
+  ingested?: boolean;
+  chunk_count?: number;
+}
+
+export interface FileRagRow {
+  file_name: string;
+  rag_enabled: boolean;
+  chunk_size?: number | null;
+  chunk_overlap?: number | null;
+  ingested?: boolean;
+  chunk_count?: number;
+}
+
+export interface DatasetRagSettings {
+  source: Dataset;
+  profile: RagProfile;
+  tables?: TableMeta[];
+  files?: FileRagRow[];
 }
 
 export interface ColumnMeta {

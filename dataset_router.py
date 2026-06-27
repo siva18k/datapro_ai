@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from dataset_connectors.registry import CONTENT_CONNECTORS
 
 from catalog_db import get_rag_profile, list_column_metadata, list_sources, list_table_metadata
 from catalog_definition import load_definition_for_prompt
-from db import search_chunks
 from query_fuzzy import (
     build_vocabulary,
     correct_query_spelling,
@@ -274,38 +273,28 @@ def pick_rag_dataset(
     allowed_domain_ids: list[str] | None = None,
 ) -> tuple[dict | None, float, str, list[dict]]:
     """
-    Vector-search within domain, then rank datasets by chunk hits + metadata.
-    Returns (source, confidence, method, chunks used for ranking).
+    Rank datasets in a domain using catalog metadata only (no content-chunk search).
+    Returns (source, confidence, method, empty chunk list).
     """
-    search_kwargs: dict[str, Any] = {"domain_id": domain_id}
-    if allowed_domain_ids and len(allowed_domain_ids) > 1:
-        search_kwargs = {"domain_ids": allowed_domain_ids}
-
-    chunks = search_chunks(
-        question,
-        embedder,
-        top_k=max(top_k * 5, 15),
-        query_vector=query_vector,
-        **search_kwargs,
-    )
+    del top_k, allowed_domain_ids  # kept for API compatibility
 
     source, confidence, method = pick_dataset_in_domain(
         question,
         domain_id,
         embedder,
         query_vector=query_vector,
-        chunks=chunks,
+        chunks=None,
     )
-    return source, confidence, method, chunks
+    return source, confidence, method, []
 
 
 def pick_file_dataset(question: str, domain_id: str, embedder=None, *, query_vector=None) -> dict | None:
-    """Best upload/file_path dataset in a domain."""
+    """Best content-backed unstructured dataset in a domain."""
     source, _confidence, _method = pick_dataset_in_domain(
         question,
         domain_id,
         embedder,
         query_vector=query_vector,
-        connectors=["upload", "file_path"],
+        connectors=list(CONTENT_CONNECTORS),
     )
     return source

@@ -29,15 +29,20 @@ Default domains are created by `migrate.py`. To add another: **Data Catalog** �
 - **Postgres** — live tables, analytics, structured Ask
 - **Upload** — PDF, markdown, text, JSON
 - **File path** — folder on disk (e.g. `sample_docs`)
+- **API** — REST endpoints synced into the dataset cache
+- **Web link** — URLs fetched into the dataset cache
+- **SharePoint** — document links synced with optional Bearer token
 
 For Postgres, pick an existing connection from **Settings → Dataset connections** or create one there.
+
+Remote connectors: **Connection** tab → set URL/auth → **Data** tab → **Sync now** → **RAG** tab → ingest.
 
 ---
 
 ## File-based datasets
 
 1. **Definition** tab — short markdown about what the data is (there's an AI draft button if you want a starting point).
-2. **Data** tab — upload files or point at a folder.
+2. **Data** tab — upload files, set a folder path, or sync API/web/SharePoint sources.
 3. **RAG** — select the dataset → **Ingest & embed all files**.
 
 ---

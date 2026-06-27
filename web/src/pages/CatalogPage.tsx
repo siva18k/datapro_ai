@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { CatalogDomainsPanel } from "../components/CatalogDomainsPanel";
-import { DbConnectionModal } from "../components/DbConnectionModal";
+import { AddDatasetForm } from "../components/AddDatasetForm";
 import { DatasetPanel } from "../components/DatasetPanel";
 import { EditableName } from "../components/EditableName";
 import { PageHeader } from "../components/PageHeader";
@@ -11,9 +11,6 @@ import { useApiPageState } from "../context/ApiConnectionContext";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
 import { CONNECTOR_LABELS, type Dataset } from "../types";
-
-const CONNECTORS = ["postgres", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
-const NEW_CONNECTION = "__new__";
 
 export function CatalogPage() {
   const qc = useQueryClient();
@@ -45,16 +42,7 @@ export function CatalogPage() {
     enabled: !!activeDomainId,
   });
 
-  const [newName, setNewName] = useState("");
-  const [newConnector, setNewConnector] = useState<string>("postgres");
-  const [selectedConnectionId, setSelectedConnectionId] = useState("");
-  const [showConnectionModal, setShowConnectionModal] = useState(false);
-
-  const { data: dbConnections } = useQuery({
-    queryKey: ["db-connections"],
-    queryFn: api.listDbConnections,
-    enabled: showAdd && newConnector === "postgres",
-  });
+  const [openInitialTab, setOpenInitialTab] = useState<"data" | "definition" | undefined>(undefined);
 
   const createDomain = useMutation({
     mutationFn: (name: string) => api.createDomain(name),
@@ -90,27 +78,12 @@ export function CatalogPage() {
     },
   });
 
-  const createDataset = useMutation({
-    mutationFn: async (name: string) => {
-      let config: Record<string, unknown> = {};
-      if (newConnector === "postgres") {
-        config = await api.getDbConnectionConfig(selectedConnectionId);
-      } else if (newConnector === "file_path") {
-        config = { path: "sample_docs" };
-      }
-      return api.createDataset(activeDomainId!, { name, connector: newConnector, config });
-    },
-    onSuccess: (d) => {
-      qc.invalidateQueries({ queryKey: ["datasets", activeDomainId] });
-      qc.invalidateQueries({ queryKey: ["stats"] });
-      setOpenDatasetId(d.id);
-      setShowAdd(false);
-      setNewName("");
-      setSelectedConnectionId("");
-    },
-  });
-
-  const postgresReady = newConnector !== "postgres" || !!selectedConnectionId;
+  const createDatasetHandled = (datasetId: string) => {
+    setOpenDatasetId(datasetId);
+    setOpenInitialTab("data");
+    setShowAdd(false);
+    window.setTimeout(() => setOpenInitialTab(undefined), 0);
+  };
 
   const selectDomain = (id: string) => {
     setDomainId(id);
@@ -261,92 +234,13 @@ export function CatalogPage() {
             <p className="alert-error mx-5 mt-3">{String(deleteDomain.error)}</p>
           )}
 
-          {showAdd && (
-            <div className="catalog-add-dataset-form">
-              <div className="add-dataset-row">
-                <div className="field mb-0">
-                  <label className="label">Dataset name</label>
-                  <input
-                    className="input add-dataset-input"
-                    placeholder="dataset"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                  />
-                </div>
-                <div className="field mb-0">
-                  <label className="label">Format</label>
-                  <select
-                    className="select add-dataset-select"
-                    value={newConnector}
-                    onChange={(e) => {
-                      setNewConnector(e.target.value);
-                      setSelectedConnectionId("");
-                    }}
-                  >
-                    {CONNECTORS.map((c) => (
-                      <option key={c} value={c}>
-                        {CONNECTOR_LABELS[c]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {newConnector === "postgres" && (
-                  <div className="field mb-0">
-                    <label className="label">Connection</label>
-                    <select
-                      className="select add-dataset-select add-dataset-select--wide"
-                      value={selectedConnectionId || (dbConnections?.length ? "" : NEW_CONNECTION)}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        if (value === NEW_CONNECTION) {
-                          setSelectedConnectionId("");
-                          setShowConnectionModal(true);
-                        } else {
-                          setSelectedConnectionId(value);
-                        }
-                      }}
-                    >
-                      {!!dbConnections?.length && (
-                        <option value="" disabled>
-                          Select connection…
-                        </option>
-                      )}
-                      <option value={NEW_CONNECTION}>
-                        {dbConnections?.length ? "+ New connection…" : "+ Set up connection…"}
-                      </option>
-                      {dbConnections?.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} ({c.host})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <div className="add-dataset-actions">
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={!newName.trim() || !postgresReady || createDataset.isPending}
-                    onClick={() => createDataset.mutate(newName.trim())}
-                  >
-                    {createDataset.isPending ? "Creating…" : "Create"}
-                  </button>
-                  <button type="button" className="btn-ghost" onClick={() => setShowAdd(false)}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
+          {showAdd && activeDomainId && (
+            <AddDatasetForm
+              domainId={activeDomainId}
+              onCreated={createDatasetHandled}
+              onCancel={() => setShowAdd(false)}
+            />
           )}
-
-          <DbConnectionModal
-            open={showConnectionModal}
-            onClose={() => setShowConnectionModal(false)}
-            onSaved={(conn) => {
-              qc.invalidateQueries({ queryKey: ["db-connections"] });
-              setSelectedConnectionId(conn.id);
-            }}
-          />
 
           <div className="catalog-domain-body">
             {datasetsLoading && <p className="px-5 py-4 text-sm text-zinc-500">Loading datasets…</p>}
@@ -367,7 +261,16 @@ export function CatalogPage() {
                     key={ds.id}
                     dataset={ds}
                     open={openDatasetId === ds.id}
-                    onToggle={() => setOpenDatasetId(openDatasetId === ds.id ? null : ds.id)}
+                    initialTab={openDatasetId === ds.id ? openInitialTab : undefined}
+                    onToggle={() => {
+                      if (openDatasetId === ds.id) {
+                        setOpenDatasetId(null);
+                        setOpenInitialTab(undefined);
+                      } else {
+                        setOpenDatasetId(ds.id);
+                        setOpenInitialTab(undefined);
+                      }
+                    }}
                     onRename={(name) => updateDatasetName.mutate({ id: ds.id, name })}
                     renaming={updateDatasetName.isPending && updateDatasetName.variables?.id === ds.id}
                     onDelete={() => {
@@ -397,6 +300,7 @@ export function CatalogPage() {
 function DatasetCard({
   dataset,
   open,
+  initialTab,
   onToggle,
   onRename,
   renaming,
@@ -405,6 +309,7 @@ function DatasetCard({
 }: {
   dataset: Dataset;
   open: boolean;
+  initialTab?: "data" | "definition";
   onToggle: () => void;
   onRename: (name: string) => void;
   renaming?: boolean;
@@ -467,7 +372,7 @@ function DatasetCard({
       </div>
       {open && (
         <div className="catalog-panel-divider">
-          <DatasetPanel dataset={dataset} />
+          <DatasetPanel dataset={dataset} initialTab={initialTab} />
         </div>
       )}
     </div>

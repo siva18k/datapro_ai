@@ -17,6 +17,7 @@ from api.answer_format import CHAT_RESPONSE_FORMAT
 from mcp_client import get_default_mcp_url
 from mcp_client import search_documents as mcp_search_documents
 from query_planner import resolve_query_plan
+from scope_resolver import chunk_source_files_for_scope
 
 
 def retrieve_for_question(
@@ -45,6 +46,9 @@ def retrieve_for_question(
         "query_kind": _legacy_query_kind(plan.execution_kind),
         "source_id": plan.source_id,
         "source_name": plan.source_name,
+        "table_names": plan.table_names,
+        "file_names": plan.file_names,
+        "column_hints": plan.column_hints,
     }
 
     if use_mcp:
@@ -60,11 +64,23 @@ def retrieve_for_question(
         meta["mcp_tool"] = "search_documents"
         return chunks, meta
 
+    scope_files = chunk_source_files_for_scope(
+        domain_id=domain_id,
+        source_id=plan.source_id,
+        table_names=plan.table_names,
+        file_names=plan.file_names,
+    )
+    search_kwargs: dict[str, Any] = {"domain_id": domain_id}
+    if plan.source_id:
+        search_kwargs["source_id"] = plan.source_id
+    if scope_files:
+        search_kwargs["source_files"] = scope_files
+
     chunks = search_chunks(
         question,
         embedder,
         top_k=top_k,
-        domain_id=domain_id,
+        **search_kwargs,
     )
 
     if not chunks and domain_id:
@@ -168,6 +184,42 @@ Context:
 {context}
 """
     return context, llm_prompt
+
+
+def build_attachment_answer_prompt(
+    user_question: str,
+    attachment_text: str,
+    *,
+    cite_sources: bool = False,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> str:
+    """Answer from an inline Ask attachment — attachment content only, no catalog."""
+    from conversation_context import format_conversation_block
+
+    history_block = format_conversation_block(conversation_history)
+    follow_up_line = (
+        "The latest user message may be a follow-up — use prior conversation only to interpret it, "
+        "but answer strictly from the attached document content below.\n"
+        if history_block
+        else ""
+    )
+    citation_line = (
+        "If you cite rows or sections from the attachment, refer to them clearly (e.g. row labels or headers).\n"
+        if cite_sources
+        else "Use only the attachment — do not invent tables, SQL, or data not shown in the file.\n"
+    )
+    return f"""You are an internal data assistant in a chat conversation.
+Answer ONLY from the attached document content below.
+Do not query databases, catalogs, or external knowledge — the user's file is the sole source of truth.
+If the answer is not supported by the attachment, say you cannot determine it from the provided file.
+{citation_line}{follow_up_line}{CHAT_RESPONSE_FORMAT}
+
+{history_block}User question:
+{user_question.strip() or "Summarize or analyze the attached document."}
+
+Attached document content:
+{attachment_text.strip()}
+"""
 
 
 def get_domain_source_ids(domain_id: str) -> list[str]:

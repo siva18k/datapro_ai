@@ -5,15 +5,31 @@
     "path": "/mcp",
     "transport": "streamable-http",
     "stateless": true,
-    "instructions": "DATA Pro knowledge base (Postgres/pgvector). Use tools for search/ingest, resources for documents and metadata, prompts for grounded answers. Answer only from retrieved context."
+    "instructions": "DATA Pro multi-domain knowledge base (Postgres/pgvector). Domains include HR, Finance, Sales, and General. Discovery: list_domains → list_domain_sources(domain) for catalog datasets; list_sources for ingested document files only. Retrieval: search_documents with optional domain filter. Answer only from retrieved context."
   },
   "tools": {
+    "list_domains": {
+      "description": "List enabled business domains (HR, Finance, Sales, etc.). Use before list_domain_sources when the domain is unknown.",
+      "enabled": true
+    },
+    "list_domain_sources": {
+      "description": "List catalog datasets (connectors) registered under a business domain. Arg: domain (slug, display name, or UUID). NOT the same as list_sources (which lists ingested document files).",
+      "enabled": true
+    },
+    "get_rag_profile": {
+      "description": "Return RAG profile settings and instructions for a catalog dataset. Args: source_id (UUID or dataset slug), optional domain when using slug.",
+      "enabled": true
+    },
+    "sync_dataset": {
+      "description": "Sync a catalog dataset from its connector into the local cache (API endpoints, web URLs, SharePoint links, or rescan upload folders). Args: source_id, optional domain when using slug, optional full=true to replace cache.",
+      "enabled": true
+    },
     "search_documents": {
-      "description": "Semantic search over ingested document chunks. Returns ranked chunks with citations.",
+      "description": "Semantic search over ingested document chunks. Args: query, optional top_k (1–20), optional domain filter (slug, name, or UUID).",
       "enabled": true
     },
     "list_sources": {
-      "description": "List ingested source files with chunk counts and last-ingested timestamps.",
+      "description": "List ingested document files in the vector knowledge base with chunk counts. NOT catalog datasets — use list_domain_sources for those.",
       "enabled": true
     },
     "get_chunk": {
@@ -31,9 +47,31 @@
     "ingest_documents": {
       "description": "Ingest documents from sample_docs (or docs_path) into the knowledge base.",
       "enabled": true
+    },
+    "resolve_time_period": {
+      "description": "Resolve calendar or fiscal quarters, months, and year boundaries from natural language (e.g. 'Q1 2024', 'last year quarterly', 'FY2025'). Returns period start/end dates and SQL filter templates — replace <date_column> with a catalog date column.",
+      "enabled": true
     }
   },
   "resources": {
+    "ragpro://domains": {
+      "name": "domains",
+      "description": "All enabled business domains in the catalog.",
+      "mime_type": "application/json",
+      "enabled": true
+    },
+    "ragpro://domains/{domain}/sources": {
+      "name": "domain_sources",
+      "description": "Catalog datasets under a domain (same shape as list_domain_sources tool). URI param: domain slug, name, or UUID.",
+      "mime_type": "application/json",
+      "enabled": true
+    },
+    "ragpro://domains/{domain}/stats": {
+      "name": "domain_stats",
+      "description": "Chunk counts per source within a domain.",
+      "mime_type": "application/json",
+      "enabled": true
+    },
     "ragpro://knowledge-base/stats": {
       "name": "knowledge_base_stats",
       "description": "Knowledge base totals, source count, and embedding model.",
@@ -79,6 +117,11 @@
     "summarize_document": {
       "description": "Build a prompt to summarize one ingested source file from the knowledge base.",
       "template": "Summarize the following ingested document.\nUse only the text below. Cite chunk ids where helpful.\n\nDocument: {source_file}\n\n{body}",
+      "enabled": true
+    },
+    "domain_grounded_answer": {
+      "description": "Retrieve domain-scoped chunks and build a grounded answer prompt.",
+      "template": "{citation_rules}\n\nBusiness domain: {domain_name}\n\nUser question:\n{question}\n\nContext:\n{context}",
       "enabled": true
     }
   }

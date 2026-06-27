@@ -1,5 +1,10 @@
 import type { McpServerRecord } from "../api/client";
 
+/** Substitute `{domain}` (and other `{param}` placeholders) in MCP resource URI templates. */
+export function expandMcpResourceUri(uri: string, params: Record<string, string>): string {
+  return uri.replace(/\{(\w+)\}/g, (_, key: string) => params[key]?.trim() ?? `{${key}}`);
+}
+
 /** Theme-aware card tint by server type. */
 export function mcpServerCardClass(server: McpServerRecord): string {
   const variant =
@@ -30,7 +35,8 @@ export function mcpServerSetupNotes(server: McpServerRecord): string | null {
   switch (server.slug) {
     case "datapro":
       return (
-        "Runs search_documents, list_domains, ragpro:// resources, and grounded-answer prompts. " +
+        "Runs list_domains, list_domain_sources, search_documents, resolve_time_period, " +
+        "ragpro:// resources, and grounded-answer prompts. " +
         "Restart after editing global prompts in the registry."
       );
     case "email_smtp":

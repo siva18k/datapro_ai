@@ -11,6 +11,7 @@ from catalog_service import ensure_catalog_ready, normalize_domain_overrides
 from db import chunk_verify_sql, search_chunks
 from mcp_domain_service import retrieve_chunks_for_scope
 from hybrid_prompt import merge_generation_supplements, prioritize_chunks
+from catalog_rag_service import filter_chunks_to_rag_selection
 from mcp_ask_planner import (
     execute_mcp_enrichment,
     format_mcp_context_supplement,
@@ -18,8 +19,9 @@ from mcp_ask_planner import (
     plan_mcp_enrichment,
     resolve_domain_slug,
 )
-from orchestrator import build_domain_rag_prompt, strip_source_citations, _legacy_query_kind
-from query_planner import find_best_rag_domain, resolve_query_plan, structured_fallback_available
+from orchestrator import build_attachment_answer_prompt, build_domain_rag_prompt, strip_source_citations, _legacy_query_kind
+from query_planner import resolve_query_plan, structured_fallback_available
+from scope_resolver import chunk_source_files_for_scope
 from structured_orchestrator import (
     generate_and_execute_readonly_sql,
     load_table_business_rules_for_domain,
@@ -34,7 +36,15 @@ from api.ask_models import (
     PipelineTraceStep,
     SourceChunk,
 )
-from conversation_context import contextual_question_with_history, retrieval_query_with_history, truncate_history
+from conversation_context import (
+    ATTACHED_DOCS_MARKER,
+    contextual_question_with_history,
+    has_attached_documents,
+    retrieval_query_with_history,
+    select_relevant_attachment_content,
+    split_attached_documents,
+    truncate_history,
+)
 from conversation_session import prepare_session_context
 from temporal_context import format_query_results_with_time_context
 
@@ -177,6 +187,17 @@ def _scoped_search_kwargs(meta: dict[str, Any]) -> dict[str, Any]:
         rag_source = meta.get("source_id")
     if rag_source:
         out["source_id"] = rag_source
+
+    table_names = meta.get("table_names") or routing.get("table_names")
+    file_names = meta.get("file_names") or routing.get("file_names")
+    source_files = chunk_source_files_for_scope(
+        domain_id=out.get("domain_id"),
+        source_id=out.get("source_id"),
+        table_names=table_names,
+        file_names=file_names,
+    )
+    if source_files:
+        out["source_files"] = source_files
     return out
 
 
@@ -193,34 +214,114 @@ def _vector_search_chunks(
 ) -> list[dict]:
     search_query = _retrieval_query(body, _meta_history(meta))
     scope_kwargs = _scoped_search_kwargs(meta)
+    routing = meta.get("routing") or {}
+    table_names = meta.get("table_names") or routing.get("table_names")
+    file_names = meta.get("file_names") or routing.get("file_names")
     if _scope_locked(meta):
-        return search_chunks(
+        chunks = search_chunks(
             search_query,
             embedder,
             top_k=body.top_k,
             **scope_kwargs,
+        )
+        return filter_chunks_to_rag_selection(
+            chunks,
+            source_id=scope_kwargs.get("source_id"),
+            table_names=table_names,
+            file_names=file_names,
         )
 
     chunks = search_chunks(
         search_query,
         embedder,
         top_k=body.top_k,
-        domain_id=domain_id,
+        **scope_kwargs,
     )
-    if not chunks:
-        best_domain, chunks = find_best_rag_domain(
-            search_query, embedder, top_k=body.top_k, prefer_domain_id=domain_id
-        )
-        if best_domain and best_domain["id"] != domain_id:
-            meta["domain_id"] = best_domain["id"]
-            meta["domain_name"] = best_domain["name"]
-            meta["routing"] = {
-                **(meta.get("routing") or {}),
-                "domain_id": best_domain["id"],
-                "domain_name": best_domain["name"],
-                "domain_slug": best_domain.get("slug"),
-            }
+    chunks = filter_chunks_to_rag_selection(
+        chunks,
+        source_id=scope_kwargs.get("source_id"),
+        table_names=table_names,
+        file_names=file_names,
+    )
+    if not chunks and not _scope_locked(meta):
+        chunks = search_chunks(search_query, embedder, top_k=body.top_k)
     return chunks
+
+
+def _attachment_only_events(
+    body: AskRequest,
+    llm: tuple[str, str, str],
+) -> Iterator[dict[str, Any]]:
+    """Attachment-only path: read upload, extract relevant lines, answer via LLM."""
+    llm_backend, llm_model, llm_base_url = llm
+    user_question, attachment_raw = split_attached_documents(body.question)
+    history = _conversation_history(body)
+    chat_history = [
+        {"role": t["role"], "content": t["content"]}
+        for t in history
+        if t.get("content") and ATTACHED_DOCS_MARKER not in t.get("content", "")
+    ]
+
+    yield _status("Reading attached document…")
+    relevant = select_relevant_attachment_content(
+        user_question or body.question,
+        attachment_raw or "",
+    )
+    yield from _maybe_trace(
+        body,
+        "Attachment loaded",
+        "input",
+        attachment_chars=len(relevant),
+        user_question=user_question,
+    )
+
+    yield _status("Generating answer from attachment…")
+    prompt = build_attachment_answer_prompt(
+        user_question,
+        relevant,
+        cite_sources=body.debug,
+        conversation_history=chat_history or None,
+    )
+    yield from _maybe_trace(
+        body,
+        "Generating answer from attachment…",
+        "llm",
+        llm_prompt=_truncate_debug_text(prompt) if body.debug else None,
+    )
+    answer = generate_answer(
+        prompt,
+        model=llm_model,
+        backend=llm_backend,
+        base_url=llm_base_url,
+    )
+    if not body.debug:
+        answer = strip_source_citations(answer)
+
+    meta: dict[str, Any] = {
+        "usage": {"rag": False, "mcp": False},
+        "execution_kind": "attachment",
+        "query_kind": "attachment",
+        "conversation_history": history,
+    }
+    yield from _maybe_trace(
+        body,
+        "Answer generated from attachment",
+        "output",
+        execution_kind="attachment",
+        query_kind="attachment",
+    )
+    yield _result(
+        _response_from_meta(
+            meta,
+            answer=answer,
+            question=body.question,
+            domain_name=None,
+            routing_method="attachment",
+            routing_confidence=None,
+            query_kind="attachment",
+            sources=[],
+        )
+    )
 
 
 def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
@@ -242,6 +343,12 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         domain_override=body.domain_override,
         domain_overrides=selected_domains or None,
     )
+
+    if has_attached_documents(body.question):
+        llm = (llm_backend, llm_model, llm_base_url)
+        yield from _attachment_only_events(body, llm)
+        return
+
     history = _conversation_history(body)
     session = prepare_session_context(
         body.question,
@@ -345,6 +452,9 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         "source_name": plan.source_name,
         "rag_source_id": plan.rag_source_id,
         "rag_source_name": plan.rag_source_name,
+        "table_names": plan.table_names,
+        "file_names": plan.file_names,
+        "column_hints": plan.column_hints,
         "usage": {"rag": False, "mcp": False},
         "conversation_history": history,
         "session_reset": session.session_reset,
@@ -410,6 +520,7 @@ def _mcp_enrichment_events(
         domain_id=domain_id,
         domain_slug=domain_slug,
         top_k=body.top_k,
+        execution_kind=execution_kind,
     )
     meta["mcp_enrichment"] = enrichment
 
@@ -468,6 +579,8 @@ def _structured_events(
         domain_override=body.domain_override,
         routing=routing,
         domain_id=meta.get("domain_id"),
+        source_id=meta.get("source_id"),
+        table_names=meta.get("table_names"),
         force_structured=True,
     )
     if not plan:
@@ -812,12 +925,27 @@ def _rag_search_events(
         )
         if not chunks and scope_kwargs.get("source_id"):
             yield _status("No chunks in selected dataset — searching full domain…")
-            domain_only = {k: v for k, v in scope_kwargs.items() if k != "source_id"}
+            domain_only = {
+                k: v
+                for k, v in scope_kwargs.items()
+                if k not in ("source_id", "source_files")
+            }
             chunks = search_chunks(
                 search_query,
                 embedder,
                 top_k=body.top_k,
                 **domain_only,
+            )
+        if not chunks and scope_kwargs.get("source_files"):
+            yield _status("No chunks in narrowed tables/files — searching full dataset…")
+            widened = {
+                k: v for k, v in scope_kwargs.items() if k != "source_files"
+            }
+            chunks = search_chunks(
+                search_query,
+                embedder,
+                top_k=body.top_k,
+                **widened,
             )
         if not chunks and not _scope_locked(meta):
             if domain_id_before:
@@ -831,6 +959,15 @@ def _rag_search_events(
                 yield _status(f"Found relevant documents in {domain_name} domain.")
         yield from _mark_rag(usage)
         retrieval = "vector"
+
+    if chunks:
+        routing = meta.get("routing") or {}
+        chunks = filter_chunks_to_rag_selection(
+            chunks,
+            source_id=scope_kwargs.get("source_id"),
+            table_names=meta.get("table_names") or routing.get("table_names"),
+            file_names=meta.get("file_names") or routing.get("file_names"),
+        )
 
     if chunks:
         found_msg = f"Found {len(chunks)} relevant chunk(s)."
@@ -941,12 +1078,11 @@ def _rag_events(
     gen_msg = "Generating answer from document context…"
     yield _status(gen_msg)
     domain_name = meta.get("domain_name") or domain_name
-    domain_slug = routing.get("domain_slug")
     history = _meta_history(meta)
     chat_history = [{"role": t["role"], "content": t["content"]} for t in history if t.get("content")]
+
     mcp_extra = format_mcp_context_supplement(mcp_enrichment)
     table_rules = load_table_business_rules_for_domain(meta.get("domain_id"))
-
     _, prompt = build_domain_rag_prompt(
         body.question,
         chunks,

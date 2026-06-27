@@ -20,7 +20,6 @@ import {
   IconCollapse,
   IconExpand,
   IconMcp,
-  IconRag,
 } from "./SidebarNavIcons";
 import type { ComponentType, SVGProps } from "react";
 
@@ -37,7 +36,6 @@ const mainNav: NavItemConfig[] = [
 ];
 
 const bottomNav: NavItemConfig[] = [
-  { to: "/rag", label: "RAG", Icon: IconRag },
   { to: "/mcp", label: "MCP", Icon: IconMcp },
   { to: "/agents", label: "Agents", Icon: IconAgents },
   { to: "/agent-flows", label: "Agent Flows", Icon: IconAgentFlows },

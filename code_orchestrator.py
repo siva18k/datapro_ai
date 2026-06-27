@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from dataset_connectors.registry import CONTENT_CONNECTORS
 from catalog_db import get_source, list_sources
 from catalog_definition import load_definition_for_prompt, prepare_definition_for_llm
 from catalog_service import get_source_data_path, list_source_files
@@ -162,7 +163,7 @@ def classify_execution_kind(
     file_sources = [
         s
         for s in list_sources(domain_id=domain_id, source_type="unstructured", enabled_only=True)
-        if s.get("connector") in ("upload", "file_path")
+        if s.get("connector") in CONTENT_CONNECTORS
     ]
 
     wants_analytics = bool(_ANALYTICAL_PATTERNS.search(question))

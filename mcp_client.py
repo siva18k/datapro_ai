@@ -1,4 +1,4 @@
-"""Thin HTTP client for calling DATA Pro MCP retrieval tools from Streamlit."""
+"""Thin HTTP client for calling DATA Pro MCP tools from the API and web app."""
 
 from __future__ import annotations
 

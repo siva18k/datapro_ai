@@ -84,7 +84,8 @@ Startup runs `bootstrap()` — catalog init and embedding model load (`all-MiniL
 | `db.py` | `knowledge_chunks`, pgvector search |
 | `ingest_service.py` | Chunk PDFs/text, embed, upsert |
 | `domain_router.py` | Keyword/embedding routing |
-| `orchestrator.py` | Route → classify execution kind → search chunks |
+| `scope_resolver.py` | Metadata-only narrow-down: tables, files, columns |
+| `orchestrator.py` | Route → classify execution kind → scoped chunk search |
 | `structured_orchestrator.py` | Read-only SQL via LLM |
 | `code_orchestrator.py` | pandas scripts for CSV/large files |
 | `mcp_server.py` | MCP tools/resources over same stack |
@@ -136,9 +137,9 @@ erDiagram
     }
 ```
 
-Connectors on `data_sources`: `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`.
+Connectors on `data_sources`: `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`. Each connector implements the same adapter surface in `dataset_connectors/` (`test_connection`, `list_assets`, `sync`, `build_schema_context`). Remote connectors (API, web link, SharePoint) fetch into the dataset cache folder, then share the upload RAG ingest path.
 
-Files from upload/path connectors become chunks in `knowledge_chunks`. Postgres connectors introspect live DBs; `table_metadata` / `column_metadata` feed SQL generation.
+Files from upload/path/remote connectors become chunks in `knowledge_chunks`. Postgres connectors introspect live DBs; `table_metadata` / `column_metadata` feed SQL generation.
 
 Migrations in `migrations/`; schema name defaults to `ragpro` (`DB_SCHEMA`). Connection setup for new clones: [catalog-database.md](catalog-database.md).
 
@@ -177,11 +178,11 @@ sequenceDiagram
     W-->>U: Chat bubble + expandable sources
 ```
 
-`domain_override` skips routing. Otherwise `query_planner` / `domain_router` pick domain and execution path (`sql`, `rag`, `hybrid`).
+`domain_override` skips routing. Otherwise `query_planner` / `domain_router` pick domain and execution path (`sql`, `rag`, `hybrid`). After domain and dataset selection, **`scope_resolver.py`** narrows to relevant **tables**, **files**, and **column hints** using catalog metadata only (no content-chunk search during routing). Chunk vector search runs after scope is set, optionally filtered by `source_file` paths derived from the narrowed tables/files.
 
 **Follow-up context (Ask and Analytics):** The UI sends recent turns plus the prior structured result (SQL, columns, rows) in `conversation_history`. Before each request, `conversation_session.py` either (a) detects a **new topic** via LLM and clears context, (b) after **N follow-ups** (Settings → `ASK_CONVERSATION_TURNS`, default 5) **summarizes** the session and starts a fresh chat, or (c) keeps context for a true follow-up. `structured_follow_up.py` then decides transform vs refined SQL.
 
-**Domain MCP bindings** (Catalog → domain → MCP servers) let Ask call bound **tools** (e.g. `search_documents`, `list_domain_sources`), read **resources** (domain/source URIs), and render **prompts** (e.g. `domain_grounded_answer`). `mcp_ask_planner.py` uses a small LLM call to choose which capabilities help for each question, with a heuristic fallback when the planner is unavailable.
+**Domain MCP bindings** attach reference **resources** (`schema`, `calendar`, `glossary`), **tools**, and **prompts**. Ask/Analytics auto-load reference resources into the LLM supplement; Agents may also render `domain_sql_context` / `domain_grounded_answer` prompts.
 
 ## Execution kinds
 
@@ -212,7 +213,7 @@ flowchart LR
     DOM[domains.id] --> U
 ```
 
-Re-ingest from the RAG page or `POST /api/rag/sources/{id}/reingest`.
+Re-ingest from a dataset **RAG** tab (`POST /api/datasets/{id}/rag/ingest`) or the MCP `ingest_documents` tool.
 
 ## Running it today vs production
 
@@ -230,4 +231,6 @@ SQL path is read-only by design; dataset credentials sit in catalog config (encr
 - New domain: UI or `POST /api/domains`
 - Routing tweaks: `domain_router.py` or richer domain descriptions
 - Agents: MCP tools or plain `/api/ask`
+- Configurable agents (`agent_runner.py`, `agent_mcp_runner.py`): at run time invoke agent-bound MCP tools plus domain-bound tools/resources/prompts; SQL KPI/report still uses `run_analytics_events` (which also loads domain MCP for SQL)
+- **Per-table / per-file RAG** (Catalog → dataset → **RAG** tab): `table_metadata.rag_enabled`, per-row chunk settings, `source_file_rag` for documents; ingest via `POST /api/datasets/{id}/rag/ingest`
 - Domain MCP: bind tools/resources/prompts per domain in Catalog → MCP; Ask uses `mcp_ask_planner` automatically

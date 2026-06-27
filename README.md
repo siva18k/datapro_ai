@@ -46,9 +46,32 @@ Prefer running things locally without Docker? Same doc covers local setup.
 
 **RAG** — chunk settings and embedding ingest.
 
-**MCP** — same knowledge base, but callable from Cursor / Claude Desktop.
+**MCP** — same knowledge base, but callable from Cursor / Claude Desktop. Per-domain **tools**, **resources**, and **prompts** follow the [Model Context Protocol](https://modelcontextprotocol.io/) (tools = actions, resources = read-only context, prompts = templates). See [MCP](docs/mcp.md) for client setup and the full catalog.
 
 If RAG or MCP are new to you, [docs/concepts.md](docs/concepts.md) explains both in a few minutes.
+
+### MCP: where things live & how hard it is to extend
+
+| What | Where | Restart MCP? |
+|------|--------|--------------|
+| Tool / resource **code** | `mcp_server.py` (`@mcp.tool`, `@mcp.resource`) | Yes |
+| Names, descriptions, enable/disable | `mcp_registry.py` + `mcp_registry.json` | Yes (prompts); metadata picked up on restart |
+| Domain calendar / glossary / sql-notes **content** | DB (`domain_reference_docs`) or `PUT /api/domains/{id}/references/…` | No |
+| Schema resource | Generated from **Data Catalog** (datasets, tables, columns) | No |
+| Which capabilities each domain uses | **MCP** page → Domain bindings (or `mcp_bindings` in DB) | No |
+| Per-domain **local prompts** | `domain_prompts` table + MCP UI | No |
+
+**Are we aligned with industry standard?** Mostly yes. DATA Pro uses MCP’s three primitives correctly: **resources** for read-only context (schema, calendar, glossary), **tools** for side-effecting or computed actions (`search_documents`, `resolve_time_period`), and **prompts** as reusable templates. Reference resources are attached by the **host app** (Ask/Analytics) when bound — that matches how production MCP hosts are meant to control context, rather than letting the model pull everything ad hoc. Optional inventory URIs load only when the planner asks for them. Gaps vs a “pure” MCP server: some reference previews are served from the API/catalog directly (so they work even before MCP restart), and domain bindings are an app-layer pattern on top of MCP (common for multi-tenant products).
+
+**Is it difficult to add a tool or resource?** Usually **no** for this codebase:
+
+- **Easy (no Python):** change domain reference markdown, bind/unbind capabilities in the UI, add **local** prompts, edit global prompt text in `mcp_registry.json`.
+- **Moderate (~30–60 min):** add a new built-in **tool** or **resource** — one entry in `mcp_registry.py`, one handler in `mcp_server.py`, restart MCP, bind on the MCP page. Follow existing patterns (`list_domain_sources`, `ragpro://domains/{domain}/calendar`).
+- **More work:** wire a new tool into the Ask **planner** so it is invoked automatically, or add a **reference** resource that Ask auto-attaches (also update `mcp_reference_service.py` and `DEFAULT_MCP_BINDINGS` in `catalog_db.py`).
+
+External MCP servers (e.g. `email_mcp_server.py`) register on the MCP page and bind like the built-in server — no changes to `mcp_server.py` required.
+
+**→ Full guide:** [docs/mcp.md](docs/mcp.md) — tools, resources, prompts, env vars, and step-by-step extension.
 
 ## Docs
 
@@ -80,7 +103,9 @@ web/              React UI
 docs/             Documentation
 migrations/       SQL schema
 scripts/          migrate.py, dev.sh
-mcp_server.py     MCP server
+mcp_server.py     MCP server (tools, resources, prompts)
+mcp_registry.py   MCP metadata defaults; mcp_registry.json overrides
+mcp_reference_service.py  Domain reference resource content (schema, calendar, …)
 docker-compose.yml
 deploy.example/   AWS ECS deploy templates (copy to gitignored deploy/)
 sample_docs/      Example files

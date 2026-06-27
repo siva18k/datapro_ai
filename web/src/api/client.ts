@@ -14,6 +14,7 @@ import type {
   Dataset,
   DatasetSummary,
   Domain,
+  FileRagRow,
   RagProfile,
   TableMeta,
 } from "../types";
@@ -81,6 +82,37 @@ export const api = {
   deleteDomain: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/domains/${id}`, { method: "DELETE" }),
 
+  listDomainPrompts: (domainId: string) =>
+    request<DomainPrompt[]>(`/domains/${domainId}/prompts`),
+  createDomainPrompt: (
+    domainId: string,
+    data: {
+      slug: string;
+      name: string;
+      description?: string;
+      template?: string;
+      enabled?: boolean;
+      bind?: boolean;
+    },
+  ) =>
+    request<DomainPrompt>(`/domains/${domainId}/prompts`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateDomainPrompt: (
+    domainId: string,
+    promptId: string,
+    data: Partial<Pick<DomainPrompt, "slug" | "name" | "description" | "template" | "enabled">>,
+  ) =>
+    request<DomainPrompt>(`/domains/${domainId}/prompts/${promptId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deleteDomainPrompt: (domainId: string, promptId: string) =>
+    request<{ deleted: boolean; id: string }>(`/domains/${domainId}/prompts/${promptId}`, {
+      method: "DELETE",
+    }),
+
   listDatasets: (domainId: string) => request<Dataset[]>(`/domains/${domainId}/datasets?enabled_only=false`),
   createDataset: (domainId: string, data: { name: string; description?: string; connector: string; config?: object }) =>
     request<Dataset>(`/domains/${domainId}/datasets`, {
@@ -93,11 +125,49 @@ export const api = {
   deleteDataset: (id: string) =>
     request<{ deleted: boolean; chunks_removed: number; name: string }>(`/datasets/${id}`, { method: "DELETE" }),
   datasetSummary: (id: string) => request<DatasetSummary>(`/datasets/${id}/summary`),
+  listDatasetAssets: (id: string) =>
+    request<{ assets: DatasetAsset[]; connector: string }>(`/datasets/${id}/assets`),
+  syncDataset: (id: string, data?: { asset_ids?: string[]; full?: boolean }) =>
+    request<DatasetSyncResult>(`/datasets/${id}/sync`, {
+      method: "POST",
+      body: JSON.stringify(data ?? {}),
+    }),
 
   testConnection: (id: string) =>
     request<{ ok: boolean; message: string }>(`/datasets/${id}/test-connection`, { method: "POST" }),
   remoteTables: (id: string) => request<{ tables: string[] }>(`/datasets/${id}/remote-tables`),
   catalogTables: (id: string) => request<TableMeta[]>(`/datasets/${id}/tables`),
+  getDatasetRag: (id: string) => request<import("../types").DatasetRagSettings>(`/datasets/${id}/rag`),
+  saveDatasetRagSettings: (
+    id: string,
+    data: {
+      profile?: { chunk_size?: number; chunk_overlap?: number; instructions?: string };
+      tables?: Array<{
+        id: string;
+        rag_enabled?: boolean;
+        chunk_size?: number | null;
+        chunk_overlap?: number | null;
+      }>;
+      files?: Array<{
+        file_name: string;
+        rag_enabled?: boolean;
+        chunk_size?: number | null;
+        chunk_overlap?: number | null;
+      }>;
+    },
+  ) =>
+    request<{ profile: RagProfile; tables?: TableMeta[]; files?: FileRagRow[]; chunks_removed?: number }>(
+      `/datasets/${id}/rag/settings`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+  ingestDatasetRag: (
+    id: string,
+    data?: { table_ids?: string[]; file_names?: string[] },
+  ) =>
+    request<{ catalog_chunks?: number; total_chunks?: number; skipped?: boolean; message?: string }>(
+      `/datasets/${id}/rag/ingest`,
+      { method: "POST", body: JSON.stringify(data ?? {}) },
+    ),
   addTables: (id: string, table_names: string[]) =>
     request<TableMeta[]>(`/datasets/${id}/tables`, {
       method: "POST",
@@ -105,7 +175,13 @@ export const api = {
     }),
   updateTable: (
     id: string,
-    data: { definition?: string; table_role?: string },
+    data: {
+      definition?: string;
+      table_role?: string;
+      rag_enabled?: boolean;
+      chunk_size?: number | null;
+      chunk_overlap?: number | null;
+    },
   ) => request(`/tables/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteTable: (id: string) => request(`/tables/${id}`, { method: "DELETE" }),
   syncColumns: (tableId: string) => request<SyncColumnsResult>(`/tables/${tableId}/sync-columns`, { method: "POST" }),
@@ -302,10 +378,6 @@ export const api = {
     return result;
   },
 
-  getRag: (sourceId: string) => request<{ source: Dataset; profile: RagProfile }>(`/rag/sources/${sourceId}`),
-  updateRag: (sourceId: string, data: Partial<RagProfile>) =>
-    request<RagProfile>(`/rag/sources/${sourceId}`, { method: "PATCH", body: JSON.stringify(data) }),
-  reingest: (sourceId: string) => request(`/rag/sources/${sourceId}/reingest`, { method: "POST" }),
   askExport: (data: {
     format: string;
     question: string;
@@ -316,14 +388,6 @@ export const api = {
     rows?: unknown[][];
   }) =>
     request<AskExportResponse>("/ask/export", { method: "POST", body: JSON.stringify(data) }),
-
-  indexCatalog: (sourceId: string) =>
-    request<{
-      catalog_chunks: number;
-      metadata_tables: number;
-      lookup_tables: number;
-      removed_chunks: number;
-    }>(`/rag/sources/${sourceId}/index-catalog`, { method: "POST" }),
 
   listAgents: () => request<Agent[]>("/agents"),
   getAgent: (id: string) => request<Agent>(`/agents/${id}`),
@@ -521,11 +585,22 @@ export const api = {
       { method: "PUT", body: JSON.stringify(data) },
     ),
 
-  previewMcpPrompt: (name: string, arguments_?: Record<string, string>) =>
-    request<{ preview: string }>(`/mcp/prompts/${encodeURIComponent(name)}/preview`, {
+  previewMcpPrompt: (
+    name: string,
+    options?: { arguments?: Record<string, string>; domainId?: string },
+  ) =>
+    request<McpPromptPreviewResponse>(`/mcp/prompts/${encodeURIComponent(name)}/preview`, {
       method: "POST",
-      body: JSON.stringify({ arguments: arguments_ ?? {} }),
+      body: JSON.stringify({
+        arguments: options?.arguments ?? {},
+        domain_id: options?.domainId ?? null,
+      }),
     }),
+
+  mcpPromptMeta: (name: string, domainId?: string) => {
+    const q = domainId ? `?domain_id=${encodeURIComponent(domainId)}` : "";
+    return request<McpPromptMetaResponse>(`/mcp/prompts/${encodeURIComponent(name)}/meta${q}`);
+  },
 
   mcpToolDetail: (name: string) =>
     request<McpToolDetailResponse>(`/mcp/tools/${encodeURIComponent(name)}`),
@@ -533,10 +608,14 @@ export const api = {
   mcpResourceMeta: (uri: string) =>
     request<McpResourceMetaResponse>(`/mcp/resources/meta?uri=${encodeURIComponent(uri)}`),
 
-  previewMcpResource: (uri: string, params?: Record<string, string>) =>
+  previewMcpResource: (
+    uri: string,
+    params?: Record<string, string>,
+    domainId?: string,
+  ) =>
     request<McpResourcePreviewResponse>("/mcp/resources/preview", {
       method: "POST",
-      body: JSON.stringify({ uri, params: params ?? {} }),
+      body: JSON.stringify({ uri, params: params ?? {}, domain_id: domainId ?? null }),
     }),
 
   mcpBindings: (domainId: string) =>
@@ -716,6 +795,7 @@ export interface McpActionResponse extends McpStatusResponse {
 export interface McpBindingItem {
   id?: string;
   name: string;
+  capability_name?: string;
   enabled: boolean;
   description?: string;
   uri?: string;
@@ -724,6 +804,21 @@ export interface McpBindingItem {
   server_slug?: string;
   server_url?: string;
   server_kind?: string;
+  prompt_kind?: "global" | "local";
+  local_slug?: string;
+  local_prompt_id?: string;
+}
+
+export interface DomainPrompt {
+  id: string;
+  domain_id?: string;
+  slug: string;
+  name: string;
+  description: string;
+  template: string;
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface McpBoundCapability extends McpBindingItem {
@@ -838,6 +933,23 @@ export interface McpResourcePreviewResponse {
   content: string;
   truncated: boolean;
   mime_type?: string;
+}
+
+export interface McpPromptMetaResponse {
+  name: string;
+  description: string;
+  parameters: string[];
+  domain_context: boolean;
+  domain_filled_parameters: string[];
+  enabled: boolean;
+  prompt_kind?: "global" | "local";
+  local_slug?: string;
+  local_prompt_id?: string;
+}
+
+export interface McpPromptPreviewResponse {
+  preview: string;
+  arguments: Record<string, string>;
 }
 
 export interface BackendStatusResponse {
