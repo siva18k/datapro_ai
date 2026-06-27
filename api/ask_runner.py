@@ -876,23 +876,28 @@ def _rag_events(
         elif event["type"] == "_chunks":
             chunks = event["chunks"]
 
-    if not chunks:
-        fallback = structured_fallback_available(
-            body.question,
-            embedder,
-            allowed_domain_ids=routing.get("domain_ids") if _scope_locked(meta) else None,
-        )
-        if fallback and not _scope_locked(meta):
+    fallback = structured_fallback_available(
+        body.question,
+        embedder,
+        allowed_domain_ids=routing.get("domain_ids") if _scope_locked(meta) else None,
+    )
+    if fallback and not _scope_locked(meta) and (
+        not chunks or meta.get("execution_kind") == "rag"
+    ):
+        if chunks:
+            yield _status("Running database query for your data request…")
+        else:
             for note in fallback.notes:
                 yield _status(note)
-            meta["domain_id"] = fallback.domain_id
-            meta["domain_name"] = fallback.domain_name
-            meta["execution_kind"] = "sql"
-            meta["query_kind"] = "structured"
-            meta["routing"] = fallback.routing
-            yield from _structured_events(body, embedder, meta, llm)
-            return
+        meta["domain_id"] = fallback.domain_id
+        meta["domain_name"] = fallback.domain_name
+        meta["execution_kind"] = "sql"
+        meta["query_kind"] = "structured"
+        meta["routing"] = fallback.routing
+        yield from _structured_events(body, embedder, meta, llm)
+        return
 
+    if not chunks:
         from catalog_db import list_sources
 
         structured = (
@@ -907,7 +912,7 @@ def _rag_events(
                     meta,
                     answer=(
                         "I could not find embedded catalog metadata for this question. "
-                        "Try rephrasing as an analytical question (counts, totals, lists) to run SQL, "
+                        "Ask for the data you need (for example, give me or show me …) to run a database query, "
                         "or open **RAG** → select the dataset → **Ingest & embed catalog**."
                     ),
                     domain_name=domain_name,

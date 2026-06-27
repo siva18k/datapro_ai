@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Connect, Plugin } from "vite";
@@ -26,6 +27,46 @@ async function isApiReachable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function isPortInUse(port: number, host = API_HOST): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ port, host });
+    socket.setTimeout(800);
+    socket.on("connect", () => {
+      socket.end();
+      resolve(true);
+    });
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.on("error", () => resolve(false));
+  });
+}
+
+async function waitForApiReachable(maxMs: number): Promise<boolean> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (await isApiReachable()) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+function alreadyRunningPayload(managed: boolean): BootstrapAction {
+  return {
+    ok: true,
+    message: `API server already running at http://${API_HOST}:${API_PORT}`,
+    reachable: true,
+    url: `http://${API_HOST}:${API_PORT}`,
+    port: API_PORT,
+    managed,
+  };
 }
 
 function resolvePython(projectRoot: string): string {
@@ -101,18 +142,30 @@ export function apiServerPlugin(): Plugin {
 
   const startApi = async (): Promise<BootstrapAction> => {
     if (await isApiReachable()) {
-      return {
-        ok: false,
-        message: `API server already running at http://${API_HOST}:${API_PORT}`,
-        reachable: true,
-        url: `http://${API_HOST}:${API_PORT}`,
-        port: API_PORT,
-        managed: managed && proc != null && !proc.killed,
-      };
+      return alreadyRunningPayload(managed && proc != null && !proc.killed);
     }
 
     if (proc && !proc.killed) {
+      if (await waitForApiReachable(10_000)) {
+        return alreadyRunningPayload(true);
+      }
       return statusPayload();
+    }
+
+    if (await isPortInUse(API_PORT)) {
+      if (await waitForApiReachable(10_000)) {
+        return alreadyRunningPayload(false);
+      }
+      return {
+        ok: false,
+        message:
+          `Port ${API_PORT} is in use but /api/health did not respond. ` +
+          "Stop the process on that port, then try Start API server again.",
+        reachable: false,
+        url: `http://${API_HOST}:${API_PORT}`,
+        port: API_PORT,
+        managed: false,
+      };
     }
 
     const python = resolvePython(projectRoot);
@@ -164,26 +217,27 @@ export function apiServerPlugin(): Plugin {
         };
       }
       if (child.exitCode != null) {
-        if (await isApiReachable()) {
-          return {
-            ok: true,
-            message: `API server reachable at http://${API_HOST}:${API_PORT}`,
-            reachable: true,
-            url: `http://${API_HOST}:${API_PORT}`,
-            port: API_PORT,
-            managed: false,
-          };
+        if (await waitForApiReachable(5_000)) {
+          return alreadyRunningPayload(false);
         }
+        const hint =
+          child.exitCode === 1
+            ? " This often means port 8080 is already in use — try Retry connection."
+            : "";
         return {
           ok: false,
-          message: `API server exited early (code ${child.exitCode}). Check ${logPath}`,
+          message: `API server exited early (code ${child.exitCode}). Check ${logPath}.${hint}`,
           reachable: false,
           url: `http://${API_HOST}:${API_PORT}`,
           port: API_PORT,
           managed: false,
         };
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await sleep(250);
+    }
+
+    if (await waitForApiReachable(2_000)) {
+      return alreadyRunningPayload(true);
     }
 
     return {

@@ -37,10 +37,32 @@ from structured_db import postgres_config_from_source
 
 RetrievalMode = Literal["unstructured", "structured", "hybrid"]
 
-_ANALYTICAL_PATTERNS = re.compile(
-    r"\b(how many|count|total|sum|average|avg|min|max|list|show me|top \d+|"
-    r"employees|revenue|sales|headcount|tenure|between|per month|per year|"
-    r"group by|breakdown|trend)\b",
+# User wants executed data (SQL), not catalog tour / query tips.
+_DATA_REQUEST_PATTERNS = re.compile(
+    r"\b("
+    r"give me|get me|show me|let me see|can you show|can you give|can you get|can you list|"
+    r"pull up|pull|fetch|display|return|find me|list|report on|"
+    r"how many|count|total|sum|average|avg|min|max|top \d+|"
+    r"breakdown|break down|trend|compare|distribution|"
+    r"between|per month|per year|group by"
+    r")\b",
+    re.I,
+)
+
+# Backward-compatible alias used by code_orchestrator.
+_ANALYTICAL_PATTERNS = _DATA_REQUEST_PATTERNS
+
+# User wants recommendations / how-to / schema help — not row results.
+_GUIDANCE_PATTERNS = re.compile(
+    r"\b("
+    r"how (?:do I|to|can I|should I) (?:query|find|get|use|write|run|build|access)|"
+    r"what (?:tables?|fields?|columns?|schema) (?:should|can|do|are|exist|available)|"
+    r"which (?:table|field|column|dataset)|"
+    r"recommend(?:ation)?s?|suggest(?:ion)?s? how|guide me (?:on|how)|"
+    r"help me (?:query|find|understand how|write)|"
+    r"data dictionary|schema overview|"
+    r"explain (?:the )?(?:schema|data model|table structure|how (?:to|I can) query)"
+    r")\b",
     re.I,
 )
 
@@ -222,21 +244,22 @@ def _tokenize_domain(domain: dict) -> set[str]:
 
 
 def should_use_structured_sql(question: str, domain_id: str | None) -> bool:
-    """Route to SQL when analytics or catalog table names match the question."""
+    """Route to SQL when the user wants data rows, not query/schema guidance."""
     if not domain_id:
         return False
     structured = list_sources(domain_id=domain_id, source_type="structured", enabled_only=True)
-    if not structured:
+    postgres = [s for s in structured if s.get("connector") == "postgres"]
+    if not postgres:
         return False
-    if _ANALYTICAL_PATTERNS.search(question):
+    if _GUIDANCE_PATTERNS.search(question):
+        return False
+    if _DATA_REQUEST_PATTERNS.search(question):
         return True
     if question_references_catalog_tables(question, domain_id):
         return True
     if _DESCRIPTIVE_STRUCTURED_PATTERNS.search(question):
         q_tokens = {t for t in re.findall(r"[a-z0-9]+", question.lower()) if len(t) > 2}
-        for source in structured:
-            if source.get("connector") != "postgres":
-                continue
+        for source in postgres:
             for table in list_table_metadata(source["id"]):
                 for part in table["table_name"].lower().split("_"):
                     if len(part) > 2 and part in q_tokens:
