@@ -7,16 +7,38 @@ const OPTIONS: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
 ];
 
-function ThemeIcon() {
+const COLLAPSED_ICON_SIZE = 18;
+
+function ThemeIcon({
+  size = 20,
+  strokeWidth = 2,
+}: {
+  size?: number;
+  strokeWidth?: number;
+}) {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      aria-hidden
+    >
       <circle cx="12" cy="12" r="4" />
       <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
     </svg>
   );
 }
 
-export function ThemeSettings({ placement = "below" }: { placement?: "above" | "below" }) {
+export function ThemeSettings({
+  placement = "below",
+  compact = false,
+}: {
+  placement?: "above" | "below";
+  compact?: boolean;
+}) {
   const { theme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -41,15 +63,23 @@ export function ThemeSettings({ placement = "below" }: { placement?: "above" | "
     <div className="theme-settings" ref={rootRef}>
       <button
         type="button"
-        className="icon-btn"
+        className={`icon-btn${compact ? " sidebar-footer-icon-btn" : ""}`}
         aria-label="Theme"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <ThemeIcon />
+        <ThemeIcon
+          size={compact ? COLLAPSED_ICON_SIZE : 20}
+          strokeWidth={compact ? 2.25 : 2}
+        />
       </button>
       {open && (
-        <div className={`theme-menu ${placement === "above" ? "theme-menu--above" : ""}`} role="menu">
+        <div
+          className={`theme-menu${
+            compact ? " theme-menu--sidebar" : placement === "above" ? " theme-menu--above" : ""
+          }`}
+          role="menu"
+        >
           <p className="theme-menu-title">Theme</p>
           {OPTIONS.map((opt) => (
             <button

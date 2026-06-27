@@ -28,6 +28,7 @@ from catalog_db import (
     list_sources,
     list_table_metadata,
 )
+from sql_sanitize import has_multiple_sql_statements, normalize_llm_sql
 from catalog_definition import load_definition_for_prompt, prepare_definition_for_llm
 from dataset_router import pick_structured_dataset as _pick_structured_dataset
 from domain_router import route_question
@@ -581,7 +582,7 @@ def validate_readonly_sql(sql: str) -> None:
             continue
         if re.search(rf"\b{token}\b", normalized):
             raise ValueError(f"Forbidden SQL keyword: {token}")
-    if ";" in sql.strip().rstrip(";"):
+    if has_multiple_sql_statements(sql):
         raise ValueError("Multiple statements are not allowed")
 
 
@@ -731,6 +732,27 @@ def _is_recoverable_sql_error(message: str) -> bool:
     )
 
 
+def _revalidate_sql_after_repair(
+    sql: str,
+    schema_context: "StructuredSchemaContext",
+    *,
+    repair_label: str,
+) -> str:
+    """Run validation after repair_sql; raise if still invalid."""
+    sql = normalize_llm_sql(sql)
+    recheck = validate_generated_sql(sql, schema_context)
+    if not recheck.valid:
+        raise ValueError(
+            f"SQL still invalid after {repair_label}: {'; '.join(recheck.violations)}"
+        )
+    if recheck.phantom_tables:
+        raise ValueError(
+            f"SQL still references tables not in the catalog after {repair_label}: "
+            + ", ".join(f"`{t}`" for t in recheck.phantom_tables)
+        )
+    return sql
+
+
 def generate_and_execute_readonly_sql(
     question: str,
     source_id: str,
@@ -794,37 +816,36 @@ def generate_and_execute_readonly_sql(
     )
     errors: list[str] = []
 
-    sql = generate_sql(
-        active_question,
-        schema_context,
-        model=model,
-        backend=backend,
-        base_url=base_url,
-        gap_instructions=gap_instructions,
-        rag_supplement=rag_supplement,
-        conversation_history=chat_history,
-        prior_result=prior,
+    sql = normalize_llm_sql(
+        generate_sql(
+            active_question,
+            schema_context,
+            model=model,
+            backend=backend,
+            base_url=base_url,
+            gap_instructions=gap_instructions,
+            rag_supplement=rag_supplement,
+            conversation_history=chat_history,
+            prior_result=prior,
+        )
     )
 
     # ── Explicit pre-execution validation gate ──────────────────────────────
-    # Catch catalog violations (phantom tables/columns) before the DB round-trip.
-    # Repair immediately rather than spending a DB error on something we already know is wrong.
+    # Catch syntax/catalog violations before the DB round-trip; repair before executing.
     validation = validate_generated_sql(sql, schema_context)
-    if not validation.valid:
-        # Hard violation (e.g. non-SELECT) — treat as immediate error.
-        raise ValueError(
-            f"SQL validation failed: {'; '.join(validation.violations)}"
-        )
-    if validation.is_catalog_violation:
-        phantom_note = (
-            "SQL referenced tables not in the catalog — repaired before execution."
-        )
-        if phantom_note not in notes:
-            notes.append(phantom_note)
-        violation_text = (
-            "Validation error — tables not in catalog: "
-            + ", ".join(f"`{t}`" for t in validation.phantom_tables)
-        )
+    if not validation.valid or validation.is_catalog_violation:
+        if not validation.valid:
+            violation_text = f"SQL validation failed: {'; '.join(validation.violations)}"
+        else:
+            phantom_note = (
+                "SQL referenced tables not in the catalog — repaired before execution."
+            )
+            if phantom_note not in notes:
+                notes.append(phantom_note)
+            violation_text = (
+                "Validation error — tables not in catalog: "
+                + ", ".join(f"`{t}`" for t in validation.phantom_tables)
+            )
         errors.append(violation_text)
         sql = repair_sql(
             active_question,
@@ -839,17 +860,7 @@ def generate_and_execute_readonly_sql(
             conversation_history=chat_history,
             prior_result=prior,
         )
-        # Re-validate the repaired SQL
-        recheck = validate_generated_sql(sql, schema_context)
-        if not recheck.valid:
-            raise ValueError(
-                f"SQL still invalid after repair: {'; '.join(recheck.violations)}"
-            )
-        if recheck.phantom_tables:
-            raise ValueError(
-                "SQL still references tables not in the catalog after repair: "
-                + ", ".join(f"`{t}`" for t in recheck.phantom_tables)
-            )
+        sql = _revalidate_sql_after_repair(sql, schema_context, repair_label="repair")
     # ────────────────────────────────────────────────────────────────────────
 
     last_exc: Exception | None = None
@@ -866,32 +877,36 @@ def generate_and_execute_readonly_sql(
                 notes.append(err_note)
             if attempt >= max_attempts - 1 or not _is_recoverable_sql_error(err_text):
                 break
-            sql = repair_sql(
-                active_question,
-                schema_context,
-                sql,
-                err_text,
-                model=model,
-                backend=backend,
-                base_url=base_url,
-                gap_instructions=gap_instructions,
-                rag_supplement=rag_supplement,
-                conversation_history=chat_history,
-                prior_result=prior,
+            sql = normalize_llm_sql(
+                repair_sql(
+                    active_question,
+                    schema_context,
+                    sql,
+                    err_text,
+                    model=model,
+                    backend=backend,
+                    base_url=base_url,
+                    gap_instructions=gap_instructions,
+                    rag_supplement=rag_supplement,
+                    conversation_history=chat_history,
+                    prior_result=prior,
+                )
             )
 
     partial_note = "Showing a partial answer — some requested data was not available in the catalog."
     try:
-        sql = generate_partial_sql(
-            active_question,
-            schema_context,
-            failed_sql=sql,
-            error_messages=errors,
-            gap_instructions=gap_instructions,
-            rag_supplement=rag_supplement,
-            model=model,
-            backend=backend,
-            base_url=base_url,
+        sql = normalize_llm_sql(
+            generate_partial_sql(
+                active_question,
+                schema_context,
+                failed_sql=sql,
+                error_messages=errors,
+                gap_instructions=gap_instructions,
+                rag_supplement=rag_supplement,
+                model=model,
+                backend=backend,
+                base_url=base_url,
+            )
         )
         columns, rows = execute_readonly_sql(source_id, sql)
         if partial_note not in notes:

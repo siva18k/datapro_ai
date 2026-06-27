@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
-
 import requests
 
 from llm_providers import API_KEY_ENV, DEFAULT_MODELS
 from settings_service import get_api_key, get_llm_settings
+from sql_sanitize import normalize_llm_sql
 
 
 def resolve_llm_runtime(
@@ -27,24 +26,13 @@ def resolve_llm_runtime(
 
 
 def _strip_sql_response(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-    # Models sometimes prepend prose or labels before the query.
-    match = re.search(r"\b(with|select)\b", text, re.I)
-    if match:
-        text = text[match.start() :]
-    return text.strip().rstrip(";")
+    return normalize_llm_sql(text)
 
 
 _SQL_GENERATION_RULES = """
 Rules:
 - Return ONLY the SQL (no markdown, no explanation).
+- Return exactly ONE read-only SELECT (WITH ... SELECT is allowed) — never multiple statements separated by semicolons.
 - Read the Dataset definition section first — it documents scope, join paths, hub/bridge tables, and caveats.
 - Read **Table business rules** — apply status filters, revenue definitions, exclusions, and metric logic exactly as written per table.
 - Use Column reference for exact column names and types — match natural-language time phrases to date columns via names and labels.
@@ -120,7 +108,7 @@ def repair_sql(
     conversation_history: list[dict[str, str]] | None = None,
     prior_result=None,
 ) -> str:
-    """Rewrite SQL after a PostgreSQL execution error."""
+    """Rewrite SQL after a validation or PostgreSQL execution error."""
     rag_block = f"\n{rag_supplement.strip()}\n" if rag_supplement.strip() else ""
     context_block = _sql_context_block(
         conversation_history=conversation_history,
@@ -137,11 +125,12 @@ def repair_sql(
 Failed SQL:
 {failed_sql}
 
-Database error:
+Error:
 {error_message}
 
 Rules:
 - Return ONLY the corrected SELECT (no markdown, no explanation).
+- Return exactly ONE read-only SELECT — no semicolon-separated batches, no DDL, no prose after the query.
 - Read the Dataset definition for correct join paths — use bridge/hub tables as documented.
 - Read **Table business rules** — preserve status filters and metric exclusions from the catalog.
 - Remove or replace missing tables/columns — skip dimensions that caused the error.
@@ -184,6 +173,7 @@ Errors:
 {errors}
 
 Write ONE simpler read-only SELECT that answers what you CAN from the catalog only.
+- Return exactly ONE SELECT — no semicolon-separated batches.
 - Read the Dataset definition for join paths and caveats before simplifying.
 - Read **Table business rules** — keep documented status filters and revenue rules when simplifying.
 - Skip any dimension that is missing or caused errors (department, unknown tables, etc.).

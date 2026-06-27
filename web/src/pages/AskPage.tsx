@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AskAgentFlowRunResult } from "../components/AskAgentFlowRunResult";
 import { AskAgentRunResult } from "../components/AskAgentRunResult";
+import { AgentRunResearchView } from "../components/AgentRunResearchView";
 import { AskOutputChips } from "../components/AskOutputChips";
 import { AskPipelineSteps } from "../components/AskPipelineSteps";
 import { ChatAssistantMessage } from "../components/ChatAssistantMessage";
@@ -19,6 +20,11 @@ import {
   savePipelineTraceSession,
 } from "../utils/pipelineTraceSession";
 import { buildAskConversationHistory, sessionResetTurns } from "../utils/askConversation";
+import {
+  applyAgentRunStreamEvent,
+  createLiveRunState,
+  type LiveAgentRunState,
+} from "../utils/agentRunStream";
 
 interface Message {
   role: "user" | "assistant";
@@ -78,6 +84,7 @@ export function AskPage() {
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   const messagesRef = useRef<HTMLDivElement>(null);
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
+  const [liveRun, setLiveRun] = useState<LiveAgentRunState | null>(null);
   const [pipelineTrace, setPipelineTrace] = useState<PipelineTraceStep[]>([]);
   const pipelineTraceRef = useRef<PipelineTraceStep[]>([]);
 
@@ -181,9 +188,7 @@ export function AskPage() {
       await api.agentRunStream(
         agent.id,
         (event) => {
-          if (event.type === "status" && event.message) {
-            setActivityStatus(event.message);
-          }
+          setLiveRun((prev) => (prev ? applyAgentRunStreamEvent(prev, event) : prev));
           if (event.type === "step" && event.step_id) {
             const step: AgentRunStep = {
               step_id: event.step_id,
@@ -204,7 +209,13 @@ export function AskPage() {
 
       return { agentName: agent.name, steps: [...steps], reportHtml };
     },
-    onSettled: () => setActivityStatus(null),
+    onMutate: ({ agent }) => {
+      setLiveRun(createLiveRunState(agent.name, "agent"));
+    },
+    onSettled: () => {
+      setLiveRun(null);
+      setActivityStatus(null);
+    },
     onSuccess: (result) => {
       setMessages((prev) => [
         ...prev,
@@ -225,9 +236,7 @@ export function AskPage() {
       await api.agentFlowRunStream(
         flow.id,
         (event) => {
-          if (event.type === "status" && event.message) {
-            setActivityStatus(event.message);
-          }
+          setLiveRun((prev) => (prev ? applyAgentRunStreamEvent(prev, event) : prev));
           if (event.type === "step" && event.step_id) {
             const step: AgentRunStep = {
               step_id: event.step_id,
@@ -251,7 +260,13 @@ export function AskPage() {
 
       return { flowName: flow.name, steps: [...steps], reportHtml };
     },
-    onSettled: () => setActivityStatus(null),
+    onMutate: ({ flow }) => {
+      setLiveRun(createLiveRunState(flow.name, "flow"));
+    },
+    onSettled: () => {
+      setLiveRun(null);
+      setActivityStatus(null);
+    },
     onSuccess: (result) => {
       setMessages((prev) => [
         ...prev,
@@ -276,7 +291,7 @@ export function AskPage() {
   useEffect(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, isPending]);
+  }, [messages, isPending, liveRun]);
 
   const submitQuestion = () => {
     if (isPending) return;
@@ -488,17 +503,28 @@ export function AskPage() {
             </div>
           );
           })}
-        </div>
 
-        {isPending && (
-          <div className="ask-status shrink-0">
-            <div className="ask-composer-stack">
-              <p className="ask-composer-status" role="status" aria-live="polite">
+          {liveRun && (
+            <div className="flex justify-start ask-live-run">
+              <AgentRunResearchView
+                entityLabel={liveRun.entityLabel}
+                entityKind={liveRun.entityKind}
+                steps={liveRun.steps}
+                reportHtml={liveRun.reportHtml}
+                isRunning
+                statusMessage={liveRun.statusMessage}
+              />
+            </div>
+          )}
+
+          {isPending && !liveRun && (
+            <div className="flex justify-start ask-live-run">
+              <p className="ask-composer-status ask-inline-status" role="status" aria-live="polite">
                 {activityStatus ?? "Starting…"}
               </p>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="ask-composer shrink-0">
           <AskPromptComposer
