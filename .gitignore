@@ -30,6 +30,9 @@ chroma_store/
 .api_server.log
 .trino_service.managed
 .trino_service.log
+local_libs/
+.venv/
+.vscode/
 
 # Frontend build
 web/node_modules/

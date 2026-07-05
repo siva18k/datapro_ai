@@ -48,6 +48,7 @@ class DbConnectionCreate(DbConnectionBody):
 
 class DbConnectionUpdate(BaseModel):
     name: str | None = None
+    connector: str | None = None
     warehouse_type: str | None = None
     catalog: str | None = None
     schema: str | None = None
@@ -96,15 +97,19 @@ def trino_settings():
 def test_trino_coordinator(body: TrinoSettingsBody | None = None):
     base = get_trino_settings()
     if body:
-        if body.host.strip():
+        provided = set(getattr(body, "model_fields_set", set()))
+        if "host" in provided and body.host.strip():
             base["host"] = body.host.strip()
-        base["port"] = int(body.port)
-        if body.user.strip():
+        if "port" in provided:
+            base["port"] = int(body.port)
+        if "user" in provided and body.user.strip():
             base["user"] = body.user.strip()
-        if body.password:
+        if "password" in provided and body.password:
             base["password"] = body.password
-        base["http_scheme"] = (body.http_scheme or "http").strip().lower()
-        base["verify_ssl"] = bool(body.verify_ssl)
+        if "http_scheme" in provided:
+            base["http_scheme"] = (body.http_scheme or "http").strip().lower()
+        if "verify_ssl" in provided:
+            base["verify_ssl"] = bool(body.verify_ssl)
     ok, message = ping_trino_server(base)
     if not ok:
         raise HTTPException(400, message)

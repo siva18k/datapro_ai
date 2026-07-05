@@ -8,6 +8,7 @@ import type { Connect, Plugin } from "vite";
 const API_HOST = "127.0.0.1";
 const API_PORT = 8080;
 const BOOTSTRAP_PREFIX = "/__datapro/dev";
+const STARTUP_GRACE_MS = 25_000;
 
 type BootstrapAction = {
   ok: boolean;
@@ -146,14 +147,14 @@ export function apiServerPlugin(): Plugin {
     }
 
     if (proc && !proc.killed) {
-      if (await waitForApiReachable(10_000)) {
+      if (await waitForApiReachable(STARTUP_GRACE_MS)) {
         return alreadyRunningPayload(true);
       }
       return statusPayload();
     }
 
     if (await isPortInUse(API_PORT)) {
-      if (await waitForApiReachable(10_000)) {
+      if (await waitForApiReachable(STARTUP_GRACE_MS)) {
         return alreadyRunningPayload(false);
       }
       return {
@@ -204,7 +205,7 @@ export function apiServerPlugin(): Plugin {
       }
     });
 
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       if (await isApiReachable()) {
         console.log(`[datapro] API started from web at http://${API_HOST}:${API_PORT}`);
         return {

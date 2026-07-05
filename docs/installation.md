@@ -1,10 +1,10 @@
 # Installation
 
-You need either Docker Desktop (easiest) or Python 3.11+ and Node 20+ for local dev. Either way you need an LLM — Mistral API key by default, or Ollama running on your machine.
+You need either Podman with Compose support (easiest) or Python 3.11+ and Node 20+ for local dev. Either way you need an LLM — Mistral API key by default, or Ollama running on your machine.
 
-**Catalog database:** one PostgreSQL instance holds all catalog metadata and RAG vectors. Docker bundles Postgres for local dev; otherwise point `.env` at your own database. Full guide: **[catalog-database.md](catalog-database.md)**.
+**Catalog database:** one PostgreSQL instance holds all catalog metadata and RAG vectors. Podman bundles Postgres for local dev; otherwise point `.env` at your own database. Full guide: **[catalog-database.md](catalog-database.md)**.
 
-## Docker
+## Podman
 
 ```bash
 git clone https://github.com/siva18k/datapro_ai.git data-pro
@@ -12,7 +12,8 @@ cd data-pro
 cp .env.example .env
 # Edit .env — at minimum MISTRAL_API_KEY, or DEFAULT_LLM_BACKEND=ollama
 
-docker compose up --build
+podman machine start
+podman compose up --build
 ```
 
 UI: http://localhost:5173  
@@ -22,7 +23,7 @@ MCP: http://127.0.0.1:8000/mcp
 
 First startup can take a few minutes while the embedding model downloads. More compose detail in [docker.md](docker.md).
 
-Once it's up: check **Settings** (catalog DB + Trino coordinator are pre-filled in Docker), add a Trino catalog binding (`finance` / `finance_data`), optionally load the finance demo (`migrate_finance_data.py`), add a domain and dataset in **Data Catalog**, then try **Ask**. See [trino.md](trino.md).
+Once it's up: check **Settings** (catalog DB + Trino coordinator are pre-filled in Podman), add a Trino catalog binding (`finance` / `finance_data`) if Trino is available, or use **Database (native Postgres)** for direct pg8000 access, optionally load the finance demo (`migrate_finance_data.py`), add a domain and dataset in **Data Catalog**, then try **Ask**. See [trino.md](trino.md).
 
 ## Local development
 
@@ -85,7 +86,7 @@ Secrets go in `.env` (you can also edit many of them from **Settings**). Don't c
 | `TRINO_PORT` | No | `8081` on host (maps to 8080 in container); default `8081` in `.env.example` |
 | `TRINO_USER` | No | Default `trino` |
 | `TRINO_HTTP_SCHEME` | No | `http` locally, `https` on AWS internal ALB |
-| `PGSSLMODE` | No | `require` for RDS, `disable` for local Docker |
+| `PGSSLMODE` | No | `require` for RDS, `disable` for local Podman |
 | `EMBEDDING_MODEL` | No | Default `all-MiniLM-L6-v2` |
 | `DEFAULT_LLM_BACKEND` | No | `mistral`, `openai`, `anthropic`, `gemini`, `openrouter`, `ollama` |
 | `OLLAMA_BASE_URL` | If Ollama | e.g. `http://localhost:11434` |
@@ -99,7 +100,7 @@ Business warehouse access uses **Trino**: coordinator settings in `.env` / **Set
 - `python scripts/migrate_finance_data.py --fresh` — optional demo warehouse
 - `python mcp_server.py` — MCP on port 8000
 - `./scripts/dev.sh` — API + Vite together
-- `docker compose up --build` — full stack
+- `podman compose up --build` — full stack
 - `python ingest.py` — old CLI path for `sample_docs/`
 
 If you change the embedding model in Settings, re-ingest everything or your vectors won't match.
@@ -110,4 +111,4 @@ If you change the embedding model in Settings, re-ingest everything or your vect
 cd web && npm run build
 ```
 
-Output lands in `web/dist/`. The Docker image serves it through nginx (`docker/nginx.conf`) with `/api` proxied to FastAPI.
+Output lands in `web/dist/`. The container image serves it through nginx (`docker/nginx.conf`) with `/api` proxied to FastAPI.

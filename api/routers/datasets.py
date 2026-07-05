@@ -53,6 +53,41 @@ from relationship_inference import build_relationships_section, merge_relationsh
 router = APIRouter(tags=["datasets"])
 
 DATASET_TYPES = CONNECTOR_SOURCE_TYPES
+_POSTGRES_LOCAL_KEYS = {"host", "port", "user", "password", "database", "sslmode"}
+
+
+def _normalize_structured_config(connector: str, config: dict | None) -> dict | None:
+    if not isinstance(config, dict):
+        return config
+    if connector not in {"postgres", "trino"}:
+        return config
+
+    cfg = dict(config)
+    connection_id = str(cfg.get("connection_id") or "").strip()
+    if not connection_id:
+        return cfg
+
+    from connections_service import connection_config
+
+    linked = connection_config(connection_id)
+    normalized: dict[str, object] = {
+        "connection_id": connection_id,
+        "connection_name": str(
+            cfg.get("connection_name") or linked.get("connection_name") or ""
+        ).strip(),
+    }
+
+    if connector == "postgres":
+        schema = str(cfg.get("schema") or linked.get("schema") or "public").strip() or "public"
+        normalized["schema"] = schema
+        return normalized
+
+    catalog = str(cfg.get("catalog") or linked.get("catalog") or "").strip()
+    schema = str(cfg.get("schema") or linked.get("schema") or "public").strip() or "public"
+    if catalog:
+        normalized["catalog"] = catalog
+    normalized["schema"] = schema
+    return normalized
 
 
 class SyncBody(BaseModel):
@@ -141,13 +176,17 @@ def list_domain_datasets(domain_id: str, enabled_only: bool = False):
 def create_dataset(domain_id: str, body: DatasetCreate):
     if body.connector not in DATASET_TYPES:
         raise HTTPException(400, f"Unknown connector: {body.connector}")
+    try:
+        config = _normalize_structured_config(body.connector, body.config)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return create_source(
         domain_id,
         body.name,
         description=body.description,
         source_type=DATASET_TYPES[body.connector],
         connector=body.connector,
-        config=body.config,
+        config=config,
     )
 
 
@@ -169,14 +208,22 @@ def get_dataset(dataset_id: str):
 
 @router.patch("/datasets/{dataset_id}")
 def patch_dataset(dataset_id: str, body: DatasetUpdate):
-    if not get_source(source_id=dataset_id):
+    source = get_source(source_id=dataset_id)
+    if not source:
         raise HTTPException(404, "Dataset not found")
     fields = body.model_dump(exclude_none=True)
+    target_connector = source.get("connector")
     if "connector" in fields:
         connector = fields.pop("connector")
         if connector not in DATASET_TYPES:
             raise HTTPException(400, f"Unknown connector: {connector}")
         update_source(dataset_id, connector=connector, source_type=DATASET_TYPES[connector])
+        target_connector = connector
+    if "config" in fields:
+        try:
+            fields["config"] = _normalize_structured_config(str(target_connector or ""), fields["config"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     if fields:
         update_source(dataset_id, **fields)
     return get_source(source_id=dataset_id)

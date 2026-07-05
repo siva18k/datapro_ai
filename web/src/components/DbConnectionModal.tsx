@@ -6,7 +6,7 @@ import {
   type SavedDbConnection,
   type WarehouseConnectorField,
 } from "../api/client";
-import { suggestCatalogName, TRINO_CONNECTOR } from "../utils/databaseConnectors";
+import { suggestCatalogName } from "../utils/databaseConnectors";
 import {
   DEFAULT_WAREHOUSE_TYPE,
   defaultsForWarehouseType,
@@ -20,7 +20,7 @@ import {
 function emptyForm(): DbConnectionPayload {
   return {
     name: "",
-    connector: TRINO_CONNECTOR,
+    connector: "postgres",
     warehouse_type: DEFAULT_WAREHOUSE_TYPE,
     catalog: "",
     schema: "public",
@@ -38,7 +38,7 @@ function connectionToForm(connection: SavedDbConnection): DbConnectionPayload {
   const extra = { ...(connection.extra ?? {}) };
   return {
     name: connection.name,
-    connector: TRINO_CONNECTOR,
+    connector: connection.connector || "postgres",
     warehouse_type: connection.warehouse_type || DEFAULT_WAREHOUSE_TYPE,
     catalog: connection.catalog,
     schema: connection.schema,
@@ -185,6 +185,13 @@ export function DbConnectionModal({
   const updateForm = (patch: Partial<DbConnectionPayload>) => {
     setForm((prev) => {
       let next = { ...prev, ...patch };
+      if (patch.connector === "postgres") {
+        next = {
+          ...next,
+          connector: "postgres",
+          warehouse_type: "postgresql",
+        };
+      }
       if (patch.warehouse_type && patch.warehouse_type !== prev.warehouse_type) {
         const defaults = defaultsForWarehouseType(connectors, patch.warehouse_type);
         next = {
@@ -194,7 +201,7 @@ export function DbConnectionModal({
           database: defaults.database,
         };
       }
-      if (!isEdit && patch.name !== undefined && !prev.catalog.trim()) {
+      if (!isEdit && patch.name !== undefined && !prev.catalog.trim() && next.connector !== "postgres") {
         next.catalog = suggestCatalogName(patch.name);
       }
       return next;
@@ -241,10 +248,14 @@ export function DbConnectionModal({
     : false;
   const formChanged = hasFormChanges(form, initialForm, isEdit, password);
   const formValid = isWarehouseFormValid(form, connectors);
-  const passwordOk = isEdit ? connection?.password_set || password.length > 0 : password.length > 0;
+  const passwordOk =
+    form.connector === "postgres"
+      ? password.length > 0 || (isEdit && connection?.connector === "postgres" && connection?.password_set)
+      : password.length > 0 || (isEdit && connection?.password_set);
   const canSave = formChanged && formValid && passwordOk && !nameTaken && !save.isPending;
   const canTest = formValid && passwordOk;
   const groups = connectors ? warehouseGroups(connectors) : [];
+  const isNativePostgres = form.connector === "postgres";
 
   return (
     <div
@@ -264,8 +275,8 @@ export function DbConnectionModal({
           </button>
         </div>
         <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-          Register a warehouse behind Trino. Choose the database type, then supply credentials — DATA Pro
-          writes a Trino catalog file and uses it for structured datasets.
+          Register a warehouse connection. Choose Trino for catalog-backed access, or Native PostgreSQL for a
+          direct pg8000 connection.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="field mb-0 sm:col-span-2">
@@ -281,43 +292,52 @@ export function DbConnectionModal({
             )}
           </div>
           <div className="field mb-0">
-            <label className="label">Query engine</label>
-            <input className="input" value="Trino" readOnly />
+            <label className="label">Access layer</label>
+            <select className="select" value={form.connector} onChange={(e) => updateForm({ connector: e.target.value })}>
+              <option value="postgres">Native PostgreSQL</option>
+              <option value="trino">Trino catalog</option>
+            </select>
           </div>
           <div className="field mb-0">
             <label className="label">Warehouse type</label>
-            <select
-              className="select"
-              value={form.warehouse_type}
-              onChange={(e) => updateForm({ warehouse_type: e.target.value })}
-            >
-              {groups.map((group) => (
-                <optgroup key={group} label={groupLabel(group)}>
-                  {connectors
-                    ?.filter((c) => c.group === group)
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
-                </optgroup>
-              ))}
-            </select>
-            {selectedConnector?.description && (
+            {isNativePostgres ? (
+              <input className="input" value="PostgreSQL" readOnly />
+            ) : (
+              <select
+                className="select"
+                value={form.warehouse_type}
+                onChange={(e) => updateForm({ warehouse_type: e.target.value })}
+              >
+                {groups.map((group) => (
+                  <optgroup key={group} label={groupLabel(group)}>
+                    {connectors
+                      ?.filter((c) => c.group === group)
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                  </optgroup>
+                ))}
+              </select>
+            )}
+            {selectedConnector?.description && !isNativePostgres && (
               <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
                 {selectedConnector.description}
               </p>
             )}
           </div>
-          <div className="field mb-0">
-            <label className="label">Trino catalog</label>
-            <input
-              className="input font-mono text-xs"
-              placeholder="finance"
-              value={form.catalog}
-              onChange={(e) => updateForm({ catalog: e.target.value })}
-            />
-          </div>
+          {!isNativePostgres && (
+            <div className="field mb-0">
+              <label className="label">Catalog name</label>
+              <input
+                className="input font-mono text-xs"
+                placeholder="finance"
+                value={form.catalog}
+                onChange={(e) => updateForm({ catalog: e.target.value })}
+              />
+            </div>
+          )}
           <div className="field mb-0">
             <label className="label">Default schema</label>
             <input

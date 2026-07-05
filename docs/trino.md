@@ -9,11 +9,11 @@ DATA Pro uses **two database layers**:
 
 Ask SQL generation picks dialect from the dataset connector: **Trino** (`catalog.schema.table`, `DATE '…'` literals) for `connector=trino`; **PostgreSQL** (`schema.table`) for legacy direct Postgres datasets. File/upload datasets use the code path, not SQL.
 
-Trino is the **only supported path** for new business dataset connections. The catalog database (psycopg → Postgres metadata/RAG) is never queried for warehouse facts.
+Trino is the preferred path for shared warehouse access, but DATA Pro also supports direct Postgres datasets when you want a native pg8000-backed connection. The catalog database (psycopg → Postgres metadata/RAG) is never queried for warehouse facts.
 
-## Local development (Docker)
+## Local development (Podman)
 
-`docker compose up --build` starts:
+`podman compose up --build` starts:
 
 | Service | Port | Role |
 |---------|------|------|
@@ -25,15 +25,15 @@ Trino is the **only supported path** for new business dataset connections. The c
 
 ```bash
 cp .env.example .env
-docker compose up --build
+podman compose up --build
 ```
 
-Or from **Settings** (bottom): use **Trino coordinator → Start** to run `docker compose up -d trino` only while API/UI run locally.
+Or from **Settings** (bottom): use **Trino coordinator → Start** to run `podman compose up -d trino` only while API/UI run locally.
 
 ### 2. Load demo finance tables (optional)
 
 ```bash
-docker compose run --rm api python scripts/migrate_finance_data.py --fresh
+podman compose run --rm api python scripts/migrate_finance_data.py --fresh
 ```
 
 ### 3. Configure Settings
@@ -68,8 +68,8 @@ API: `GET /connections/warehouse-connectors` returns field schemas for the UI.
 ### 4. Create a dataset
 
 1. **Data Catalog → Add dataset**
-2. Format: **Database (Trino)**
-3. Pick the `Finance_DB` connection
+2. Format: **Database (Trino)** for warehouse-backed access, or **Database (native Postgres)** for direct access
+3. Pick the `Finance_DB` connection when using Trino
 4. **Data** tab → **Refresh tables** → add tables to the catalog
 
 ### Trino catalog files (local)
@@ -80,7 +80,7 @@ Business database credentials live in Trino, not in DATA Pro:
 docker/trino/catalog/finance.properties
 ```
 
-First-time Docker setup (local bundled Postgres):
+First-time Podman setup (local bundled Postgres):
 
 ```bash
 cp docker/trino/catalog/finance.properties.example docker/trino/catalog/finance.properties
@@ -109,7 +109,7 @@ This will:
 2. Generate `docker/trino/catalog/<catalog>.properties` from the old credentials (gitignored).
 3. Optionally update catalog datasets still on `connector: postgres`.
 
-Restart Trino after migration: `docker compose restart trino`
+Restart Trino after migration: `podman compose restart trino`
 
 ## How queries run
 
@@ -149,9 +149,9 @@ Existing datasets with `connector: postgres` and host/port in `config` still exe
 
 | Symptom | Check |
 |---------|--------|
-| Test Trino fails | `docker compose ps` — is `datapro-trino` healthy? |
+| Test Trino fails | `podman compose ps` — is `datapro-trino` healthy? |
 | Catalog test fails | Catalog file exists under `docker/trino/catalog/` and names match Settings |
 | No tables on refresh | Finance seed loaded? Schema name matches binding (`finance_data`) |
 | SQL mentions wrong tables | Re-discover tables; LLM prompt uses `catalog.schema.table` |
-| Catalog test fails (`JDBC_ERROR`) | `finance.properties` must reach your warehouse — `db:5432` only works when the `db` Compose service is running; for Aurora, set JDBC URL to your RDS host and `docker compose restart trino` |
+| Catalog test fails (`JDBC_ERROR`) | `finance.properties` must reach your warehouse — `db:5432` only works when the `db` Compose service is running; for Aurora, set JDBC URL to your RDS host and `podman compose restart trino` |
 | `finance_data` not in catalog (Ask error) | Restart API after updates; SQL must use `finance.finance_data.<table>` for Trino |

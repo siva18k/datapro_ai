@@ -33,7 +33,14 @@ export function isWarehouseFormValid(
   form: DbConnectionPayload,
   connectors: WarehouseConnectorDefinition[] | undefined,
 ): boolean {
-  if (!form.name.trim() || !form.catalog.trim() || !form.schema.trim()) return false;
+  if (!form.name.trim() || !form.schema.trim()) return false;
+  if (form.connector === "postgres") {
+    if (!form.host?.trim() || !String(form.port ?? "").trim() || !form.database?.trim() || !form.user?.trim()) {
+      return false;
+    }
+    return true;
+  }
+  if (!form.catalog.trim()) return false;
   const def = warehouseConnectorById(connectors, form.warehouse_type);
   if (!def) return false;
   for (const field of def.fields) {

@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { CONNECTOR_LABELS } from "../types";
 import { DbConnectionModal } from "./DbConnectionModal";
 
-const CONNECTORS = ["trino", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
+const CONNECTORS = ["trino", "postgres", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
 const NEW_CONNECTION = "__new__";
 const REMOTE_CONNECTORS = new Set(["api", "web_url", "sharepoint"]);
 
@@ -17,6 +17,13 @@ type Props = {
 function buildConfig(
   connector: string,
   fields: {
+    pgHost: string;
+    pgPort: string;
+    pgDatabase: string;
+    pgSchema: string;
+    pgUser: string;
+    pgPassword: string;
+    pgSslmode: string;
     folderPath: string;
     url: string;
     baseUrl: string;
@@ -25,6 +32,16 @@ function buildConfig(
   },
 ): Record<string, unknown> {
   switch (connector) {
+    case "postgres":
+      return {
+        host: fields.pgHost.trim(),
+        port: Number(fields.pgPort || 5432),
+        database: fields.pgDatabase.trim() || "postgres",
+        schema: fields.pgSchema.trim() || "public",
+        user: fields.pgUser.trim(),
+        password: fields.pgPassword,
+        sslmode: fields.pgSslmode.trim() || "require",
+      };
     case "file_path":
       return { path: fields.folderPath.trim() || "sample_docs" };
     case "web_url":
@@ -50,7 +67,18 @@ function buildConfig(
   }
 }
 
-function connectorReady(connector: string, name: string, connectionId: string, url: string, baseUrl: string): boolean {
+function connectorReady(
+  connector: string,
+  name: string,
+  connectionId: string,
+  url: string,
+  baseUrl: string,
+  pgHost: string,
+  pgPort: string,
+  pgDatabase: string,
+  pgUser: string,
+  pgPassword: string,
+): boolean {
   if (!name.trim()) return false;
   if (connector === "trino" || connector === "postgres") return !!connectionId;
   if (connector === "web_url" || connector === "sharepoint") return !!url.trim();
@@ -64,6 +92,13 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
   const [connector, setConnector] = useState<string>("upload");
   const [connectionId, setConnectionId] = useState("");
   const [showConnectionModal, setShowConnectionModal] = useState(false);
+  const [pgHost, setPgHost] = useState("");
+  const [pgPort, setPgPort] = useState("5432");
+  const [pgDatabase, setPgDatabase] = useState("postgres");
+  const [pgSchema, setPgSchema] = useState("public");
+  const [pgUser, setPgUser] = useState("");
+  const [pgPassword, setPgPassword] = useState("");
+  const [pgSslmode, setPgSslmode] = useState("require");
   const [folderPath, setFolderPath] = useState("sample_docs");
   const [url, setUrl] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -91,7 +126,15 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
   const create = useMutation({
     mutationFn: async () => {
       setError(null);
+      let selectedConnector = connector;
       let config: Record<string, unknown> = buildConfig(connector, {
+        pgHost,
+        pgPort,
+        pgDatabase,
+        pgSchema,
+        pgUser,
+        pgPassword,
+        pgSslmode,
         folderPath,
         url,
         baseUrl,
@@ -99,12 +142,21 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
         authToken,
       });
       if (connector === "trino" || connector === "postgres") {
+        if (!connectionId) {
+          throw new Error("Choose a saved connection from Settings.");
+        }
         const cfg = await api.getDbConnectionConfig(connectionId);
-        config = { ...cfg, connector: "trino" };
+        const saved = dbConnections?.find((c) => c.id === connectionId);
+        config = {
+          ...cfg,
+          connection_id: connectionId,
+          connection_name: saved?.name ?? String(cfg.connection_name ?? ""),
+        };
+        selectedConnector = String(cfg.connector || connector);
       }
       const dataset = await api.createDataset(domainId, {
         name: name.trim(),
-        connector: connector === "postgres" ? "trino" : connector,
+        connector: selectedConnector,
         config,
       });
       const warnings: string[] = [];
@@ -141,7 +193,9 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
 
   const accept = fileTypes?.accept ?? ".pdf,.md,.txt,.json";
   const typeHint = fileTypes?.extensions.join(", ") ?? ".pdf, .md, .txt, .json";
-  const ready = connectorReady(connector, name, connectionId, url, baseUrl);
+  const ready = connectorReady(connector, name, connectionId, url, baseUrl, pgHost, pgPort, pgDatabase, pgUser, pgPassword);
+  const savedConnections = dbConnections ?? [];
+  const selectedConnections = savedConnections.filter((c) => c.connector === connector);
 
   return (
     <div className="catalog-add-dataset-form">
@@ -199,9 +253,9 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
               <option value={NEW_CONNECTION}>
                 {dbConnections?.length ? "+ New connection…" : "+ Set up connection…"}
               </option>
-              {dbConnections?.map((c) => (
+              {selectedConnections.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} ({c.catalog}.{c.schema})
+                  {c.name} ({c.connector === "postgres" ? c.host : c.catalog}.{c.schema})
                 </option>
               ))}
             </select>
@@ -309,8 +363,8 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
       )}
 
       <p className="add-dataset-hint mt-3 text-sm" style={{ color: "var(--color-text-muted)" }}>
-        {connector === "postgres" && "After create: discover tables on the Data tab, then RAG for catalog metadata."}
-        {connector === "upload" && "Files are stored under data/{domain}/{dataset}/. Use RAG tab to embed."}
+        {connector === "postgres" && "Creates a direct PostgreSQL dataset using pg8000. Use the Data tab to discover tables."}
+        {connector === "upload" && "Files are stored under data/{domain}/{dataset}/. Use the RAG tab to embed."}
         {connector === "file_path" && "Reads documents from the folder path on disk."}
         {connector === "api" && "Creates the dataset and syncs API responses into the cache on create."}
         {connector === "web_url" && "Creates the dataset and fetches the URL into the cache on create."}

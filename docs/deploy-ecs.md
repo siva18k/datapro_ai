@@ -38,7 +38,7 @@ Do not put production RDS hostnames, passwords, or API keys in any tracked file.
 - **api** and **mcp** share the same catalog database on RDS.
 - **migrate** is a one-shot Fargate task (same API image, runs `scripts/migrate.py`).
 
-Local Docker Compose (Postgres in a container) is documented in [docker.md](docker.md). ECS production expects **RDS** or another managed Postgres.
+Local Podman Compose (Postgres in a container) is documented in [docker.md](docker.md). ECS production expects **RDS** or another managed Postgres.
 
 ## Prerequisites
 

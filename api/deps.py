@@ -117,8 +117,17 @@ def clear_embedder_cache() -> None:
 
 def bootstrap() -> None:
     scrub_invalid_managed_settings()
-    ensure_catalog_ready()
-    # Warm routing metadata so first Ask/Analytics request does not block on catalog scans.
-    from routing_cache import get_cached_routing_context
+    try:
+        ensure_catalog_ready()
+    except Exception as exc:
+        # Keep API startup available even if catalog DB is temporarily unavailable.
+        print(f"[bootstrap] catalog init skipped: {exc}")
+        return
 
-    get_cached_routing_context()
+    # Warm routing metadata so first Ask/Analytics request does not block on catalog scans.
+    try:
+        from routing_cache import get_cached_routing_context
+
+        get_cached_routing_context()
+    except Exception as exc:
+        print(f"[bootstrap] routing warmup skipped: {exc}")

@@ -1,11 +1,12 @@
-# Docker
+# Podman
 
 ```bash
 cp .env.example .env
 # MISTRAL_API_KEY or Ollama settings
 cp docker/trino/catalog/finance.properties.example docker/trino/catalog/finance.properties
 
-docker compose up --build
+podman machine start
+podman compose up --build
 ```
 
 UI at http://localhost:5173
@@ -29,7 +30,7 @@ When catalog Postgres and the app already run outside Docker (e.g. `uvicorn` + `
 
 ```bash
 # finance.properties must exist (Aurora or copy from .example for local demo)
-docker compose up -d trino
+podman compose up -d trino
 ```
 
 This does **not** start `db`, `api`, `web`, or `mcp`, and does **not** build anything — only pulls/runs the Trino image (~1 GB).
@@ -55,18 +56,18 @@ Verify Trino: `curl -s http://localhost:8081/v1/info`
 ## Common commands
 
 ```bash
-docker compose up --build          # everything
-docker compose up datapro-api      # API only
-docker compose up datapro-mcp      # MCP only
-docker compose run --rm migrate    # re-run migrations
-docker compose logs -f api         # tail API logs
-docker compose down                # stop (volume kept)
+podman compose up --build          # everything
+podman compose up datapro-api      # API only
+podman compose up datapro-mcp      # MCP only
+podman compose run --rm migrate    # re-run migrations
+podman compose logs -f api         # tail API logs
+podman compose down                # stop (volume kept)
 ```
 
 Load the demo finance warehouse into the same Postgres (queried via Trino catalog `finance`):
 
 ```bash
-docker compose run --rm api python scripts/migrate_finance_data.py --fresh
+podman compose run --rm api python scripts/migrate_finance_data.py --fresh
 ```
 
 See **[docs/trino.md](docs/trino.md)** for Trino coordinator settings, catalog bindings, and AWS notes.
@@ -81,7 +82,7 @@ PGSSLMODE=require
 DB_SCHEMA=ragpro
 ```
 
-Run `CREATE EXTENSION IF NOT EXISTS vector;` on that database, then `docker compose run --rm migrate`. You can skip the `db` service if API and MCP only talk to your external instance.
+Run `CREATE EXTENSION IF NOT EXISTS vector;` on that database, then `podman compose run --rm migrate`. You can skip the `db` service if API and MCP only talk to your external instance.
 
 ## Ollama on the host machine
 

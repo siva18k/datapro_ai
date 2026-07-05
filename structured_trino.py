@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import requests
 from trino.auth import BasicAuthentication
 from trino.dbapi import connect
 
@@ -76,7 +77,34 @@ def _connect_trino(config: dict):
     )
 
 
+def _trino_info_url(config: dict) -> str:
+    scheme = config.get("http_scheme") or "http"
+    host = config.get("host")
+    port = int(config.get("port") or 8081)
+    return f"{scheme}://{host}:{port}/v1/info"
+
+
+def _preflight_trino_endpoint(config: dict) -> tuple[bool, str | None]:
+    info_url = _trino_info_url(config)
+    try:
+        res = requests.get(info_url, timeout=3, verify=bool(config.get("verify_ssl")))
+    except requests.RequestException as exc:
+        return False, (
+            f"Could not reach Trino coordinator at {info_url}: {exc}. "
+            "Start Trino or update TRINO_HOST/TRINO_PORT in Settings."
+        )
+    if res.status_code != 200:
+        return False, (
+            f"Endpoint {info_url} returned HTTP {res.status_code}. "
+            "This host/port is not a Trino coordinator."
+        )
+    return True, None
+
+
 def test_trino_catalog(config: dict) -> tuple[bool, str]:
+    ok, preflight_msg = _preflight_trino_endpoint(config)
+    if not ok:
+        return False, preflight_msg or "Trino coordinator preflight failed."
     try:
         conn = _connect_trino(config)
         try:
@@ -93,6 +121,9 @@ def test_trino_catalog(config: dict) -> tuple[bool, str]:
 def test_trino_server(config: dict | None = None) -> tuple[bool, str]:
     """Ping the Trino coordinator (no business catalog required)."""
     base = dict(config or get_trino_settings())
+    ok, preflight_msg = _preflight_trino_endpoint(base)
+    if not ok:
+        return False, preflight_msg or "Trino coordinator preflight failed."
     base["catalog"] = "system"
     base["schema"] = "runtime"
     try:
@@ -155,6 +186,9 @@ def list_foreign_keys(config: dict) -> list[dict[str, Any]]:
 
 def execute_readonly_trino_sql(config: dict, sql: str, *, max_rows: int = 500) -> tuple[list[str], list[list[Any]]]:
     limited = f"SELECT * FROM ({sql.rstrip(';')}) AS _q LIMIT {max_rows}"
+    ok, preflight_msg = _preflight_trino_endpoint(config)
+    if not ok:
+        raise RuntimeError(preflight_msg or "Trino coordinator preflight failed.")
     conn = _connect_trino(config)
     try:
         cur = conn.cursor()
@@ -164,5 +198,13 @@ def execute_readonly_trino_sql(config: dict, sql: str, *, max_rows: int = 500) -
         if not rows:
             return col_names, []
         return col_names, coerce_json_rows([list(r) for r in rows])
+    except Exception as exc:
+        msg = str(exc)
+        if "404" in msg:
+            raise RuntimeError(
+                f"Trino query endpoint returned HTTP 404 at {_trino_info_url(config)}. "
+                "Verify TRINO_HOST/TRINO_PORT points to a running Trino coordinator."
+            ) from exc
+        raise
     finally:
         conn.close()

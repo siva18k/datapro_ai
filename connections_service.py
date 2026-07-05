@@ -27,15 +27,18 @@ from trino_connector_types import (
     normalize_warehouse_type,
     validate_warehouse_row,
 )
+from structured_db import postgres_config_from_source, test_postgres_connection
 
 PROJECT_DIR = Path(__file__).resolve().parent
 CONNECTIONS_PATH = PROJECT_DIR / "saved_db_connections.json"
 
 BUSINESS_CONNECTOR = "trino"
+NATIVE_POSTGRES_CONNECTOR = "postgres"
 STORED_WAREHOUSE_KEYS = (
     "host",
     "port",
     "user",
+    "password",
     "database",
     "warehouse_type",
     "extra",
@@ -62,9 +65,15 @@ def _save_store(data: dict[str, Any]) -> None:
 
 def _migrate_legacy_row(row: dict[str, Any]) -> dict[str, Any]:
     """Map old direct-Postgres saved connections to Trino catalog bindings when possible."""
+    connector = (row.get("connector") or "").strip().lower()
+    if connector == NATIVE_POSTGRES_CONNECTOR:
+        migrated = dict(row)
+        migrated["warehouse_type"] = normalize_warehouse_type(migrated.get("warehouse_type") or "postgresql")
+        if not migrated.get("extra"):
+            migrated["extra"] = normalize_extra(migrated)
+        return migrated
     if is_legacy_postgres_row(row):
         return trino_binding_from_legacy(row)
-    connector = (row.get("connector") or "").strip().lower()
     if connector == BUSINESS_CONNECTOR and row.get("catalog"):
         migrated = dict(row)
         migrated["warehouse_type"] = normalize_warehouse_type(migrated.get("warehouse_type"))
@@ -92,7 +101,7 @@ def _public_connection(row: dict[str, Any]) -> dict[str, Any]:
         "port": int(row.get("port") or default_port_for_type(warehouse_type)),
         "user": row.get("user") or "",
         "database": row.get("database") or "",
-        "password_set": catalog_password_is_set(catalog) if catalog else False,
+        "password_set": bool(row.get("password")) if connector == NATIVE_POSTGRES_CONNECTOR else catalog_password_is_set(catalog) if catalog else False,
         "extra": extra,
     }
     for key, value in extra.items():
@@ -116,12 +125,36 @@ def get_connection(connection_id: str) -> dict[str, Any] | None:
     return None
 
 
+def get_connection_by_name(name: str) -> dict[str, Any] | None:
+    target = (name or "").strip().casefold()
+    if not target:
+        return None
+    for row in _load_store()["connections"]:
+        if str(row.get("name") or "").strip().casefold() == target:
+            return _migrate_legacy_row(dict(row))
+    return None
+
+
 def connection_config(connection_id: str) -> dict[str, Any]:
     row = get_connection(connection_id)
     if not row:
         raise ValueError("Connection not found")
-    catalog = (row.get("catalog") or "").strip()
     schema = (row.get("schema") or "public").strip() or "public"
+    connector = (row.get("connector") or "").strip().lower()
+    if connector == NATIVE_POSTGRES_CONNECTOR:
+        return {
+            "connector": NATIVE_POSTGRES_CONNECTOR,
+            "host": row.get("host") or "",
+            "port": int(row.get("port") or 5432),
+            "user": row.get("user") or "",
+            "password": row.get("password") or "",
+            "database": row.get("database") or "postgres",
+            "schema": schema,
+            "sslmode": row.get("sslmode") or normalize_extra(row).get("sslmode") or "require",
+            "connection_id": connection_id,
+            "connection_name": row.get("name", ""),
+        }
+    catalog = (row.get("catalog") or "").strip()
     if not catalog:
         raise ValueError("Connection is missing Trino catalog name.")
     return {
@@ -176,20 +209,26 @@ def _validate_catalog_name(catalog: str) -> str:
 
 def _store_row_from_payload(payload: dict[str, Any], *, row_id: str | None = None) -> dict[str, Any]:
     name = (payload.get("name") or "").strip()
+    connector = (payload.get("connector") or BUSINESS_CONNECTOR).strip().lower() or BUSINESS_CONNECTOR
     warehouse_type = normalize_warehouse_type(payload.get("warehouse_type"))
-    catalog = _validate_catalog_name(str(payload.get("catalog") or suggest_catalog_name(name)))
+    catalog = str(payload.get("catalog") or suggest_catalog_name(name)).strip()
+    if connector == NATIVE_POSTGRES_CONNECTOR and not catalog:
+        catalog = suggest_catalog_name(name)
+    if connector == BUSINESS_CONNECTOR:
+        catalog = _validate_catalog_name(catalog)
     schema = (payload.get("schema") or default_schema_for_type(warehouse_type)).strip() or "public"
     extra = normalize_extra(payload)
     row: dict[str, Any] = {
         "id": row_id or str(uuid.uuid4()),
         "name": name,
-        "connector": BUSINESS_CONNECTOR,
+        "connector": connector,
         "warehouse_type": warehouse_type,
         "catalog": catalog,
         "schema": schema,
         "host": (payload.get("host") or "").strip(),
         "port": int(payload.get("port") or default_port_for_type(warehouse_type)),
         "user": (payload.get("user") or "").strip(),
+        "password": (payload.get("password") or "").strip() if connector == NATIVE_POSTGRES_CONNECTOR else "",
         "database": (payload.get("database") or "").strip(),
         "extra": extra,
     }
@@ -234,14 +273,20 @@ def create_connection(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Connection name is required")
     if _name_taken(name):
         raise ValueError(f'Connection name "{name}" is already in use. Choose a unique name.')
-    if not (payload.get("catalog") or "").strip():
-        payload = {**payload, "catalog": suggest_catalog_name(name)}
     row = _store_row_from_payload({**payload, "name": name})
-    if _catalog_taken(row["catalog"]):
-        raise ValueError(f'Trino catalog "{row["catalog"]}" is already registered. Choose a unique catalog name.')
-    creds = merge_warehouse_credentials(row, payload, catalog=row["catalog"])
-    validate_warehouse_row(creds, require_password=True)
-    _apply_catalog_file(row, payload)
+    if row["connector"] == NATIVE_POSTGRES_CONNECTOR:
+        cfg = postgres_config_from_source(row)
+        ok, msg = test_postgres_connection({**cfg, "password": row.get("password") or ""})
+        if not ok:
+            raise ValueError(msg)
+    else:
+        if not (payload.get("catalog") or "").strip():
+            payload = {**payload, "catalog": suggest_catalog_name(name)}
+        if _catalog_taken(row["catalog"]):
+            raise ValueError(f'Trino catalog "{row["catalog"]}" is already registered. Choose a unique catalog name.')
+        creds = merge_warehouse_credentials(row, payload, catalog=row["catalog"])
+        validate_warehouse_row(creds, require_password=True)
+        _apply_catalog_file(row, payload)
     store = _load_store()
     store["connections"].append(row)
     _save_store(store)
@@ -259,21 +304,26 @@ def update_connection(connection_id: str, payload: dict[str, Any]) -> dict[str, 
             if _name_taken(next_name, exclude_id=connection_id):
                 raise ValueError(f'Connection name "{next_name}" is already in use. Choose a unique name.')
             row["name"] = next_name
-        if payload.get("catalog") is not None:
+        target_connector = str(payload.get("connector") or row.get("connector") or BUSINESS_CONNECTOR).strip().lower()
+        if payload.get("connector") is not None:
+            row["connector"] = target_connector
+        if payload.get("warehouse_type") is not None:
+            row["warehouse_type"] = normalize_warehouse_type(str(payload["warehouse_type"]))
+        if payload.get("catalog") is not None and target_connector != NATIVE_POSTGRES_CONNECTOR:
             next_catalog = _validate_catalog_name(str(payload["catalog"]))
             if _catalog_taken(next_catalog, exclude_id=connection_id):
                 raise ValueError(f'Trino catalog "{next_catalog}" is already registered.')
             row["catalog"] = next_catalog
         if payload.get("schema") is not None:
             row["schema"] = str(payload["schema"]).strip() or row.get("schema") or "public"
-        if payload.get("warehouse_type") is not None:
-            row["warehouse_type"] = normalize_warehouse_type(str(payload["warehouse_type"]))
         for key in STORED_WAREHOUSE_KEYS:
             if payload.get(key) is not None:
                 if key == "port":
                     row[key] = int(payload[key] or default_port_for_type(row.get("warehouse_type")))
                 elif key == "extra":
                     row[key] = {**normalize_extra(row), **normalize_extra(payload)}
+                elif key == "password" and (row.get("connector") or "").strip().lower() != NATIVE_POSTGRES_CONNECTOR:
+                    continue
                 else:
                     row[key] = payload[key]
         for key in (
@@ -291,8 +341,12 @@ def update_connection(connection_id: str, payload: dict[str, Any]) -> dict[str, 
                 extra = normalize_extra(row)
                 extra[key] = str(payload[key]).strip()
                 row["extra"] = extra
-        row["connector"] = BUSINESS_CONNECTOR
-        if _credential_fields_in_payload(payload):
+        if _credential_fields_in_payload(payload) and target_connector == NATIVE_POSTGRES_CONNECTOR:
+            cfg = postgres_config_from_source(row)
+            ok, msg = test_postgres_connection({**cfg, "password": row.get("password") or ""})
+            if not ok:
+                raise ValueError(msg)
+        elif _credential_fields_in_payload(payload):
             creds = merge_warehouse_credentials(row, payload, catalog=row["catalog"])
             validate_warehouse_row(
                 creds,
@@ -325,13 +379,18 @@ def test_connection_payload(payload: dict[str, Any], *, connection_id: str | Non
         "schema": (payload.get("schema") or base.get("schema") or "public").strip() or "public",
         "warehouse_type": normalize_warehouse_type(payload.get("warehouse_type") or base.get("warehouse_type")),
     }
+    row = _store_row_from_payload({**base, **payload, **merged_binding})
+    if row["connector"] == NATIVE_POSTGRES_CONNECTOR:
+        cfg = postgres_config_from_source(row)
+        ok, message = test_postgres_connection({**cfg, "password": row.get("password") or ""})
+        return ok, message
+
     if not merged_binding["catalog"]:
         if payload.get("name"):
             merged_binding["catalog"] = suggest_catalog_name(str(payload["name"]))
         else:
             raise ValueError("Trino catalog name is required.")
 
-    row = _store_row_from_payload({**base, **payload, **merged_binding})
     creds = merge_warehouse_credentials(row, payload, catalog=row["catalog"])
     validate_warehouse_row(
         creds,

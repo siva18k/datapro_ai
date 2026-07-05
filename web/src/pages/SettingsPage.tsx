@@ -11,6 +11,7 @@ import {
   type BackendStatusResponse,
   type DatabaseSettingsPayload,
   type LlmSettingsPayload,
+  type TrinoServiceActionResponse,
 } from "../api/client";
 import type { MetadataRagStatus } from "../types";
 import { devBootstrap, isDevBootstrapAvailable } from "../api/devBootstrap";
@@ -258,6 +259,51 @@ export function SettingsPage() {
 
   const backendBusy = backendStart.isPending || backendStop.isPending || backendRestart.isPending;
 
+  const [trinoNotice, setTrinoNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const { data: trinoStatus, refetch: refetchTrinoStatus } = useQuery({
+    queryKey: ["trino-service", "status"],
+    queryFn: api.trinoServiceStatus,
+    enabled: apiOnline,
+    refetchInterval: apiOnline ? 10_000 : false,
+  });
+
+  const trinoIsRunning = Boolean(trinoStatus?.running || trinoStatus?.container_running || trinoStatus?.reachable);
+
+  const invalidateTrinoStatus = () => {
+    void refetchTrinoStatus();
+    void qc.invalidateQueries({ queryKey: ["trino-service"] });
+  };
+
+  const trinoStart = useMutation({
+    mutationFn: api.trinoServiceStart,
+    onSuccess: (res) => {
+      invalidateTrinoStatus();
+      setTrinoNotice({ ok: res.ok, text: res.message });
+    },
+    onError: (err) => setTrinoNotice({ ok: false, text: String(err) }),
+  });
+
+  const trinoStop = useMutation({
+    mutationFn: (): Promise<TrinoServiceActionResponse> => api.trinoServiceStop(),
+    onSuccess: (res) => {
+      invalidateTrinoStatus();
+      setTrinoNotice({ ok: res.ok, text: res.message });
+    },
+    onError: (err) => setTrinoNotice({ ok: false, text: String(err) }),
+  });
+
+  const trinoRestart = useMutation({
+    mutationFn: (): Promise<TrinoServiceActionResponse> => api.trinoServiceRestart(),
+    onSuccess: (res) => {
+      invalidateTrinoStatus();
+      setTrinoNotice({ ok: res.ok, text: res.message });
+    },
+    onError: (err) => setTrinoNotice({ ok: false, text: String(err) }),
+  });
+
+  const trinoBusy = trinoStart.isPending || trinoStop.isPending || trinoRestart.isPending;
+
   useEffect(() => {
     if (!data) return;
     setMetadataRagEmbedModel(data.embedding_model || embeddingModel);
@@ -372,8 +418,13 @@ export function SettingsPage() {
     queryFn: api.metadataRagStatus,
     enabled: apiOnline,
     refetchInterval: apiOnline ? 30_000 : false,
-    onSuccess: (status) => setMetadataRagStatus(status),
   });
+
+  useEffect(() => {
+    if (metadataRagStatusQuery.data) {
+      setMetadataRagStatus(metadataRagStatusQuery.data);
+    }
+  }, [metadataRagStatusQuery.data]);
 
   const reRag = useMutation({
     mutationFn: (model?: string) => api.reRagMetadata(model),
@@ -1065,6 +1116,74 @@ export function SettingsPage() {
 
               {backendNotice && (
                 <p className={backendNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{backendNotice.text}</p>
+              )}
+            </div>
+
+            <div className="card card-pad space-y-4">
+              <div>
+                <h2 className="font-semibold">Trino engine</h2>
+                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                  Business SQL coordinator
+                </p>
+              </div>
+
+              {trinoStatus && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`badge ${trinoStatus.reachable ? "badge-ok" : "badge-muted"}`}>
+                    {trinoStatus.reachable ? "Reachable" : "Stopped"}
+                  </span>
+                  <span className="badge-muted badge">{trinoStatus.status_label}</span>
+                  <span className="badge-muted badge">Port {trinoStatus.port}</span>
+                  {trinoStatus.container_id && (
+                    <span className="badge-muted badge">Container {trinoStatus.container_name}</span>
+                  )}
+                </div>
+              )}
+
+              {trinoStatus && (
+                <p className="text-sm">
+                  URL:{" "}
+                  <code className="rounded px-1.5 py-0.5 text-xs" style={{ background: "var(--color-surface-subtle)" }}>
+                    {trinoStatus.url}
+                  </code>
+                </p>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={trinoBusy || trinoIsRunning}
+                  onClick={() => trinoStart.mutate()}
+                >
+                  {trinoStart.isPending ? "Starting…" : "Start"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={trinoBusy || !trinoIsRunning}
+                  onClick={() => trinoStop.mutate()}
+                >
+                  {trinoStop.isPending ? "Stopping…" : "Stop"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={trinoBusy || !trinoIsRunning}
+                  onClick={() => trinoRestart.mutate()}
+                >
+                  {trinoRestart.isPending ? "Restarting…" : "Restart"}
+                </button>
+              </div>
+
+              {trinoStatus && !trinoStatus.docker_available && (
+                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                  Docker/Podman compose is not available from this process. Start Trino manually if controls fail.
+                </p>
+              )}
+
+              {trinoNotice && (
+                <p className={trinoNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{trinoNotice.text}</p>
               )}
             </div>
           </div>

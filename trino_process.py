@@ -1,9 +1,10 @@
-"""Start, stop, and inspect the local Trino coordinator (Docker Compose)."""
+"""Start, stop, and inspect the local Trino coordinator (Podman Compose)."""
 
 from __future__ import annotations
 
 import subprocess
 import time
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ LOG_PATH = PROJECT_DIR / ".trino_service.log"
 
 STATUS_LABELS = {
     "ui": "Running (started from Settings)",
-    "external": "Running (started externally — e.g. docker compose)",
+    "external": "Running (started externally — e.g. podman compose)",
     "unknown": "Running (reachable, container not identified)",
     "stopped": "Stopped",
 }
@@ -48,23 +49,24 @@ def check_trino_server(settings: dict[str, Any] | None = None) -> bool:
         return False
 
 
+def _compose_cmd() -> list[str] | None:
+    if shutil.which("podman"):
+        return ["podman", "compose"]
+    if shutil.which("docker"):
+        return ["docker", "compose"]
+    return None
+
+
 def docker_available() -> bool:
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    return _compose_cmd() is not None
 
 
 def _docker_compose(args: list[str], *, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+    cmd = _compose_cmd()
+    if cmd is None:
+        raise RuntimeError("Podman or Docker Compose is not available.")
     return subprocess.run(
-        ["docker", "compose", *args],
+        [*cmd, *args],
         cwd=str(PROJECT_DIR),
         capture_output=True,
         text=True,
@@ -169,14 +171,14 @@ def start_server(settings: dict[str, Any] | None = None) -> tuple[bool, str]:
 
     if not docker_available():
         return False, (
-            "Docker is not available. Start Docker (or Colima), then try again. "
-            "Local dev: `docker compose up -d trino` from the project root."
+            "Podman or Docker Compose is not available. Start Podman or Docker, then try again. "
+            "Local dev: `podman compose up -d trino` from the project root."
         )
 
-    _append_log("docker compose up -d trino")
+    _append_log("podman compose up -d trino")
     result = _docker_compose(["up", "-d", "trino"])
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "docker compose failed").strip()
+        detail = (result.stderr or result.stdout or "podman compose failed").strip()
         _append_log(f"start failed: {detail}")
         return False, detail
 
@@ -207,13 +209,13 @@ def stop_server(settings: dict[str, Any] | None = None) -> tuple[bool, str]:
         return False, "Trino coordinator is not running."
 
     if not docker_available():
-        return False, "Docker is not available — cannot stop the Trino container."
+        return False, "Podman or Docker Compose is not available — cannot stop the Trino container."
 
-    _append_log("docker compose stop trino")
+    _append_log("podman compose stop trino")
     result = _docker_compose(["stop", "trino"], timeout=120)
     _clear_managed()
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "docker compose stop failed").strip()
+        detail = (result.stderr or result.stdout or "podman compose stop failed").strip()
         _append_log(f"stop failed: {detail}")
         return False, detail
 
@@ -228,15 +230,15 @@ def restart_server(settings: dict[str, Any] | None = None) -> tuple[bool, str]:
     url = _trino_base_url(cfg)
 
     if not docker_available():
-        return False, "Docker is not available. Start Docker (or Colima), then try again."
+        return False, "Podman or Docker Compose is not available. Start Podman or Docker, then try again."
 
     if not _container_id():
         return start_server(cfg)
 
-    _append_log("docker compose restart trino")
+    _append_log("podman compose restart trino")
     result = _docker_compose(["restart", "trino"], timeout=120)
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "docker compose restart failed").strip()
+        detail = (result.stderr or result.stdout or "podman compose restart failed").strip()
         _append_log(f"restart failed: {detail}")
         return False, detail
 

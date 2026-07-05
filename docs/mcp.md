@@ -4,7 +4,7 @@ Same Postgres and `.env` as the web app — agents just talk to port 8000 instea
 
 ## Start it
 
-- Docker: `docker compose up datapro-mcp` (or the full stack)
+- Podman: `podman compose up datapro-mcp` (or the full stack)
 - Local: `python mcp_server.py`
 - UI: **Settings → MCP server → Start**, or the **MCP** page
 
@@ -44,7 +44,7 @@ After `python scripts/migrate.py`, the catalog includes one optional **public** 
 
 | Server | Purpose | Start |
 |--------|---------|--------|
-| **Email (SMTP/IMAP)** | Send mail + search inbox (Gmail app password, etc.) | `python email_mcp_server.py` or `docker compose --profile integrations up -d email-mcp` |
+| **Email (SMTP/IMAP)** | Send mail + search inbox (Gmail app password, etc.) | `python email_mcp_server.py` or `podman compose --profile integrations up -d email-mcp` |
 
 **Email setup:** set `SMTP_*` / `IMAP_*` in `.env` (see `.env.example`). Optional `EMAIL_TO_ALLOWLIST` restricts who can receive mail.
 

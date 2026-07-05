@@ -19,11 +19,7 @@ export function dbConnectionDisplayFields(opts: {
   const databaseType =
     opts.warehouseTypeLabel?.trim() ||
     opts.databaseType?.trim() ||
-    (opts.connector === "postgres"
-      ? "PostgreSQL"
-      : opts.catalog
-        ? trinoCatalogLabel(opts.catalog)
-        : "Trino");
+    (opts.connector === "postgres" ? "Native PostgreSQL" : opts.connector === "trino" ? "Trino catalog" : "Trino");
   return {
     databaseType,
     schema: opts.schema?.trim() || "—",

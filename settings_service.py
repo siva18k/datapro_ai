@@ -35,6 +35,12 @@ MANAGED_KEYS = (
     "GEMINI_API_KEY",
     "OPENROUTER_API_KEY",
     "ASK_CONVERSATION_TURNS",
+    "TRINO_HOST",
+    "TRINO_PORT",
+    "TRINO_USER",
+    "TRINO_PASSWORD",
+    "TRINO_HTTP_SCHEME",
+    "TRINO_VERIFY_SSL",
 )
 
 SECRET_KEYS = frozenset(
@@ -45,6 +51,7 @@ SECRET_KEYS = frozenset(
         "ANTHROPIC_API_KEY",
         "GEMINI_API_KEY",
         "OPENROUTER_API_KEY",
+        "TRINO_PASSWORD",
         "DATABASE_URL",
     }
 )

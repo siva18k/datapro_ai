@@ -737,6 +737,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ database }),
     }),
+  metadataRagStatus: () => request<import("../types").MetadataRagStatus>("/settings/metadata-rag-status"),
+  reRagMetadata: (embedding_model?: string) =>
+    request<{
+      updated: number;
+      summary: string;
+      status: import("../types").MetadataRagStatus;
+    }>("/settings/re-rag", {
+      method: "POST",
+      body: JSON.stringify({ embedding_model }),
+    }),
 
   listDbConnections: () => request<SavedDbConnection[]>("/connections"),
   listWarehouseConnectors: () => request<WarehouseConnectorDefinition[]>("/connections/warehouse-connectors"),
@@ -1139,5 +1149,5 @@ export interface AppSettings {
     conversation_turns: number;
     max_conversation_turns: number;
   };
-  trino: TrinoSettingsPublic;
+  trino?: TrinoSettingsPublic;
 }
