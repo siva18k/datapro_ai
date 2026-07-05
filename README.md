@@ -2,7 +2,7 @@
 
 Catalog your data, embed documents, ask questions across domains, and hook up Cursor or Claude via MCP if you want agents in the loop.
 
-Built with React, FastAPI, Postgres + pgvector, sentence-transformers, and Mistral or Ollama for the LLM.
+Built with React, FastAPI, Postgres + pgvector, and Mistral or Ollama for the LLM.
 
 ## Catalog database (required)
 
@@ -34,7 +34,16 @@ docker compose up --build
 
 Then open the UI (default port **5173**). Service URLs and ports are in [docs/installation.md](docs/installation.md).
 
-Prefer running things locally without Docker? Same doc covers local setup.
+If you prefer local development instead of Docker:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cd web && npm install
+```
+
+The frontend lives in the web folder, so use `cd web && npm run dev` (or `npm --prefix web run dev` from the repo root). The repository root does not include its own package.json.
 
 ## What it does
 
@@ -75,7 +84,7 @@ External MCP servers (e.g. `email_mcp_server.py`) register on the MCP page and b
 
 ## Docs
 
-- [docs/README.md](docs/README.md) — index
+- [docs/guide.md](docs/guide.md) — index
 - **[Contributing & conventions](docs/contributing.md)** — themes, secrets, docs, UI consistency
 - **[Catalog database](docs/catalog-database.md)** — metadata + RAG Postgres setup (required)
 - [Installation](docs/installation.md) — setup and scripts
@@ -87,13 +96,28 @@ External MCP servers (e.g. `email_mcp_server.py`) register on the MCP page and b
 - [Architecture](docs/architecture.md) — how the pieces fit
 - [Troubleshooting](docs/troubleshooting.md) — when something breaks
 
-Demo warehouse SQL: [migrations/finance_data/README.md](migrations/finance_data/README.md)
+Demo warehouse SQL: [docs/finance-data-guide.md](docs/finance-data-guide.md)
 
 ## Keep private
 
 Do **not** commit real API keys, production database hosts, passwords, TLS certs, or personal AWS deployment files. Those belong in `.env`, `saved_db_connections.json`, `deploy/`, and `certs/` — all gitignored. See [docs/secrets.md](docs/secrets.md) and [docs/deploy-ecs.md](docs/deploy-ecs.md).
 
 `localhost` / `127.0.0.1` URLs in docs are local dev defaults only, not secrets.
+
+## Prevent accidentally committing secrets
+
+The repository already gitignores `.env` and related files. To add an extra local safeguard, you can enable the bundled pre-commit hook that blocks staging `.env` files:
+
+1. Enable the hooks directory for this repo:
+
+```bash
+cd /path/to/repo
+git config core.hooksPath .githooks
+```
+
+2. The hook will abort commits that include `.env` or `.env.*` in the staged changes. This is a local safeguard — enabling it on each developer machine is recommended.
+
+If `.env` was accidentally committed previously, remove it from history and rotate any exposed secrets (do not rely on history rewrites alone).
 
 ## Layout
 
@@ -114,3 +138,46 @@ sample_docs/      Example files
 ## License
 
 MIT — see [LICENSE](LICENSE). Clone and use it however you like; only the repo owner can push changes upstream.
+
+## Manual server start sequence
+
+Use these in separate terminals when you want to run everything locally (non-Docker).
+
+1. Ensure your catalog Postgres is already running and reachable from `.env` (`DATABASE_URL` or `PG*` values).
+
+2. Activate Python environment (repo root):
+
+```bash
+source .venv/bin/activate
+```
+
+3. Run catalog migrations (repo root):
+
+```bash
+python scripts/migrate.py
+```
+
+4. Start the API server (repo root):
+
+```bash
+uvicorn api.main:app --reload --host 127.0.0.1 --port 8080
+```
+
+5. Start the MCP server (new terminal, repo root):
+
+```bash
+source .venv/bin/activate
+python mcp_server.py
+```
+
+6. Start the web UI (new terminal):
+
+```bash
+cd web && npm run dev
+```
+
+7. Optional (only if using Ollama backend):
+
+```bash
+ollama serve
+```

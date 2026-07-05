@@ -117,7 +117,7 @@ curl http://localhost:8080/api/readiness  # catalog + chunks checks
 3. **RAG** — ingest files → rows in `knowledge_chunks`  
 4. **Ask** / **MCP** — search those chunks
 
-Optional demo warehouse (separate SQL objects **inside** the same catalog DB or another DB depending on script): [migrations/finance_data/README.md](../migrations/finance_data/README.md).
+Optional demo warehouse (separate SQL objects **inside** the same catalog DB or another DB depending on script): [docs/finance-data-guide.md](finance-data-guide.md).
 
 ## Docker Compose (bundled Postgres)
 

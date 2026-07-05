@@ -124,10 +124,26 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         domain_overrides=body.domain_overrides,
     )
 
-    if plan.execution_kind not in ("sql", "hybrid") and not scope_locked:
-        fallback = structured_fallback_available(prompt, embedder)
+    needs_structured_fallback = (
+        plan.execution_kind not in ("sql", "hybrid")
+        or not plan.domain_id
+        or (plan.execution_kind in ("sql", "hybrid") and not plan.source_id)
+    )
+    if needs_structured_fallback:
+        fallback = structured_fallback_available(
+            routing_prompt,
+            embedder,
+            allowed_domain_ids=selected_domains if scope_locked else None,
+        )
+        if not fallback and routing_prompt != prompt:
+            fallback = structured_fallback_available(
+                prompt,
+                embedder,
+                allowed_domain_ids=selected_domains if scope_locked else None,
+            )
         if fallback:
             plan = fallback
+            yield _status("Matched a structured dataset for this analytics prompt.")
 
     for note in plan.notes:
         yield _status(note)
@@ -141,14 +157,15 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         dash = build_dashboard(
             prompt=prompt,
             summary=(
-                "This prompt looks like a document question. Analytics works best with "
-                "**structured postgres datasets** — try metrics like *revenue by country*, "
+                "Could not match this prompt to a structured SQL dataset. Analytics works best with "
+                "**structured SQL datasets** — try metrics like *revenue by country*, "
                 "*top customers*, or *employee count by department*."
             ),
             columns=None,
             rows=None,
             domain_name=plan.domain_name,
             routing_method=plan.routing.get("method"),
+            query_kind="guidance",
         )
         yield _result(_attach_session(dash, session))
         return

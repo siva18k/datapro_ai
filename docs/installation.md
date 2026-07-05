@@ -2,6 +2,12 @@
 
 You need either Docker Desktop (easiest) or Python 3.11+ and Node 20+ for local dev. Either way you need an LLM — Mistral API key by default, or Ollama running on your machine.
 
+If you are on macOS and `npm` is not found, install Node.js first with Homebrew:
+
+```bash
+brew install node
+```
+
 **Catalog database:** one PostgreSQL instance holds all catalog metadata and RAG vectors. Docker bundles Postgres for local dev; otherwise point `.env` at your own database. Full guide: **[catalog-database.md](catalog-database.md)**.
 
 ## Docker
@@ -32,8 +38,10 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-cd web && npm install && cd ..
+cd web && npm install
 ```
+
+> Note: the repository root does not contain a package.json. Run frontend commands from the web folder (for example `cd web && npm run dev`) or use `npm --prefix web run dev` from the repo root.
 
 **Environment**
 
@@ -81,7 +89,7 @@ Secrets go in `.env` (you can also edit many of them from **Settings**). Don't c
 | `DATABASE_URL` | Yes | **Catalog DB** — metadata + RAG vectors ([catalog-database.md](catalog-database.md)) |
 | `DB_SCHEMA` | No | Defaults to `ragpro` |
 | `PGSSLMODE` | No | `require` for RDS, `disable` for local Docker |
-| `EMBEDDING_MODEL` | No | Default `all-MiniLM-L6-v2` |
+| `EMBEDDING_MODEL` | No | Default `mistral-embed-2312` |
 | `DEFAULT_LLM_BACKEND` | No | `mistral`, `openai`, `anthropic`, `gemini`, `openrouter`, `ollama` |
 | `OLLAMA_BASE_URL` | If Ollama | e.g. `http://localhost:11434` |
 | `MCP_URL` | No | Default `http://127.0.0.1:8000/mcp` |

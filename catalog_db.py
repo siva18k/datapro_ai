@@ -180,6 +180,7 @@ def apply_migrations() -> dict[str, bool]:
             "012_domain_mcp_references.sql",
             "013_mcp_reference_bindings.sql",
             "014_domain_prompts.sql",
+            "015_embedding_vector_unbounded.sql",
         ):
             migration = MIGRATIONS_DIR / migration_name
             if not migration.exists():

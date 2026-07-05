@@ -84,4 +84,4 @@ Optional sample EDW-style data:
 python scripts/migrate_finance_data.py --fresh
 ```
 
-Details in [migrations/finance_data/README.md](../migrations/finance_data/README.md). Then add a Postgres dataset in the catalog pointing at schema `finance_data`.
+Details in [docs/finance-data-guide.md](finance-data-guide.md). Then add a Postgres dataset in the catalog pointing at schema `finance_data`.

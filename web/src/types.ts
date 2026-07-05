@@ -135,6 +135,21 @@ export interface RagProfile {
   last_ingested_at?: string;
 }
 
+export interface MetadataRagStatusRow {
+  source_file: string;
+  chunk_id: string;
+  embedded: boolean;
+  embedding_model?: string;
+  updated_at?: string;
+}
+
+export interface MetadataRagStatus {
+  total: number;
+  embedded: number;
+  missing: number;
+  rows: MetadataRagStatusRow[];
+}
+
 export interface AskSource {
   source: string;
   chunk_id: string;

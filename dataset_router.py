@@ -250,14 +250,14 @@ def pick_structured_dataset(
     query_vector=None,
     chunks: list[dict] | None = None,
 ) -> dict | None:
-    """Best postgres structured dataset in a domain."""
+    """Best SQL-capable structured dataset in a domain (postgres/trino)."""
     source, confidence, _method = pick_dataset_in_domain(
         question,
         domain_id,
         embedder,
         query_vector=query_vector,
         source_type="structured",
-        connector="postgres",
+        connectors=["postgres", "trino"],
         chunks=chunks,
     )
     return source

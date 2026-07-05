@@ -73,7 +73,7 @@ Pages: Catalog, Ask, RAG, Analytics, MCP, Settings. Browser never touches Postgr
 | `ask` | Question → route → retrieve → LLM |
 | `rag` | Per-source profiles, re-ingest |
 
-Startup runs `bootstrap()` — catalog init and embedding model load (`all-MiniLM-L6-v2` by default).
+Startup runs `bootstrap()` — catalog init and embedding model load (`mistral-embed-2312` by default).
 
 ## Core modules (repo root)
 
@@ -205,7 +205,7 @@ Pipeline we're aiming for: route domain + dataset → load `definition.md` and s
 flowchart LR
     F[Files on disk<br/>or upload path] --> I[ingest_service]
     I --> C[Chunk text]
-    C --> M[SentenceTransformer<br/>embed]
+    C --> M[Mistral embeddings API]
     M --> U[db.upsert_chunks]
     U --> PG[(knowledge_chunks)]
     RP[RAG profile<br/>chunk_size, overlap] --> I

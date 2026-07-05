@@ -92,7 +92,7 @@ def question_references_catalog_tables(question: str, domain_id: str) -> bool:
         if domain["id"] != domain_id:
             continue
         for source in domain.get("sources") or []:
-            if source.get("connector") != "postgres":
+            if source.get("connector") not in ("postgres", "trino"):
                 continue
             for table_name in source.get("table_names") or []:
                 if table_mentioned_in_question(table_name, question):
@@ -100,7 +100,7 @@ def question_references_catalog_tables(question: str, domain_id: str) -> bool:
         return False
 
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
-        if source.get("connector") != "postgres":
+        if source.get("connector") not in ("postgres", "trino"):
             continue
         for table in list_table_metadata(source["id"]):
             if table_mentioned_in_question(table["table_name"], question):
@@ -249,8 +249,8 @@ def should_use_structured_sql(question: str, domain_id: str | None) -> bool:
     if not domain_id:
         return False
     structured = list_sources(domain_id=domain_id, source_type="structured", enabled_only=True)
-    postgres = [s for s in structured if s.get("connector") == "postgres"]
-    if not postgres:
+    sql_sources = [s for s in structured if s.get("connector") in ("postgres", "trino")]
+    if not sql_sources:
         return False
     if _GUIDANCE_PATTERNS.search(question):
         return False
@@ -260,7 +260,7 @@ def should_use_structured_sql(question: str, domain_id: str | None) -> bool:
         return True
     if _DESCRIPTIVE_STRUCTURED_PATTERNS.search(question):
         q_tokens = {t for t in re.findall(r"[a-z0-9]+", question.lower()) if len(t) > 2}
-        for source in postgres:
+        for source in sql_sources:
             for table in list_table_metadata(source["id"]):
                 for part in table["table_name"].lower().split("_"):
                     if len(part) > 2 and part in q_tokens:
@@ -448,12 +448,12 @@ def pick_structured_dataset(
 
 
 def load_table_business_rules_for_domain(domain_id: str | None) -> str:
-    """Collect table business rules from all structured postgres datasets in a domain."""
+    """Collect table business rules from all SQL-capable structured datasets in a domain."""
     if not domain_id:
         return ""
     parts: list[str] = []
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
-        if source.get("connector") != "postgres":
+        if source.get("connector") not in ("postgres", "trino"):
             continue
         try:
             block = build_schema_context(source["id"]).table_business_rules_block()
@@ -508,7 +508,7 @@ def build_domain_schema_context(
     *,
     table_names: list[str] | None = None,
 ) -> StructuredSchemaContext:
-    """Postgres tables in a domain — optionally narrowed to table_names."""
+    """SQL-capable structured tables in a domain — optionally narrowed to table_names."""
     primary = get_source(source_id=primary_source_id)
     if not primary:
         raise ValueError(f"Dataset not found: {primary_source_id}")
@@ -519,7 +519,7 @@ def build_domain_schema_context(
     seen: set[tuple[str, str]] = set()
 
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
-        if source.get("connector") != "postgres":
+        if source.get("connector") not in ("postgres", "trino"):
             continue
         def_md = load_definition_for_prompt(source)
         if def_md.strip() and def_md != "(none)":
@@ -544,7 +544,7 @@ def build_domain_schema_context(
         source_name=primary["name"],
         domain_id=domain_id,
         domain_name=primary.get("domain_name", ""),
-        connector="postgres",
+        connector=primary.get("connector") or "postgres",
         dataset_definition_md="\n\n".join(definition_parts),
         tables=tables_out,
     )
@@ -729,6 +729,9 @@ def _is_recoverable_sql_error(message: str) -> bool:
         or "undefined column" in lower
         or "42703" in lower
         or "ambiguous" in lower
+        or "syntax error" in lower
+        or "42601" in lower
+        or "scanner_yyerror" in lower
     )
 
 
@@ -920,21 +923,30 @@ def generate_and_execute_readonly_sql(
 
 def execute_readonly_sql(source_id: str, sql: str, *, max_rows: int = 500) -> tuple[list[str], list[list[Any]]]:
     """
-    Run validated read-only SQL against a cataloged postgres dataset.
-  Uses the dataset's stored connection config (read-only DB user in production).
+        Run validated read-only SQL against a cataloged structured SQL dataset.
+        Uses external config for postgres; trino-labeled sources run on the app DB connection.
     """
     validate_readonly_sql(sql)
     source = get_source(source_id=source_id)
-    if not source or source.get("connector") != "postgres":
-        raise ValueError("Dataset is not a postgres connection")
+    if not source:
+        raise ValueError("Dataset not found")
 
-    import pg8000.native
+    connector = source.get("connector")
+    if connector not in ("postgres", "trino"):
+        raise ValueError("Dataset is not a supported SQL connection")
 
-    from structured_db import _connect_external
-
-    cfg = postgres_config_from_source(source)
     limited = f"SELECT * FROM ({sql.rstrip(';')}) AS _q LIMIT {max_rows}"
-    conn = _connect_external(cfg)
+
+    if connector == "postgres":
+        from structured_db import _connect_external
+
+        cfg = postgres_config_from_source(source)
+        conn = _connect_external(cfg)
+    else:
+        from db import connect
+
+        conn, _schema = connect()
+
     try:
         result = conn.run(limited)
         columns = getattr(conn, "columns", None) or []

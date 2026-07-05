@@ -1,9 +1,9 @@
-from sentence_transformers import SentenceTransformer
-
 from ingest_service import DEFAULT_DOCS_PATH, ingest_files, list_available_docs
+from api.deps import get_embedder
+
 
 if __name__ == "__main__":
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    embedder = get_embedder()
     files = list_available_docs(DEFAULT_DOCS_PATH)
     report = ingest_files(files, embedder, replace_existing=True)
     print(f"Ingested {report['total_chunks']} chunks into Postgres.")

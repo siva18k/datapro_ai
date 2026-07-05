@@ -27,10 +27,40 @@ chroma_store/
 .api_server.pid
 .api_server.log
 
-# Frontend build
+# Local Python environments and package caches
+.venv/
+.venv*/
+venv/
+venv*/
+env/
+env*/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.pip-wheel-metadata/
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Frontend build and local installs
 web/node_modules/
 web/dist/
 *.tsbuildinfo
+node_modules/
+.npm/
+.pnpm-store/
+
+# Local editor / tool caches
+.vscode/
+.idea/
 
 # TLS / proxy certs (keep under certs/ locally — never commit)
 *.cer

@@ -129,6 +129,31 @@ def knowledge_chunks_has_table_metadata_column() -> bool:
     return _TABLE_METADATA_COLUMN
 
 
+def knowledge_chunks_has_embedding_model_column() -> bool:
+    global _CATALOG_COLUMNS
+    # Reuse the existing cached flag where appropriate — check explicitly to avoid
+    # repeated queries when calling upsert_chunks frequently.
+    try:
+        conn, schema = connect()
+        try:
+            rows = conn.run(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = :schema
+                  AND table_name = 'knowledge_chunks'
+                  AND column_name = 'embedding_model'
+                LIMIT 1
+                """,
+                schema=schema,
+            )
+            return bool(rows)
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def knowledge_chunks_has_catalog_columns() -> bool:
     global _CATALOG_COLUMNS
     if _CATALOG_COLUMNS is not None:
@@ -256,7 +281,7 @@ def _search_chunks_with_vector(
     conn, schema = connect()
     try:
         has_catalog = knowledge_chunks_has_catalog_columns()
-        clauses = []
+        clauses = ["embedding IS NOT NULL", "vector_dims(embedding) = vector_dims(:embedding::vector)"]
         params: dict = {"embedding": embedding}
         if has_catalog:
             if domain_id:
@@ -348,6 +373,7 @@ def upsert_chunks(items, embedder):
         has_catalog = knowledge_chunks_has_catalog_columns()
         has_table_meta = knowledge_chunks_has_table_metadata_column()
         conflict_on_source_chunk = knowledge_chunks_has_source_chunk_unique()
+        has_embedding_col = knowledge_chunks_has_embedding_model_column() if has_catalog else False
         for item in items:
             embedding = vector_literal(embedder.encode([item["content"]])[0])
             if has_catalog:
@@ -363,6 +389,9 @@ def upsert_chunks(items, embedder):
                     if has_table_meta
                     else ""
                 )
+                embedding_col = ", embedding_model" if has_embedding_col else ""
+                embedding_val = ", :embedding_model" if has_embedding_col else ""
+                embedding_set = ", embedding_model = EXCLUDED.embedding_model" if has_embedding_col else ""
                 params = {
                     "id": item["id"],
                     "source_file": item["source_file"],
@@ -372,6 +401,7 @@ def upsert_chunks(items, embedder):
                     "domain_id": item.get("domain_id"),
                     "source_id": item.get("source_id"),
                     "rag_profile_id": item.get("rag_profile_id"),
+                    "embedding_model": item.get("embedding_model") or None,
                 }
                 if has_table_meta:
                     params["table_metadata_id"] = item.get("table_metadata_id")
@@ -379,10 +409,10 @@ def upsert_chunks(items, embedder):
                     f"""
                     INSERT INTO {schema}.knowledge_chunks
                         (id, source_file, chunk_id, content, embedding,
-                         domain_id, source_id, rag_profile_id{table_meta_col})
+                         domain_id, source_id, rag_profile_id{table_meta_col}{embedding_col})
                     VALUES
                         (:id, :source_file, :chunk_id, :content, :embedding::vector,
-                         :domain_id::uuid, :source_id::uuid, :rag_profile_id::uuid{table_meta_val})
+                         :domain_id::uuid, :source_id::uuid, :rag_profile_id::uuid{table_meta_val}{embedding_val})
                     ON CONFLICT {conflict} DO UPDATE SET
                         id = EXCLUDED.id,
                         source_file = EXCLUDED.source_file,
@@ -391,7 +421,7 @@ def upsert_chunks(items, embedder):
                         embedding = EXCLUDED.embedding,
                         domain_id = EXCLUDED.domain_id,
                         source_id = EXCLUDED.source_id,
-                        rag_profile_id = EXCLUDED.rag_profile_id{table_meta_set},
+                        rag_profile_id = EXCLUDED.rag_profile_id{table_meta_set}{embedding_set},
                         updated_at = now()
                     """,
                     **params,
@@ -402,26 +432,50 @@ def upsert_chunks(items, embedder):
                     if conflict_on_source_chunk
                     else "(id)"
                 )
-                conn.run(
-                    f"""
-                    INSERT INTO {schema}.knowledge_chunks
-                        (id, source_file, chunk_id, content, embedding)
-                    VALUES
-                        (:id, :source_file, :chunk_id, :content, :embedding::vector)
-                    ON CONFLICT {conflict} DO UPDATE SET
-                        id = EXCLUDED.id,
-                        source_file = EXCLUDED.source_file,
-                        chunk_id = EXCLUDED.chunk_id,
-                        content = EXCLUDED.content,
-                        embedding = EXCLUDED.embedding,
-                        updated_at = now()
-                    """,
-                    id=item["id"],
-                    source_file=item["source_file"],
-                    chunk_id=item["chunk_id"],
-                    content=item["content"],
-                    embedding=embedding,
-                )
+                if has_embedding_col:
+                    conn.run(
+                        f"""
+                        INSERT INTO {schema}.knowledge_chunks
+                            (id, source_file, chunk_id, content, embedding, embedding_model)
+                        VALUES
+                            (:id, :source_file, :chunk_id, :content, :embedding::vector, :embedding_model)
+                        ON CONFLICT {conflict} DO UPDATE SET
+                            id = EXCLUDED.id,
+                            source_file = EXCLUDED.source_file,
+                            chunk_id = EXCLUDED.chunk_id,
+                            content = EXCLUDED.content,
+                            embedding = EXCLUDED.embedding,
+                            embedding_model = EXCLUDED.embedding_model,
+                            updated_at = now()
+                        """,
+                        id=item["id"],
+                        source_file=item["source_file"],
+                        chunk_id=item["chunk_id"],
+                        content=item["content"],
+                        embedding=embedding,
+                        embedding_model=item.get("embedding_model") or None,
+                    )
+                else:
+                    conn.run(
+                        f"""
+                        INSERT INTO {schema}.knowledge_chunks
+                            (id, source_file, chunk_id, content, embedding)
+                        VALUES
+                            (:id, :source_file, :chunk_id, :content, :embedding::vector)
+                        ON CONFLICT {conflict} DO UPDATE SET
+                            id = EXCLUDED.id,
+                            source_file = EXCLUDED.source_file,
+                            chunk_id = EXCLUDED.chunk_id,
+                            content = EXCLUDED.content,
+                            embedding = EXCLUDED.embedding,
+                            updated_at = now()
+                        """,
+                        id=item["id"],
+                        source_file=item["source_file"],
+                        chunk_id=item["chunk_id"],
+                        content=item["content"],
+                        embedding=embedding,
+                    )
     finally:
         conn.close()
 
@@ -444,6 +498,8 @@ def list_ingested_sources(*, domain_id: str | None = None, source_id: str | None
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         group_cols = "source_file, domain_id, source_id" if has_catalog else "source_file"
         catalog_sel = ", domain_id::text, source_id::text" if has_catalog else ", NULL::text, NULL::text"
+        # Include the embedding_model(s) used for each source_file (comma-separated distinct list)
+        embedding_agg = ", string_agg(DISTINCT embedding_model, ',') FILTER (WHERE embedding_model IS NOT NULL)"
         rows = conn.run(
             f"""
             SELECT
@@ -452,6 +508,7 @@ def list_ingested_sources(*, domain_id: str | None = None, source_id: str | None
                 MIN(LENGTH(content)) AS min_chars,
                 MAX(LENGTH(content)) AS max_chars,
                 MAX(updated_at) AS last_ingested
+                {embedding_agg}
                 {catalog_sel}
             FROM {schema}.knowledge_chunks
             {where}
@@ -470,8 +527,9 @@ def list_ingested_sources(*, domain_id: str | None = None, source_id: str | None
             "min_chars": row[2],
             "max_chars": row[3],
             "last_ingested": row[4],
-            "domain_id": row[5],
-            "source_id": row[6],
+            "embedding_model": row[5] if has_catalog else None,
+            "domain_id": row[6] if has_catalog else None,
+            "source_id": row[7] if has_catalog else None,
         }
         for row in rows
     ]

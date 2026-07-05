@@ -2,7 +2,7 @@
 """Load finance_data schema from sample_docs/finance_data_sqls into PostgreSQL.
 
 Creates schema ``finance_data``, applies DDL from the myedw script set (adapted),
-then loads seeds. Skips broken/duplicate source files — see migrations/finance_data/README.md.
+then loads seeds. Skips broken/duplicate source files — see docs/finance-data-guide.md.
 
 Usage:
     python scripts/migrate_finance_data.py

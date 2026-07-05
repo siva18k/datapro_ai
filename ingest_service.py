@@ -3,11 +3,13 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from db import delete_chunks_by_source, upsert_chunks
+from settings_service import get_embedding_model
 
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 60
 DEFAULT_DOCS_PATH = Path("sample_docs")
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# Use settings-managed embedding model when creating chunk items
+EMBEDDING_MODEL = get_embedding_model()
 EMBEDDING_DIMENSIONS = 384
 SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf", ".json"}
 
@@ -68,6 +70,7 @@ def build_items_for_file(
     if domain_slug and source_slug:
         prefix = f"{domain_slug}_{source_slug}_{file_path.stem}"
     items = []
+    model = get_embedding_model()
     for i, chunk in enumerate(chunk_text(text, chunk_size, chunk_overlap)):
         items.append(
             {
@@ -78,6 +81,7 @@ def build_items_for_file(
                 "domain_id": domain_id,
                 "source_id": source_id,
                 "rag_profile_id": rag_profile_id,
+                "embedding_model": model,
             }
         )
     return items

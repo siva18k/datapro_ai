@@ -13,10 +13,13 @@ import type {
   SyncColumnsResult,
   Dataset,
   DatasetSummary,
+  DatasetAsset,
+  DatasetSyncResult,
   Domain,
   FileRagRow,
   RagProfile,
   TableMeta,
+  MetadataRagStatus,
 } from "../types";
 
 const BASE = "/api";
@@ -160,6 +163,12 @@ export const api = {
       `/datasets/${id}/rag/settings`,
       { method: "PUT", body: JSON.stringify(data) },
     ),
+  reRagMetadata: (embeddingModel?: string) =>
+    request<{ updated: number; summary: string; status: MetadataRagStatus }>(`/settings/re-rag`, {
+      method: "POST",
+      body: JSON.stringify({ embedding_model: embeddingModel }),
+    }),
+  metadataRagStatus: () => request<MetadataRagStatus>(`/settings/metadata-rag-status`),
   ingestDatasetRag: (
     id: string,
     data?: { table_ids?: string[]; file_names?: string[] },

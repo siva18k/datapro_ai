@@ -69,6 +69,7 @@ def build_dashboard(
     rows: list[list[Any]] | None,
     domain_name: str | None = None,
     routing_method: str | None = None,
+    query_kind: str | None = "structured",
     sql: str | None = None,
     notes: list[str] | None = None,
     time_context: dict[str, Any] | None = None,
@@ -83,11 +84,11 @@ def build_dashboard(
             summary=brief
             or (
                 "No tabular data returned. Try an analytical question against a "
-                "structured postgres dataset (e.g. revenue by country, top customers)."
+                "structured SQL dataset (e.g. revenue by country, top customers)."
             ),
             domain_name=domain_name,
             routing_method=routing_method,
-            query_kind="structured",
+            query_kind=query_kind,
             sql=sql,
             notes=gap_notes,
         )
@@ -154,7 +155,7 @@ def build_dashboard(
         kpis=kpis,
         domain_name=domain_name,
         routing_method=routing_method,
-        query_kind="structured",
+        query_kind=query_kind,
         sql=sql,
         notes=gap_notes,
     )

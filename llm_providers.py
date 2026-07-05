@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 EMBEDDING_MODEL_OPTIONS = (
-    "all-MiniLM-L6-v2",
-    "all-mpnet-base-v2",
-    "paraphrase-multilingual-MiniLM-L12-v2",
+    # Mistral cloud embedding models
+    "mistral-embed-1",
+    "mistral-embed-2312",
 )
 
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# Planned default embedding model.
+DEFAULT_EMBEDDING_MODEL = "mistral-embed-2312"
 
 # Mistral La Plateforme free-tier chat models (Experiment plan rate limits vary by model).
 # Embedding, moderation, and audio models are omitted — not used for Ask / Analytics chat.

@@ -98,7 +98,7 @@ def retrieve_for_question_with_debug(
     use_mcp: bool = False,
     mcp_url: str | None = None,
     domain_override: str | None = None,
-    embedding_model: str = "all-MiniLM-L6-v2",
+    embedding_model: str = "mistral-embed-2312",
 ) -> dict[str, Any]:
     query_vector = embedder.encode([question])[0]
     chunks, meta = retrieve_for_question(

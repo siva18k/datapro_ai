@@ -40,7 +40,7 @@ services:
       PGSSLMODE: disable
       DB_SCHEMA: ${DB_SCHEMA:-ragpro}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-mistral-embed-2312}
       DEFAULT_LLM_BACKEND: ${DEFAULT_LLM_BACKEND:-mistral}
       EMAIL_MCP_URL: ${EMAIL_MCP_URL:-http://127.0.0.1:8010/mcp}
     restart: "no"
@@ -59,7 +59,7 @@ services:
       <<: *app-env
       MCP_URL: http://mcp:8000/mcp
       EMAIL_MCP_URL: ${EMAIL_MCP_URL:-http://email-mcp:8010/mcp}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # OLLAMA_BASE_URL removed to prefer remote Mistral by default
     volumes:
       - ./sample_docs:/app/sample_docs:ro
       - datapro_uploads:/app/uploads

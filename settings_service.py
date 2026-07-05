@@ -197,7 +197,9 @@ def get_embedding_model() -> str:
 
     raw = get_raw_settings()
     model = (raw.get("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL).strip()
-    return model or DEFAULT_EMBEDDING_MODEL
+    if not model or not model.startswith("mistral-embed"):
+        return DEFAULT_EMBEDDING_MODEL
+    return model
 
 
 def get_ask_conversation_turns() -> int:
