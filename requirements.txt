@@ -1,11 +1,14 @@
-# Core runtime dependencies for the API, MCP server, ingestion, and DB access.
-# Optional/analysis-heavy packages were removed to keep the Docker image smaller.
 pg8000
+psycopg[binary]>=3.2
+trino
+sentence-transformers
+torch
+torchvision
 requests
-certifi
-python-dotenv
+pandas
 pypdf
-mcp
+python-dotenv
+mcp[cli]
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart

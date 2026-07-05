@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { CONNECTOR_LABELS } from "../types";
 import { DbConnectionModal } from "./DbConnectionModal";
 
-const CONNECTORS = ["postgres", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
+const CONNECTORS = ["trino", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
 const NEW_CONNECTION = "__new__";
 const REMOTE_CONNECTORS = new Set(["api", "web_url", "sharepoint"]);
 
@@ -52,7 +52,7 @@ function buildConfig(
 
 function connectorReady(connector: string, name: string, connectionId: string, url: string, baseUrl: string): boolean {
   if (!name.trim()) return false;
-  if (connector === "postgres") return !!connectionId;
+  if (connector === "trino" || connector === "postgres") return !!connectionId;
   if (connector === "web_url" || connector === "sharepoint") return !!url.trim();
   if (connector === "api") return !!baseUrl.trim();
   return true;
@@ -75,7 +75,7 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
   const { data: dbConnections } = useQuery({
     queryKey: ["db-connections"],
     queryFn: api.listDbConnections,
-    enabled: connector === "postgres",
+    enabled: connector === "trino" || connector === "postgres",
   });
 
   const { data: fileTypes } = useQuery({
@@ -98,12 +98,13 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
         endpoints,
         authToken,
       });
-      if (connector === "postgres") {
-        config = await api.getDbConnectionConfig(connectionId);
+      if (connector === "trino" || connector === "postgres") {
+        const cfg = await api.getDbConnectionConfig(connectionId);
+        config = { ...cfg, connector: "trino" };
       }
       const dataset = await api.createDataset(domainId, {
         name: name.trim(),
-        connector,
+        connector: connector === "postgres" ? "trino" : connector,
         config,
       });
       const warnings: string[] = [];
@@ -174,7 +175,7 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
           </select>
         </div>
 
-        {connector === "postgres" && (
+        {(connector === "trino" || connector === "postgres") && (
           <div className="field mb-0 add-dataset-field-wide">
             <label className="label">Connection</label>
             <select
@@ -200,7 +201,7 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
               </option>
               {dbConnections?.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} ({c.host})
+                  {c.name} ({c.catalog}.{c.schema})
                 </option>
               ))}
             </select>

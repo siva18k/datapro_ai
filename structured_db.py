@@ -148,3 +148,42 @@ def list_foreign_keys(config: dict) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def structured_runtime_config(source: dict) -> tuple[dict, str]:
+    """Return (connection config, kind) for structured SQL datasets."""
+    connector = (source.get("connector") or "").strip().lower()
+    if connector == "trino":
+        from structured_trino import trino_config_from_source
+
+        return trino_config_from_source(source), "trino"
+    if connector == "postgres":
+        return postgres_config_from_source(source), "postgres"
+    raise ValueError(f"Unsupported structured connector: {connector}")
+
+
+def list_schema_tables_for_source(source: dict) -> list[str]:
+    cfg, kind = structured_runtime_config(source)
+    if kind == "trino":
+        from structured_trino import list_schema_tables as trino_list_tables
+
+        return trino_list_tables(cfg)
+    return list_schema_tables(cfg)
+
+
+def list_table_columns_for_source(source: dict, table_name: str) -> list[dict[str, Any]]:
+    cfg, kind = structured_runtime_config(source)
+    if kind == "trino":
+        from structured_trino import list_table_columns as trino_list_columns
+
+        return trino_list_columns(cfg, table_name)
+    return list_table_columns(cfg, table_name)
+
+
+def list_foreign_keys_for_source(source: dict) -> list[dict[str, Any]]:
+    cfg, kind = structured_runtime_config(source)
+    if kind == "trino":
+        from structured_trino import list_foreign_keys as trino_list_fks
+
+        return trino_list_fks(cfg)
+    return list_foreign_keys(cfg)

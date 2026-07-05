@@ -2,13 +2,15 @@
 
 Catalog your data, embed documents, ask questions across domains, and hook up Cursor or Claude via MCP if you want agents in the loop.
 
-Built with React, FastAPI, Postgres + pgvector, and Mistral or Ollama for the LLM.
+Built with React, FastAPI, Postgres + pgvector, sentence-transformers, and Mistral or Ollama for the LLM.
 
 ## Catalog database (required)
 
-DATA Pro stores **catalog metadata and RAG embeddings** in **your own PostgreSQL** database (domains, datasets, `knowledge_chunks`, pgvector). Configure the connection in `.env` — this is separate from optional warehouse/source databases you attach later in the catalog.
+DATA Pro stores **catalog metadata and RAG embeddings** in **your own PostgreSQL** database (domains, datasets, `knowledge_chunks`, pgvector). **Business warehouse queries** run through **Trino** — configure the coordinator in Settings and register catalogs in `docker/trino/catalog/` (local) or on the Trino server (AWS).
 
 **→ [Set up your catalog database](docs/catalog-database.md)** — create Postgres + pgvector, set `DATABASE_URL`, run migrations.
+
+**→ [Trino for business data](docs/trino.md)** — Docker Trino service, catalog bindings, finance demo.
 
 Docker Compose includes Postgres for local dev; for your own RDS or existing Postgres, follow the same doc.
 
@@ -30,26 +32,23 @@ cp .env.example .env
 # Optional: cp saved_db_connections.json.example saved_db_connections.json
 
 docker compose up --build
+
+# First run: Trino finance catalog (local demo Postgres)
+cp docker/trino/catalog/finance.properties.example docker/trino/catalog/finance.properties
+
+# Optional: load demo finance warehouse (queried via Trino catalog `finance`)
+docker compose run --rm api python scripts/migrate_finance_data.py --fresh
 ```
 
-Then open the UI (default port **5173**). Service URLs and ports are in [docs/installation.md](docs/installation.md).
+Then open the UI (default port **5173**). In **Settings → Database connections**, set Trino to `localhost:8081`, add a binding (`finance` / `finance_data`), and save. See [docs/trino.md](docs/trino.md).
 
-If you prefer local development instead of Docker:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cd web && npm install
-```
-
-The frontend lives in the web folder, so use `cd web && npm run dev` (or `npm --prefix web run dev` from the repo root). The repository root does not include its own package.json.
+Prefer running things locally without Docker? Same doc covers local setup.
 
 ## What it does
 
-**Data Catalog** — domains, datasets, Postgres connections, file uploads.
+**Data Catalog** — domains, datasets, Trino catalog bindings, file uploads.
 
-**Ask** — chat over your documents (RAG) or structured SQL when you have Postgres datasets wired up.
+**Ask** — chat over your documents (RAG) or structured SQL when you have Trino-backed datasets wired up.
 
 **Analytics** — build dashboards from plain English.
 
@@ -84,9 +83,10 @@ External MCP servers (e.g. `email_mcp_server.py`) register on the MCP page and b
 
 ## Docs
 
-- [docs/guide.md](docs/guide.md) — index
+- [docs/README.md](docs/README.md) — index
 - **[Contributing & conventions](docs/contributing.md)** — themes, secrets, docs, UI consistency
 - **[Catalog database](docs/catalog-database.md)** — metadata + RAG Postgres setup (required)
+- **[Trino for business data](docs/trino.md)** — warehouse SQL via Trino (Docker local, AWS-ready)
 - [Installation](docs/installation.md) — setup and scripts
 - [Secrets](docs/secrets.md) — `.env` and saved connections (templates only in git)
 - [Docker](docs/docker.md) — compose, services, Ollama on the host
@@ -96,28 +96,13 @@ External MCP servers (e.g. `email_mcp_server.py`) register on the MCP page and b
 - [Architecture](docs/architecture.md) — how the pieces fit
 - [Troubleshooting](docs/troubleshooting.md) — when something breaks
 
-Demo warehouse SQL: [docs/finance-data-guide.md](docs/finance-data-guide.md)
+Demo warehouse SQL: [migrations/finance_data/README.md](migrations/finance_data/README.md)
 
 ## Keep private
 
 Do **not** commit real API keys, production database hosts, passwords, TLS certs, or personal AWS deployment files. Those belong in `.env`, `saved_db_connections.json`, `deploy/`, and `certs/` — all gitignored. See [docs/secrets.md](docs/secrets.md) and [docs/deploy-ecs.md](docs/deploy-ecs.md).
 
 `localhost` / `127.0.0.1` URLs in docs are local dev defaults only, not secrets.
-
-## Prevent accidentally committing secrets
-
-The repository already gitignores `.env` and related files. To add an extra local safeguard, you can enable the bundled pre-commit hook that blocks staging `.env` files:
-
-1. Enable the hooks directory for this repo:
-
-```bash
-cd /path/to/repo
-git config core.hooksPath .githooks
-```
-
-2. The hook will abort commits that include `.env` or `.env.*` in the staged changes. This is a local safeguard — enabling it on each developer machine is recommended.
-
-If `.env` was accidentally committed previously, remove it from history and rotate any exposed secrets (do not rely on history rewrites alone).
 
 ## Layout
 
@@ -138,46 +123,3 @@ sample_docs/      Example files
 ## License
 
 MIT — see [LICENSE](LICENSE). Clone and use it however you like; only the repo owner can push changes upstream.
-
-## Manual server start sequence
-
-Use these in separate terminals when you want to run everything locally (non-Docker).
-
-1. Ensure your catalog Postgres is already running and reachable from `.env` (`DATABASE_URL` or `PG*` values).
-
-2. Activate Python environment (repo root):
-
-```bash
-source .venv/bin/activate
-```
-
-3. Run catalog migrations (repo root):
-
-```bash
-python scripts/migrate.py
-```
-
-4. Start the API server (repo root):
-
-```bash
-uvicorn api.main:app --reload --host 127.0.0.1 --port 8080
-```
-
-5. Start the MCP server (new terminal, repo root):
-
-```bash
-source .venv/bin/activate
-python mcp_server.py
-```
-
-6. Start the web UI (new terminal):
-
-```bash
-cd web && npm run dev
-```
-
-7. Optional (only if using Ollama backend):
-
-```bash
-ollama serve
-```

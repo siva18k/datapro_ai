@@ -42,10 +42,11 @@ from catalog_service import (
 from dataset_connectors.registry import CONNECTOR_SOURCE_TYPES, is_content_connector, is_remote_connector
 from ingest_service import SUPPORTED_EXTENSIONS
 from structured_db import (
-    list_schema_tables,
-    list_table_columns,
-    postgres_config_from_source,
+    list_schema_tables_for_source,
+    list_table_columns_for_source,
+    list_foreign_keys_for_source,
 )
+from structured_sql import is_structured_sql_connector
 from catalog_definition import draft_dataset_definition, strip_markdown_fences
 from relationship_inference import build_relationships_section, merge_relationships_into_definition
 
@@ -199,8 +200,8 @@ def dataset_summary(dataset_id: str):
     cfg = source.get("config") or {}
     connector = source["connector"]
     out: dict = {"connector": connector, "name": source["name"]}
-    if connector == "postgres":
-        out["host"] = cfg.get("host")
+    if is_structured_sql_connector(connector):
+        out["catalog"] = cfg.get("catalog")
         out["schema"] = cfg.get("schema")
         out["table_count"] = len(list_table_metadata(dataset_id))
     elif is_content_connector(connector):
@@ -254,10 +255,10 @@ def sync_dataset(dataset_id: str, body: SyncBody | None = None):
 @router.get("/datasets/{dataset_id}/remote-tables")
 def remote_tables(dataset_id: str):
     source = get_source(source_id=dataset_id)
-    if not source or source["connector"] != "postgres":
-        raise HTTPException(400, "Dataset is not a postgres connection")
+    if not source or not is_structured_sql_connector(source["connector"]):
+        raise HTTPException(400, "Dataset is not a structured SQL connection")
     try:
-        tables = list_schema_tables(postgres_config_from_source(source))
+        tables = list_schema_tables_for_source(source)
     except Exception as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"tables": tables}
@@ -273,15 +274,14 @@ def add_tables(dataset_id: str, body: TablesBody):
     source = get_source(source_id=dataset_id)
     if not source:
         raise HTTPException(404, "Dataset not found")
-    if source["connector"] != "postgres":
-        raise HTTPException(400, "Only postgres datasets support table cataloging")
+    if not is_structured_sql_connector(source["connector"]):
+        raise HTTPException(400, "Only structured SQL datasets support table cataloging")
     schema = (source.get("config") or {}).get("schema") or "public"
-    pg_cfg = postgres_config_from_source(source)
     created = []
     for name in body.table_names:
         table = upsert_table_metadata(dataset_id, schema, name)
         try:
-            discovered = list_table_columns(pg_cfg, name)
+            discovered = list_table_columns_for_source(source, name)
             sync_columns_from_introspection(table["id"], discovered)
         except Exception as exc:
             raise HTTPException(
@@ -319,9 +319,10 @@ def sync_columns(table_id: str):
     source = get_source(source_id=table["source_id"])
     if not source:
         raise HTTPException(404, "Dataset not found")
-    pg_cfg = postgres_config_from_source(source)
+    if not is_structured_sql_connector(source.get("connector")):
+        raise HTTPException(400, "Column sync requires a structured SQL dataset")
     try:
-        discovered = list_table_columns(pg_cfg, table["table_name"])
+        discovered = list_table_columns_for_source(source, table["table_name"])
         result = sync_columns_from_introspection(table_id, discovered)
     except Exception as exc:
         raise HTTPException(502, str(exc)) from exc
@@ -367,8 +368,8 @@ def get_definition_relationships(dataset_id: str):
     source = get_source(source_id=dataset_id)
     if not source:
         raise HTTPException(404, "Dataset not found")
-    if source.get("connector") != "postgres":
-        raise HTTPException(400, "Relationship inference is only available for postgres datasets")
+    if not is_structured_sql_connector(source.get("connector")):
+        raise HTTPException(400, "Relationship inference requires a structured SQL dataset")
     try:
         payload = build_relationships_section(dataset_id)
     except ValueError as exc:

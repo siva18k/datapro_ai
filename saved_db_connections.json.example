@@ -2,13 +2,14 @@
   "connections": [
     {
       "id": "00000000-0000-0000-0000-000000000001",
-      "name": "My warehouse",
+      "name": "Finance_DB",
+      "connector": "trino",
+      "catalog": "finance",
+      "schema": "finance_data",
       "host": "your-db-host.example.com",
       "port": 5432,
-      "user": "your_user",
-      "password": "your_password",
+      "user": "warehouse_user",
       "database": "postgres",
-      "schema": "public",
       "sslmode": "require"
     }
   ]

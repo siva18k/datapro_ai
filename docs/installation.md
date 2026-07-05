@@ -2,12 +2,6 @@
 
 You need either Docker Desktop (easiest) or Python 3.11+ and Node 20+ for local dev. Either way you need an LLM — Mistral API key by default, or Ollama running on your machine.
 
-If you are on macOS and `npm` is not found, install Node.js first with Homebrew:
-
-```bash
-brew install node
-```
-
 **Catalog database:** one PostgreSQL instance holds all catalog metadata and RAG vectors. Docker bundles Postgres for local dev; otherwise point `.env` at your own database. Full guide: **[catalog-database.md](catalog-database.md)**.
 
 ## Docker
@@ -23,11 +17,12 @@ docker compose up --build
 
 UI: http://localhost:5173  
 API health: http://localhost:8080/api/health  
+Trino UI: http://localhost:8081  
 MCP: http://127.0.0.1:8000/mcp
 
 First startup can take a few minutes while the embedding model downloads. More compose detail in [docker.md](docker.md).
 
-Once it's up: check **Settings** (LLM + DB are mostly pre-filled in Docker), add a domain and dataset in **Data Catalog**, ingest something, then try **Ask**.
+Once it's up: check **Settings** (catalog DB + Trino coordinator are pre-filled in Docker), add a Trino catalog binding (`finance` / `finance_data`), optionally load the finance demo (`migrate_finance_data.py`), add a domain and dataset in **Data Catalog**, then try **Ask**. See [trino.md](trino.md).
 
 ## Local development
 
@@ -38,10 +33,8 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-cd web && npm install
+cd web && npm install && cd ..
 ```
-
-> Note: the repository root does not contain a package.json. Run frontend commands from the web folder (for example `cd web && npm run dev`) or use `npm --prefix web run dev` from the repo root.
 
 **Environment**
 
@@ -88,13 +81,17 @@ Secrets go in `.env` (you can also edit many of them from **Settings**). Don't c
 | `MISTRAL_API_KEY` | Usually | Skip if `DEFAULT_LLM_BACKEND=ollama` |
 | `DATABASE_URL` | Yes | **Catalog DB** — metadata + RAG vectors ([catalog-database.md](catalog-database.md)) |
 | `DB_SCHEMA` | No | Defaults to `ragpro` |
+| `TRINO_HOST` | For warehouse SQL | Coordinator hostname (`trino` in Compose, `localhost` from host) |
+| `TRINO_PORT` | No | `8081` on host (maps to 8080 in container); default `8081` in `.env.example` |
+| `TRINO_USER` | No | Default `trino` |
+| `TRINO_HTTP_SCHEME` | No | `http` locally, `https` on AWS internal ALB |
 | `PGSSLMODE` | No | `require` for RDS, `disable` for local Docker |
-| `EMBEDDING_MODEL` | No | Default `mistral-embed-2312` |
+| `EMBEDDING_MODEL` | No | Default `all-MiniLM-L6-v2` |
 | `DEFAULT_LLM_BACKEND` | No | `mistral`, `openai`, `anthropic`, `gemini`, `openrouter`, `ollama` |
 | `OLLAMA_BASE_URL` | If Ollama | e.g. `http://localhost:11434` |
 | `MCP_URL` | No | Default `http://127.0.0.1:8000/mcp` |
 
-Warehouse Postgres connections (the databases you query in Ask) live in `saved_db_connections.json` or **Settings → Dataset connections**, not in `.env`. They are **separate** from the catalog database — see [catalog-database.md](catalog-database.md).
+Business warehouse access uses **Trino**: coordinator settings in `.env` / **Settings → Trino coordinator**; catalog bindings (friendly name + `catalog` + `schema`) in `saved_db_connections.json` or **Settings → Database connections**. Real database credentials live in Trino catalog config (`docker/trino/catalog/` locally). This is **separate** from the catalog Postgres — see [trino.md](trino.md) and [catalog-database.md](catalog-database.md).
 
 ## Handy scripts
 

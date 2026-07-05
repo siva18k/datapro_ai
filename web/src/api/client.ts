@@ -13,13 +13,10 @@ import type {
   SyncColumnsResult,
   Dataset,
   DatasetSummary,
-  DatasetAsset,
-  DatasetSyncResult,
   Domain,
   FileRagRow,
   RagProfile,
   TableMeta,
-  MetadataRagStatus,
 } from "../types";
 
 const BASE = "/api";
@@ -163,12 +160,6 @@ export const api = {
       `/datasets/${id}/rag/settings`,
       { method: "PUT", body: JSON.stringify(data) },
     ),
-  reRagMetadata: (embeddingModel?: string) =>
-    request<{ updated: number; summary: string; status: MetadataRagStatus }>(`/settings/re-rag`, {
-      method: "POST",
-      body: JSON.stringify({ embedding_model: embeddingModel }),
-    }),
-  metadataRagStatus: () => request<MetadataRagStatus>(`/settings/metadata-rag-status`),
   ingestDatasetRag: (
     id: string,
     data?: { table_ids?: string[]; file_names?: string[] },
@@ -574,6 +565,19 @@ export const api = {
 
   backendLog: (lines = 80) => request<{ log: string }>(`/backend/log?lines=${lines}`),
 
+  trinoServiceStatus: () => request<TrinoServiceStatusResponse>("/trino-service/status"),
+
+  trinoServiceStart: () =>
+    request<TrinoServiceActionResponse>("/trino-service/start", { method: "POST" }),
+
+  trinoServiceStop: () =>
+    request<TrinoServiceActionResponse>("/trino-service/stop", { method: "POST" }),
+
+  trinoServiceRestart: () =>
+    request<TrinoServiceActionResponse>("/trino-service/restart", { method: "POST" }),
+
+  trinoServiceLog: (lines = 80) => request<{ log: string }>(`/trino-service/log?lines=${lines}`),
+
   mcpCapabilities: () =>
     request<{
       tools: { name: string; description?: string }[];
@@ -721,6 +725,7 @@ export const api = {
   getSettings: () => request<AppSettings>("/settings"),
   saveSettings: (data: {
     database?: DatabaseSettingsPayload;
+    trino?: TrinoSettingsPayload;
     mcp_url?: string;
     embedding_model?: string;
     ask?: { conversation_turns?: number };
@@ -734,6 +739,7 @@ export const api = {
     }),
 
   listDbConnections: () => request<SavedDbConnection[]>("/connections"),
+  listWarehouseConnectors: () => request<WarehouseConnectorDefinition[]>("/connections/warehouse-connectors"),
   getDbConnectionConfig: (id: string) =>
     request<Record<string, unknown>>(`/connections/${id}/config`),
   createDbConnection: (data: DbConnectionPayload) =>
@@ -744,6 +750,15 @@ export const api = {
     request<{ deleted: boolean }>(`/connections/${id}`, { method: "DELETE" }),
   testDbConnection: (data: DbConnectionPayload) =>
     request<{ ok: boolean; message: string }>("/connections/test", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  testDbConnectionById: (id: string) =>
+    request<{ ok: boolean; message: string }>(`/connections/${id}/test`, { method: "POST" }),
+  getTrinoSettings: () =>
+    request<TrinoSettingsPublic>("/connections/trino-settings"),
+  testTrinoServer: (data: TrinoSettingsPayload) =>
+    request<{ ok: boolean; message: string }>("/connections/trino-settings/test", {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -761,27 +776,90 @@ export interface DatabaseSettingsPayload {
   sslmode?: string;
 }
 
+export interface WarehouseConnectorField {
+  id: string;
+  label: string;
+  type: "text" | "number" | "password" | "select";
+  required?: boolean;
+  placeholder?: string;
+  options?: { value: string; label: string }[];
+}
+
+export interface WarehouseConnectorDefinition {
+  id: string;
+  label: string;
+  group: string;
+  description: string;
+  default_port: number;
+  default_database: string;
+  default_schema: string;
+  fields: WarehouseConnectorField[];
+}
+
 export interface DbConnectionPayload {
   name: string;
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
+  connector: string;
+  warehouse_type: string;
+  catalog: string;
   schema: string;
-  sslmode: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  sslmode?: string;
+  encrypt?: string;
+  oracle_connect_mode?: string;
+  oracle_service?: string;
+  snowflake_account?: string;
+  snowflake_warehouse?: string;
+  snowflake_role?: string;
+  trino_connector_name?: string;
+  connection_url?: string;
+  extra?: Record<string, string>;
 }
 
 export interface SavedDbConnection {
   id: string;
   name: string;
+  connector: string;
+  warehouse_type: string;
+  warehouse_type_label: string;
+  catalog: string;
+  schema: string;
   host: string;
   port: number;
   user: string;
   database: string;
-  schema: string;
-  sslmode: string;
   password_set: boolean;
+  sslmode?: string;
+  encrypt?: string;
+  oracle_connect_mode?: string;
+  oracle_service?: string;
+  snowflake_account?: string;
+  snowflake_warehouse?: string;
+  snowflake_role?: string;
+  trino_connector_name?: string;
+  connection_url?: string;
+  extra?: Record<string, string>;
+}
+
+export interface TrinoSettingsPublic {
+  host: string;
+  port: number;
+  user: string;
+  http_scheme: string;
+  verify_ssl: boolean;
+  password_set: boolean;
+}
+
+export interface TrinoSettingsPayload {
+  host: string;
+  port: number;
+  user: string;
+  password?: string;
+  http_scheme: string;
+  verify_ssl: boolean;
 }
 
 export interface McpStatusResponse {
@@ -981,6 +1059,28 @@ export interface BackendActionResponse extends BackendStatusResponse {
   message: string;
 }
 
+export interface TrinoServiceStatusResponse {
+  url: string;
+  info_url: string;
+  host: string;
+  port: number;
+  reachable: boolean;
+  running: boolean;
+  container_running: boolean;
+  status_label: string;
+  container_id: string | null;
+  container_name: string;
+  source: string;
+  docker_available: boolean;
+  log_path: string;
+  managed: boolean;
+}
+
+export interface TrinoServiceActionResponse extends TrinoServiceStatusResponse {
+  ok: boolean;
+  message: string;
+}
+
 export interface LlmModelOption {
   id: string;
   label: string;
@@ -1039,4 +1139,5 @@ export interface AppSettings {
     conversation_turns: number;
     max_conversation_turns: number;
   };
+  trino: TrinoSettingsPublic;
 }

@@ -10,6 +10,7 @@ from catalog_db import get_source, list_column_metadata, list_source_file_rag, l
 from catalog_rag_service import CATALOG_SOURCE_PREFIX, LOOKUP_SOURCE_PREFIX
 from catalog_service import list_source_files
 from query_fuzzy import build_vocabulary, correct_query_spelling, fuzzy_token_matches, fuzzy_token_overlap
+from structured_sql import is_structured_sql_connector
 
 MAX_TABLES = 5
 MAX_FILES = 5
@@ -114,7 +115,7 @@ def resolve_table_scope(
     lookup_tables: list[str] = []
 
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
-        if source.get("connector") != "postgres":
+        if not is_structured_sql_connector(source.get("connector")):
             continue
         boost = 2.0 if source_id and source["id"] == source_id else 0.0
         for table in list_table_metadata(source["id"]):
@@ -314,7 +315,7 @@ def chunk_source_files_for_scope(
 
     if domain_id and table_set:
         for source in list_sources(domain_id=domain_id, enabled_only=True):
-            if source.get("connector") != "postgres":
+            if not is_structured_sql_connector(source.get("connector")):
                 continue
             domain_slug = source.get("domain_slug") or "domain"
             source_slug = source.get("slug") or "ds"

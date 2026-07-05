@@ -73,7 +73,7 @@ Pages: Catalog, Ask, RAG, Analytics, MCP, Settings. Browser never touches Postgr
 | `ask` | Question → route → retrieve → LLM |
 | `rag` | Per-source profiles, re-ingest |
 
-Startup runs `bootstrap()` — catalog init and embedding model load (`mistral-embed-2312` by default).
+Startup runs `bootstrap()` — catalog init and embedding model load (`all-MiniLM-L6-v2` by default).
 
 ## Core modules (repo root)
 
@@ -137,9 +137,9 @@ erDiagram
     }
 ```
 
-Connectors on `data_sources`: `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`. Each connector implements the same adapter surface in `dataset_connectors/` (`test_connection`, `list_assets`, `sync`, `build_schema_context`). Remote connectors (API, web link, SharePoint) fetch into the dataset cache folder, then share the upload RAG ingest path.
+Connectors on `data_sources`: `trino` (preferred for warehouse SQL), legacy `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`. Each connector implements the same adapter surface in `dataset_connectors/` (`test_connection`, `list_assets`, `sync`, `build_schema_context`). Remote connectors (API, web link, SharePoint) fetch into the dataset cache folder, then share the upload RAG ingest path.
 
-Files from upload/path/remote connectors become chunks in `knowledge_chunks`. Postgres connectors introspect live DBs; `table_metadata` / `column_metadata` feed SQL generation.
+Files from upload/path/remote connectors become chunks in `knowledge_chunks`. Trino and legacy Postgres connectors introspect live schemas; `table_metadata` / `column_metadata` feed SQL generation. Business SQL executes through Trino when `connector=trino`; see [trino.md](trino.md).
 
 Migrations in `migrations/`; schema name defaults to `ragpro` (`DB_SCHEMA`). Connection setup for new clones: [catalog-database.md](catalog-database.md).
 
@@ -205,7 +205,7 @@ Pipeline we're aiming for: route domain + dataset → load `definition.md` and s
 flowchart LR
     F[Files on disk<br/>or upload path] --> I[ingest_service]
     I --> C[Chunk text]
-    C --> M[Mistral embeddings API]
+    C --> M[SentenceTransformer<br/>embed]
     M --> U[db.upsert_chunks]
     U --> PG[(knowledge_chunks)]
     RP[RAG profile<br/>chunk_size, overlap] --> I

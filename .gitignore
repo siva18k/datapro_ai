@@ -14,6 +14,8 @@ certs/
 !.env.example
 saved_db_connections.json
 !saved_db_connections.json.example
+docker/trino/catalog/*.properties
+!docker/trino/catalog/*.properties.example
 secrets.toml
 .streamlit/secrets.toml
 
@@ -26,41 +28,13 @@ chroma_store/
 .email_mcp.log
 .api_server.pid
 .api_server.log
+.trino_service.managed
+.trino_service.log
 
-# Local Python environments and package caches
-.venv/
-.venv*/
-venv/
-venv*/
-env/
-env*/
-**/.venv/
-**/venv/
-**/__pycache__/
-**/*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-.coverage.*
-htmlcov/
-.pip-wheel-metadata/
-*.egg-info/
-.eggs/
-build/
-dist/
-
-# Frontend build and local installs
+# Frontend build
 web/node_modules/
 web/dist/
 *.tsbuildinfo
-node_modules/
-.npm/
-.pnpm-store/
-
-# Local editor / tool caches
-.vscode/
-.idea/
 
 # TLS / proxy certs (keep under certs/ locally — never commit)
 *.cer

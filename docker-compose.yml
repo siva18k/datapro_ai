@@ -5,7 +5,7 @@
 #   docker compose up --build
 #   open http://localhost:5173
 #
-# Services: db (Postgres+pgvector), migrate (one-shot), api, web, mcp
+# Services: db (Postgres+pgvector), trino (business SQL), migrate, api, web, mcp
 
 services:
   db:
@@ -26,6 +26,21 @@ services:
       timeout: 5s
       retries: 12
 
+  trino:
+    image: trinodb/trino:476
+    container_name: datapro-trino
+    ports:
+      - "${TRINO_PORT:-8081}:8080"
+    volumes:
+      - ./docker/trino/etc:/etc/trino
+      - ./docker/trino/catalog:/etc/trino/catalog
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   migrate:
     build:
       context: .
@@ -40,7 +55,7 @@ services:
       PGSSLMODE: disable
       DB_SCHEMA: ${DB_SCHEMA:-ragpro}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-mistral-embed-2312}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       DEFAULT_LLM_BACKEND: ${DEFAULT_LLM_BACKEND:-mistral}
       EMAIL_MCP_URL: ${EMAIL_MCP_URL:-http://127.0.0.1:8010/mcp}
     restart: "no"
@@ -55,11 +70,17 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      trino:
+        condition: service_healthy
     environment:
       <<: *app-env
       MCP_URL: http://mcp:8000/mcp
       EMAIL_MCP_URL: ${EMAIL_MCP_URL:-http://email-mcp:8010/mcp}
-      # OLLAMA_BASE_URL removed to prefer remote Mistral by default
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      TRINO_HOST: ${TRINO_HOST:-trino}
+      TRINO_PORT: ${TRINO_PORT:-8080}
+      TRINO_USER: ${TRINO_USER:-trino}
+      TRINO_HTTP_SCHEME: ${TRINO_HTTP_SCHEME:-http}
     volumes:
       - ./sample_docs:/app/sample_docs:ro
       - datapro_uploads:/app/uploads

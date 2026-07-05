@@ -124,10 +124,12 @@ def _build_period_dict(
     }
 
 
-def _sql_filter(start: date, end_exclusive: date, *, granularity: str) -> dict[str, str]:
+def _sql_filter(start: date, end_exclusive: date, *, granularity: str, dialect: str = "trino") -> dict[str, str]:
+    from sql_dialect import date_range_filter
+
     start_s = start.isoformat()
     end_s = end_exclusive.isoformat()
-    where = f"<date_column> >= '{start_s}' AND <date_column> < '{end_s}'"
+    where = date_range_filter(start_s, end_s, dialect=dialect)
     group = ""
     if granularity == "quarter":
         group = "DATE_TRUNC('quarter', <date_column>)"
@@ -148,6 +150,7 @@ def resolve_time_period(
     *,
     reference_date: str | None = None,
     fiscal_year_start_month: int = 1,
+    sql_dialect: str = "trino",
 ) -> dict[str, Any]:
     """
     Turn a natural-language time requirement into concrete periods and SQL filter templates.
@@ -364,7 +367,7 @@ def resolve_time_period(
 
     overall_start = min(date.fromisoformat(p["start"]) for p in periods)
     overall_end = max(date.fromisoformat(p["end_exclusive"]) for p in periods)
-    filt = _sql_filter(overall_start, overall_end, granularity=granularity)
+    filt = _sql_filter(overall_start, overall_end, granularity=granularity, dialect=sql_dialect)
 
     if use_fiscal and fy_start != 1:
         notes.append(f"Using fiscal year starting month {fy_start}.")
@@ -378,6 +381,7 @@ def resolve_time_period(
         "granularity": granularity,
         "periods": periods,
         "filter": filt,
+        "sql_dialect": sql_dialect,
         "notes": notes,
     }
 
@@ -578,6 +582,7 @@ def fetch_time_context(
     *,
     reference_date: str | None = None,
     fiscal_year_start_month: int = 1,
+    sql_dialect: str = "trino",
     mcp_url: str | None = None,
 ) -> dict[str, Any] | None:
     """
@@ -612,6 +617,7 @@ def fetch_time_context(
         requirement,
         reference_date=reference_date,
         fiscal_year_start_month=fiscal_year_start_month,
+        sql_dialect=sql_dialect,
     )
     if not resolved.get("periods"):
         return None
@@ -647,4 +653,11 @@ def format_time_period_hints(resolved: dict[str, Any]) -> str:
     for note in resolved.get("notes") or []:
         lines.append(f"- Note: {note}")
     lines.append("- Replace `<date_column>` with the best catalog date column from Column reference.")
+    dialect = resolved.get("sql_dialect") or "trino"
+    from sql_dialect import dialect_label, format_date_literal
+
+    example = format_date_literal("2024-01-01", dialect=dialect)
+    lines.append(
+        f"- Date filters ({dialect_label(dialect)}): e.g. `<date_column> >= {example}`."
+    )
     return "\n".join(lines)
