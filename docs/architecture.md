@@ -137,9 +137,9 @@ erDiagram
     }
 ```
 
-Connectors on `data_sources`: `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`. Each connector implements the same adapter surface in `dataset_connectors/` (`test_connection`, `list_assets`, `sync`, `build_schema_context`). Remote connectors (API, web link, SharePoint) fetch into the dataset cache folder, then share the upload RAG ingest path.
+Connectors on `data_sources`: `trino` (preferred for warehouse SQL), legacy `postgres`, `upload`, `file_path`, `api`, `sharepoint`, `web_url`. Each connector implements the same adapter surface in `dataset_connectors/` (`test_connection`, `list_assets`, `sync`, `build_schema_context`). Remote connectors (API, web link, SharePoint) fetch into the dataset cache folder, then share the upload RAG ingest path.
 
-Files from upload/path/remote connectors become chunks in `knowledge_chunks`. Postgres connectors introspect live DBs; `table_metadata` / `column_metadata` feed SQL generation.
+Files from upload/path/remote connectors become chunks in `knowledge_chunks`. Trino and legacy Postgres connectors introspect live schemas; `table_metadata` / `column_metadata` feed SQL generation. Business SQL executes through Trino when `connector=trino`; see [trino.md](trino.md).
 
 Migrations in `migrations/`; schema name defaults to `ragpro` (`DB_SCHEMA`). Connection setup for new clones: [catalog-database.md](catalog-database.md).
 

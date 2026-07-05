@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { api } from "../api/client";
 import type { ColumnMeta, Dataset, TableMeta, TableRole } from "../types";
 import { CONNECTOR_LABELS } from "../types";
+import { isStructuredSqlConnector } from "../utils/structuredSql";
 import { mergeRelationshipsSection } from "../utils/definitionRelationships";
 
 import { DatasetRagTab } from "./DatasetRagTab";
@@ -21,7 +22,7 @@ function visibleTabs(_connector: string): Tab[] {
   return ["definition", "data", "rag", "connection"];
 }
 
-const CONNECTOR_OPTIONS = ["postgres", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
+const CONNECTOR_OPTIONS = ["trino", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
 
 function normalizeConnectionConfig(connector: string, form: PgForm, existing: PgForm, dataset?: Dataset): Record<string, unknown> {
   const merged = { ...existing, ...form };
@@ -38,7 +39,7 @@ function normalizeConnectionConfig(connector: string, form: PgForm, existing: Pg
           : [""];
     merged.endpoints = paths.length ? paths : [""];
   }
-  if (connector !== "postgres" && dataset && !merged.path) {
+  if (!isStructuredSqlConnector(connector) && dataset && !merged.path) {
     merged.path = `data/${dataset.domain_slug}/${dataset.slug}`;
   }
   return merged;
@@ -58,6 +59,7 @@ function tableRoleLabel(role?: TableRole): string {
 
 function dataTabHint(connector: string): string {
   switch (connector) {
+    case "trino":
     case "postgres":
       return "Discover tables and edit column labels.";
     case "upload":
@@ -187,7 +189,7 @@ export function DatasetPanel({
   const { data: catalogTables } = useQuery({
     queryKey: ["tables", dataset.id],
     queryFn: () => api.catalogTables(dataset.id),
-    enabled: tab === "definition" && dataset.connector === "postgres",
+    enabled: tab === "definition" && isStructuredSqlConnector(dataset.connector),
   });
 
   const catalogTablesFingerprint = useMemo(
@@ -231,7 +233,7 @@ export function DatasetPanel({
   }, [dataset.id]);
 
   useEffect(() => {
-    if (tab !== "definition" || dataset.connector !== "postgres") return;
+    if (tab !== "definition" || !isStructuredSqlConnector(dataset.connector)) return;
     if (definition === undefined) return;
     if ((catalogTables?.length ?? 0) < 2) return;
     if (!catalogTablesFingerprint) return;
@@ -285,7 +287,7 @@ export function DatasetPanel({
         <div className="space-y-4">
           <p className="text-sm text-zinc-500">
             Markdown definition for analysts and LLMs.
-            {dataset.connector === "postgres" && (catalogTables?.length ?? 0) >= 2 && (
+            {isStructuredSqlConnector(dataset.connector) && (catalogTables?.length ?? 0) >= 2 && (
               <> Table relationships are inferred from catalog roles and columns and appended automatically below.</>
             )}
           </p>
@@ -305,7 +307,7 @@ export function DatasetPanel({
             <button type="button" className="btn btn-secondary" onClick={() => draftDef.mutate()} disabled={draftDef.isPending}>
               {draftDef.isPending ? "Drafting…" : "AI draft"}
             </button>
-            {dataset.connector === "postgres" && (catalogTables?.length ?? 0) >= 2 && (
+            {isStructuredSqlConnector(dataset.connector) && (catalogTables?.length ?? 0) >= 2 && (
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -374,7 +376,7 @@ function ConnectionTab({
   const saveConfig = async () => {
     const payload = normalizeConnectionConfig(
       connector,
-      connector === "postgres" ? pgForm : form,
+      connector === "trino" || isStructuredSqlConnector(connector) ? pgForm : form,
       existingConfig,
       dataset,
     );
@@ -436,38 +438,29 @@ function ConnectionTab({
         </p>
       </div>
 
-      {connector === "postgres" && (
+      {isStructuredSqlConnector(connector) && (
         <>
           <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-            Database credentials. Use the <strong>Data</strong> tab to discover tables.
+            Trino catalog and schema for this dataset. Use the <strong>Data</strong> tab to discover tables.
             {connName ? ` Linked from «${connName}».` : ""}
           </p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {(
-              [
-                ["host", "Host / endpoint"],
-                ["port", "Port"],
-                ["database", "Database"],
-                ["user", "Username"],
-                ["password", "Password"],
-                ["schema", "Schema"],
-              ] as const
-            ).map(([key, label]) => (
-              <div key={key} className="field mb-0">
-                <label className="label">{label}</label>
-                <input
-                  className="input"
-                  type={key === "password" ? "password" : key === "port" ? "number" : "text"}
-                  value={String(pgForm[key] ?? "")}
-                  onChange={(e) =>
-                    setPgForm({
-                      ...pgForm,
-                      [key]: key === "port" ? Number(e.target.value) : e.target.value,
-                    })
-                  }
-                />
-              </div>
-            ))}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="field mb-0">
+              <label className="label">Trino catalog</label>
+              <input
+                className="input font-mono text-xs"
+                value={String(pgForm.catalog ?? "")}
+                onChange={(e) => setPgForm({ ...pgForm, catalog: e.target.value })}
+              />
+            </div>
+            <div className="field mb-0">
+              <label className="label">Schema</label>
+              <input
+                className="input font-mono text-xs"
+                value={String(pgForm.schema ?? "public")}
+                onChange={(e) => setPgForm({ ...pgForm, schema: e.target.value })}
+              />
+            </div>
           </div>
         </>
       )}
@@ -584,7 +577,7 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
 
   const refresh = useMutation({
     mutationFn: async () => {
-      await persistConnection(dataset.id, "postgres", pgForm, dataset.config ?? {}, dataset);
+      await persistConnection(dataset.id, dataset.connector, pgForm, dataset.config ?? {}, dataset);
       return api.remoteTables(dataset.id);
     },
   });
@@ -597,7 +590,7 @@ function PostgresDataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm
   const [selectedRemote, setSelectedRemote] = useState<string[]>([]);
   const addTables = useMutation({
     mutationFn: async () => {
-      await persistConnection(dataset.id, "postgres", pgForm, dataset.config ?? {}, dataset);
+      await persistConnection(dataset.id, dataset.connector, pgForm, dataset.config ?? {}, dataset);
       return api.addTables(dataset.id, selectedRemote);
     },
     onSuccess: async () => {
@@ -1070,7 +1063,7 @@ function DataTab({ dataset, pgForm }: { dataset: Dataset; pgForm: PgForm }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-zinc-500">{dataTabHint(dataset.connector)}</p>
-      {dataset.connector === "postgres" && <PostgresDataTab dataset={dataset} pgForm={pgForm} />}
+      {isStructuredSqlConnector(dataset.connector) && <PostgresDataTab dataset={dataset} pgForm={pgForm} />}
       {(dataset.connector === "upload" || dataset.connector === "file_path") && (
         <FileDataTab dataset={dataset} />
       )}

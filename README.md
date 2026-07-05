@@ -6,9 +6,11 @@ Built with React, FastAPI, Postgres + pgvector, sentence-transformers, and Mistr
 
 ## Catalog database (required)
 
-DATA Pro stores **catalog metadata and RAG embeddings** in **your own PostgreSQL** database (domains, datasets, `knowledge_chunks`, pgvector). Configure the connection in `.env` — this is separate from optional warehouse/source databases you attach later in the catalog.
+DATA Pro stores **catalog metadata and RAG embeddings** in **your own PostgreSQL** database (domains, datasets, `knowledge_chunks`, pgvector). **Business warehouse queries** run through **Trino** — configure the coordinator in Settings and register catalogs in `docker/trino/catalog/` (local) or on the Trino server (AWS).
 
 **→ [Set up your catalog database](docs/catalog-database.md)** — create Postgres + pgvector, set `DATABASE_URL`, run migrations.
+
+**→ [Trino for business data](docs/trino.md)** — Docker Trino service, catalog bindings, finance demo.
 
 Docker Compose includes Postgres for local dev; for your own RDS or existing Postgres, follow the same doc.
 
@@ -30,17 +32,23 @@ cp .env.example .env
 # Optional: cp saved_db_connections.json.example saved_db_connections.json
 
 docker compose up --build
+
+# First run: Trino finance catalog (local demo Postgres)
+cp docker/trino/catalog/finance.properties.example docker/trino/catalog/finance.properties
+
+# Optional: load demo finance warehouse (queried via Trino catalog `finance`)
+docker compose run --rm api python scripts/migrate_finance_data.py --fresh
 ```
 
-Then open the UI (default port **5173**). Service URLs and ports are in [docs/installation.md](docs/installation.md).
+Then open the UI (default port **5173**). In **Settings → Database connections**, set Trino to `localhost:8081`, add a binding (`finance` / `finance_data`), and save. See [docs/trino.md](docs/trino.md).
 
 Prefer running things locally without Docker? Same doc covers local setup.
 
 ## What it does
 
-**Data Catalog** — domains, datasets, Postgres connections, file uploads.
+**Data Catalog** — domains, datasets, Trino catalog bindings, file uploads.
 
-**Ask** — chat over your documents (RAG) or structured SQL when you have Postgres datasets wired up.
+**Ask** — chat over your documents (RAG) or structured SQL when you have Trino-backed datasets wired up.
 
 **Analytics** — build dashboards from plain English.
 
@@ -78,6 +86,7 @@ External MCP servers (e.g. `email_mcp_server.py`) register on the MCP page and b
 - [docs/README.md](docs/README.md) — index
 - **[Contributing & conventions](docs/contributing.md)** — themes, secrets, docs, UI consistency
 - **[Catalog database](docs/catalog-database.md)** — metadata + RAG Postgres setup (required)
+- **[Trino for business data](docs/trino.md)** — warehouse SQL via Trino (Docker local, AWS-ready)
 - [Installation](docs/installation.md) — setup and scripts
 - [Secrets](docs/secrets.md) — `.env` and saved connections (templates only in git)
 - [Docker](docs/docker.md) — compose, services, Ollama on the host

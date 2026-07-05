@@ -14,6 +14,8 @@ certs/
 !.env.example
 saved_db_connections.json
 !saved_db_connections.json.example
+docker/trino/catalog/*.properties
+!docker/trino/catalog/*.properties.example
 secrets.toml
 .streamlit/secrets.toml
 
@@ -26,6 +28,8 @@ chroma_store/
 .email_mcp.log
 .api_server.pid
 .api_server.log
+.trino_service.managed
+.trino_service.log
 
 # Frontend build
 web/node_modules/

@@ -401,9 +401,7 @@ export function DatasetRagTab({ dataset }: { dataset: Dataset }) {
         <p className="catalog-themed-box--dashed text-sm" style={{ color: "var(--color-text-muted)" }}>
           {isStructured
             ? "No tables in catalog — add tables on the Data tab first."
-            : dataset.connector === "postgres"
-              ? "No tables in catalog — add tables on the Data tab first."
-              : ["api", "web_url", "sharepoint"].includes(dataset.connector)
+            : ["api", "web_url", "sharepoint"].includes(dataset.connector)
                 ? "No cached files — sync on the Data tab first, then ingest here."
                 : "No files in dataset — upload or sync files on the Data tab first."}
         </p>

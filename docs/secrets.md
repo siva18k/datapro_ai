@@ -5,7 +5,7 @@ Don't commit real credentials. `.gitignore` already excludes the files below —
 | Local file (ignored) | Copy from | What it's for |
 |----------------------|-----------|---------------|
 | `.env` | `.env.example` | Catalog DB, LLM keys, embedding model, MCP URL |
-| `saved_db_connections.json` | `saved_db_connections.json.example` | Named Postgres connections for datasets |
+| `saved_db_connections.json` | `saved_db_connections.json.example` | Trino catalog bindings for datasets |
 | `deploy/` | `deploy.example/` | Personal **AWS** ECS deploy config and secrets ([deploy-ecs.md](deploy-ecs.md)) |
 | `certs/` | — | Local TLS / proxy CA certs (e.g. corporate SSL inspection) |
 
@@ -31,20 +31,19 @@ Typical things to set:
 
 ## Saved dataset connections
 
-For **Postgres** datasets in the catalog. You can add connections in **Settings → Dataset connections** instead of editing JSON by hand.
+Trino **catalog bindings** (name + catalog + schema). Warehouse credentials live in Trino catalog files (`docker/trino/catalog/*.properties`, gitignored). Add bindings in **Settings → Database connections** or edit JSON:
 
 ```bash
 cp saved_db_connections.json.example saved_db_connections.json
-# edit host, user, password, database, schema
 ```
 
-Or let the app create an empty file on first use:
+**Migrating old Postgres rows** (host/port/password in the same file):
 
 ```bash
-echo '{"connections": []}' > saved_db_connections.json
+python scripts/migrate_connections_to_trino.py --migrate-datasets
 ```
 
-Passwords stay on disk in that file. The API never sends them to the browser — you'll only see `password_set: true`.
+Passwords in legacy JSON are moved into Trino catalog property files; the saved connection file keeps only catalog + schema.
 
 ## After cloning
 

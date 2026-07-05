@@ -11,11 +11,11 @@ This database is sometimes called the **catalog database** or **metadata databas
 
 Migrations in `migrations/*.sql` are idempotent (`IF NOT EXISTS` / `IF EXISTS`). Apply them with `scripts/migrate.py` — do not maintain separate DDL scripts for the same objects.
 
-The API, MCP server, and migration script all read the **same connection** from `.env` (`DATABASE_URL` or `PG*` variables).
+The API, MCP server, and migration script all read the **same connection** from `.env` (`DATABASE_URL` or `PG*` variables). The Python driver is **psycopg 3** by default (`CATALOG_DB_DRIVER=psycopg`); set `CATALOG_DB_DRIVER=pg8000` to revert to the legacy pure-Python driver.
 
-## Not the same as “source” databases
+## Not the same as business warehouse data
 
-When you add a **Postgres dataset** in the catalog (e.g. a finance warehouse), that is usually a **separate database** used only for read-only SQL at query time. Those connections live in:
+When you add a **business dataset** (Trino-backed warehouse), that is a **separate database** queried at Ask/Analytics time via the Trino coordinator. Bindings live in:
 
 - **`saved_db_connections.json`** (local, gitignored), or
 - **Settings → Dataset connections** in the UI
@@ -31,7 +31,7 @@ They do **not** replace the catalog database. You typically have:
 └─────────────────────────────┘     └──────────────────────────────┘
          ▲                                       ▲
          │                                       │
-    API, MCP, migrate                      Ask / Analytics SQL path
+    API, MCP, migrate                      Trino → warehouse (see trino.md)
 ```
 
 ## Requirements

@@ -1,0 +1,8 @@
+# Finance warehouse — Postgres schema finance_data on the bundled catalog DB.
+# Copy to finance.properties (gitignored) before first Trino start:
+#   cp docker/trino/catalog/finance.properties.example docker/trino/catalog/finance.properties
+# Tables are queried as finance.finance_data.<table>
+connector.name=postgresql
+connection-url=jdbc:postgresql://db:5432/ragpro
+connection-user=ragpro
+connection-password=ragpro

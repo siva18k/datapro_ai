@@ -104,3 +104,29 @@ def normalize_llm_sql(text: str) -> str:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     return take_first_sql_statement(text)
+
+
+_ISO_DATE = r"\d{4}-\d{2}-\d{2}"
+_DATE_CMP_RE = re.compile(
+    rf"(?<!DATE )(?<!TIMESTAMP )(?P<op>>=|<=|<>|!=|<|>|=)\s*'(?P<date>{_ISO_DATE})'",
+    re.IGNORECASE,
+)
+_BETWEEN_DATES_RE = re.compile(
+    rf"\bBETWEEN\s+'(?P<start>{_ISO_DATE})'\s+AND\s+'(?P<end>{_ISO_DATE})'",
+    re.IGNORECASE,
+)
+
+
+def fix_trino_date_literals(sql: str) -> str:
+    """Cast ISO date strings to DATE for Trino (date <= varchar is invalid)."""
+
+    def _between(match: re.Match[str]) -> str:
+        return (
+            f"BETWEEN DATE '{match.group('start')}' AND DATE '{match.group('end')}'"
+        )
+
+    def _cmp(match: re.Match[str]) -> str:
+        return f"{match.group('op')} DATE '{match.group('date')}'"
+
+    text = _BETWEEN_DATES_RE.sub(_between, sql)
+    return _DATE_CMP_RE.sub(_cmp, text)

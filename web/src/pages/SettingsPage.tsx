@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
+import { CatalogDatabaseCard } from "../components/CatalogDatabaseCard";
 import { PageHeader } from "../components/PageHeader";
 import { SavedConnectionsPanel } from "../components/SavedConnectionsPanel";
 import { useApiPageState } from "../context/ApiConnectionContext";
@@ -11,6 +12,7 @@ import {
   type BackendStatusResponse,
   type DatabaseSettingsPayload,
   type LlmSettingsPayload,
+  type TrinoSettingsPayload,
 } from "../api/client";
 import { devBootstrap, isDevBootstrapAvailable } from "../api/devBootstrap";
 import { parsePostgresUrl } from "../utils/postgresUrl";
@@ -85,22 +87,13 @@ function buildDatabasePayload(
   };
 }
 
-function formatCatalogSummary(
-  db: DatabaseSettingsPayload,
-  databaseUrlMasked: boolean,
-): string {
-  if (db.host.trim()) {
-    return `${db.user}@${db.host}:${db.port} · ${db.database}.${db.schema}`;
-  }
-  if (db.use_database_url) {
-    if (databaseUrlMasked) return "DATABASE_URL configured";
-    if (db.database_url.trim()) {
-      return db.database_url.replace(/:([^:@/]+)@/, ":***@");
-    }
-    return "DATABASE_URL not set";
-  }
-  return "Not configured";
-}
+const emptyTrino = (): TrinoSettingsPayload => ({
+  host: "localhost",
+  port: 8081,
+  user: "trino",
+  http_scheme: "http",
+  verify_ssl: false,
+});
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -132,6 +125,10 @@ export function SettingsPage() {
   const [catalogUrlPaste, setCatalogUrlPaste] = useState("");
   const [catalogUrlPasteError, setCatalogUrlPasteError] = useState<string | null>(null);
   const [catalogDbNotice, setCatalogDbNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [trino, setTrino] = useState<TrinoSettingsPayload>(emptyTrino());
+  const [trinoPassword, setTrinoPassword] = useState("");
+  const [trinoEditing, setTrinoEditing] = useState(false);
+  const [trinoNotice, setTrinoNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mcpNotice, setMcpNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -255,6 +252,54 @@ export function SettingsPage() {
 
   const backendBusy = backendStart.isPending || backendStop.isPending || backendRestart.isPending;
 
+  const [trinoServiceNotice, setTrinoServiceNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const { data: trinoServiceStatus, refetch: refetchTrinoServiceStatus } = useQuery({
+    queryKey: ["trino-service", "status"],
+    queryFn: api.trinoServiceStatus,
+    enabled: apiOnline,
+    refetchInterval: apiOnline ? 10_000 : false,
+  });
+
+  const trinoServiceIsRunning = Boolean(
+    trinoServiceStatus?.reachable || trinoServiceStatus?.container_running,
+  );
+
+  const invalidateTrinoServiceStatus = () => {
+    void refetchTrinoServiceStatus();
+    void qc.invalidateQueries({ queryKey: ["trino-service"] });
+  };
+
+  const trinoServiceStart = useMutation({
+    mutationFn: api.trinoServiceStart,
+    onSuccess: (res) => {
+      invalidateTrinoServiceStatus();
+      setTrinoServiceNotice({ ok: res.ok, text: res.message });
+    },
+    onError: (err) => setTrinoServiceNotice({ ok: false, text: String(err) }),
+  });
+
+  const trinoServiceStop = useMutation({
+    mutationFn: api.trinoServiceStop,
+    onSuccess: (res) => {
+      invalidateTrinoServiceStatus();
+      setTrinoServiceNotice({ ok: res.ok, text: res.message });
+    },
+    onError: (err) => setTrinoServiceNotice({ ok: false, text: String(err) }),
+  });
+
+  const trinoServiceRestart = useMutation({
+    mutationFn: api.trinoServiceRestart,
+    onSuccess: (res) => {
+      invalidateTrinoServiceStatus();
+      setTrinoServiceNotice({ ok: res.ok, text: res.message });
+    },
+    onError: (err) => setTrinoServiceNotice({ ok: false, text: String(err) }),
+  });
+
+  const trinoServiceBusy =
+    trinoServiceStart.isPending || trinoServiceStop.isPending || trinoServiceRestart.isPending;
+
   useEffect(() => {
     if (!data) return;
     setDb({
@@ -282,6 +327,15 @@ export function SettingsPage() {
       data.llm.default_backend === "mistral" && model !== "" && !knownMistralIds.has(model),
     );
     setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
+    setTrino({
+      host: data.trino?.host || "localhost",
+      port: data.trino?.port ?? 8081,
+      user: data.trino?.user || "trino",
+      http_scheme: data.trino?.http_scheme || "http",
+      verify_ssl: data.trino?.verify_ssl ?? false,
+    });
+    setTrinoPassword("");
+    setTrinoEditing(!Boolean((data.trino?.host || "").trim()));
     setCatalogEditing(
       !isCatalogConfigured(
         {
@@ -315,6 +369,10 @@ export function SettingsPage() {
           preserveUrl: !catalogEditing,
           urlConfigured: data?.database.database_url === "***",
         }),
+        trino: {
+          ...trino,
+          password: trinoPassword || undefined,
+        },
         mcp_url: mcpUrl,
         embedding_model: embeddingModel,
         ask: { conversation_turns: conversationTurns },
@@ -329,6 +387,8 @@ export function SettingsPage() {
       qc.setQueryData(["settings"], res);
       setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
       setDb((prev) => ({ ...prev, password: "" }));
+      setTrinoPassword("");
+      setTrinoEditing(false);
       setCatalogEditing(false);
       setMessage("Settings saved to .env and applied for this API server.");
       setError(null);
@@ -404,8 +464,23 @@ export function SettingsPage() {
     setCatalogUrlPasteError(null);
   };
 
+  const resetTrinoFromData = () => {
+    if (!data?.trino) return;
+    setTrino({
+      host: data.trino.host || "localhost",
+      port: data.trino.port ?? 8081,
+      user: data.trino.user || "trino",
+      http_scheme: data.trino.http_scheme || "http",
+      verify_ssl: data.trino.verify_ssl ?? false,
+    });
+    setTrinoPassword("");
+    setTrinoNotice(null);
+  };
+
   const catalogConfigured = isCatalogConfigured(db, data?.database.database_url === "***");
-  const catalogSummary = formatCatalogSummary(db, data?.database.database_url === "***");
+  const catalogUsesUrl =
+    db.use_database_url && (data?.database.database_url === "***" || Boolean(db.database_url.trim()));
+  const catalogUserFallback = catalogUsesUrl ? "Configured via URL" : undefined;
 
   const selectedBackend = llm.default_backend ?? "mistral";
   const selectedBackendMeta = data?.llm_backends.find((b) => b.id === selectedBackend);
@@ -435,162 +510,49 @@ export function SettingsPage() {
 
       {apiOnline && data && (
         <>
-          <div className="settings-db-stack space-y-4">
-            <div className="settings-panel settings-panel--catalog card card-pad space-y-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="font-semibold">Catalog database</h2>
-                    <span className="settings-panel-badge">Required</span>
-                  </div>
-                  <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                    Base Postgres for catalog metadata &amp; RAG vectors
-                  </p>
-                </div>
-                {!catalogEditing && (
-                  <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={openCatalogEdit}>
-                    Edit
-                  </button>
-                )}
-              </div>
-
-              {!catalogEditing ? (
-                <div className="settings-catalog-summary">
-                  <p className="settings-catalog-summary-line font-mono text-sm">{catalogSummary}</p>
-                  <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                    SSL: {db.sslmode}
-                    {data.database.password_set ? " · Password set" : ""}
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      disabled={testDb.isPending || !catalogConfigured}
-                      onClick={() => testDb.mutate()}
-                    >
-                      {testDb.isPending ? "Testing…" : "Test connection"}
-                    </button>
-                  </div>
-                  {catalogDbNotice && (
-                    <p className={catalogDbNotice.ok ? "alert-ok mt-3 text-sm" : "alert-error mt-3 text-sm"}>
-                      {catalogDbNotice.text}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="field mb-0">
-                    <label className="label" htmlFor="catalog-db-url-paste">
-                      Connection URL (optional)
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      <input
-                        id="catalog-db-url-paste"
-                        className="input min-w-0 flex-1 font-mono text-xs"
-                        placeholder="postgresql://user:pass@host:5432/database?sslmode=require"
-                        value={catalogUrlPaste}
-                        onChange={(e) => {
-                          setCatalogUrlPaste(e.target.value);
-                          setCatalogUrlPasteError(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            applyCatalogUrlPaste();
-                          }
-                        }}
-                      />
-                      <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={applyCatalogUrlPaste}>
-                        Apply URL
-                      </button>
-                    </div>
-                    <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      Paste a full Postgres URL to fill the fields below.
-                    </p>
-                    {catalogUrlPasteError && <p className="alert-error mt-2 text-xs">{catalogUrlPasteError}</p>}
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="field mb-0 sm:col-span-2">
-                      <label className="label">Host / endpoint</label>
-                      <input className="input" value={db.host} onChange={(e) => updateDb({ host: e.target.value })} />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Port</label>
-                      <input
-                        className="input"
-                        type="number"
-                        value={db.port}
-                        onChange={(e) => updateDb({ port: Number(e.target.value) })}
-                      />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">SSL mode</label>
-                      <select className="select" value={db.sslmode} onChange={(e) => updateDb({ sslmode: e.target.value })}>
-                        <option value="require">require</option>
-                        <option value="verify-full">verify-full</option>
-                        <option value="prefer">prefer</option>
-                        <option value="disable">disable</option>
-                      </select>
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Username</label>
-                      <input className="input" value={db.user} onChange={(e) => updateDb({ user: e.target.value })} />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Password</label>
-                      <input
-                        className="input"
-                        type="password"
-                        placeholder={data.database.password_set ? "Leave blank to keep current password" : ""}
-                        value={db.password}
-                        onChange={(e) => updateDb({ password: e.target.value })}
-                      />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Database</label>
-                      <input className="input" value={db.database} onChange={(e) => updateDb({ database: e.target.value })} />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Schema</label>
-                      <input className="input" value={db.schema} onChange={(e) => updateDb({ schema: e.target.value })} />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      disabled={testDb.isPending}
-                      onClick={() => testDb.mutate()}
-                    >
-                      {testDb.isPending ? "Testing…" : "Test connection"}
-                    </button>
-                    {catalogConfigured && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => {
-                          resetCatalogFromData();
-                          setCatalogEditing(false);
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                  {catalogDbNotice && (
-                    <p className={catalogDbNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>
-                      {catalogDbNotice.text}
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="settings-panel settings-panel--connections card card-pad">
-              <SavedConnectionsPanel />
-            </div>
+          <div className="card card-pad">
+            <SavedConnectionsPanel
+              catalog={
+                <CatalogDatabaseCard
+                  db={db}
+                  passwordSet={data.database.password_set}
+                  configured={catalogConfigured}
+                  editing={catalogEditing}
+                  userFallback={catalogUserFallback}
+                  urlPaste={catalogUrlPaste}
+                  urlPasteError={catalogUrlPasteError}
+                  notice={catalogDbNotice}
+                  testing={testDb.isPending}
+                  onEdit={openCatalogEdit}
+                  onCancel={() => {
+                    resetCatalogFromData();
+                    setCatalogEditing(false);
+                  }}
+                  onUpdateDb={updateDb}
+                  onUrlPasteChange={(value) => {
+                    setCatalogUrlPaste(value);
+                    setCatalogUrlPasteError(null);
+                  }}
+                  onApplyUrlPaste={applyCatalogUrlPaste}
+                  onTest={() => testDb.mutate()}
+                />
+              }
+              trino={trino}
+              trinoPassword={trinoPassword}
+              trinoEditing={trinoEditing}
+              trinoNotice={trinoNotice}
+              onTrinoEdit={() => {
+                setTrinoNotice(null);
+                setTrinoEditing(true);
+              }}
+              onTrinoCancel={() => {
+                resetTrinoFromData();
+                setTrinoEditing(false);
+              }}
+              onTrinoChange={(patch) => setTrino((prev) => ({ ...prev, ...patch }))}
+              onTrinoPasswordChange={setTrinoPassword}
+              onTrinoNotice={setTrinoNotice}
+            />
           </div>
 
           <div className="card card-pad space-y-4">
@@ -924,13 +886,96 @@ export function SettingsPage() {
                 <p className={backendNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{backendNotice.text}</p>
               )}
             </div>
+
+            <div className="card card-pad space-y-4">
+              <div>
+                <h2 className="font-semibold">Trino coordinator</h2>
+                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                  Docker service for business warehouse SQL
+                </p>
+              </div>
+
+              {trinoServiceStatus && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`badge ${trinoServiceStatus.reachable ? "badge-ok" : "badge-muted"}`}>
+                    {trinoServiceStatus.reachable ? "Reachable" : "Stopped"}
+                  </span>
+                  <span className="badge-muted badge">{trinoServiceStatus.status_label}</span>
+                  {trinoServiceStatus.container_id && (
+                    <span className="badge-muted badge font-mono text-xs">
+                      {trinoServiceStatus.container_name}
+                    </span>
+                  )}
+                  <span className="badge-muted badge">Port {trinoServiceStatus.port}</span>
+                  {!trinoServiceStatus.docker_available && (
+                    <span className="badge-muted badge">Docker unavailable</span>
+                  )}
+                </div>
+              )}
+
+              {trinoServiceStatus && (
+                <p className="text-sm">
+                  URL:{" "}
+                  <code className="rounded px-1.5 py-0.5 text-xs" style={{ background: "var(--color-surface-subtle)" }}>
+                    {trinoServiceStatus.url}
+                  </code>
+                </p>
+              )}
+
+              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                Runs <code className="text-xs">docker compose up -d trino</code> from the project root. Use host{" "}
+                <code className="text-xs">localhost</code> and port <code className="text-xs">8081</code> in Trino
+                settings when the API runs on your machine.
+              </p>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={trinoServiceBusy || trinoServiceIsRunning || !trinoServiceStatus?.docker_available}
+                  onClick={() => trinoServiceStart.mutate()}
+                >
+                  {trinoServiceStart.isPending ? "Starting…" : "Start"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={trinoServiceBusy || !trinoServiceIsRunning}
+                  onClick={() => trinoServiceStop.mutate()}
+                >
+                  {trinoServiceStop.isPending ? "Stopping…" : "Stop"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={trinoServiceBusy || !trinoServiceIsRunning}
+                  onClick={() => trinoServiceRestart.mutate()}
+                >
+                  {trinoServiceRestart.isPending ? "Restarting…" : "Restart"}
+                </button>
+              </div>
+
+              {trinoServiceStatus?.source === "external" && (
+                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                  External container — Stop runs <code className="text-xs">docker compose stop trino</code>.
+                </p>
+              )}
+
+              {trinoServiceNotice && (
+                <p className={trinoServiceNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>
+                  {trinoServiceNotice.text}
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <button type="button" className="btn" disabled={save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? "Saving…" : "Save catalog & service settings"}
             </button>
-            <p className="text-xs text-zinc-500">Writes to {data.env_path}. Restart API or MCP after changes.</p>
+            <p className="text-xs text-zinc-500">
+              Writes to {data.env_path}. Restart API, MCP, or Trino after connection changes.
+            </p>
           </div>
 
           {message && <p className="alert-ok">{message}</p>}

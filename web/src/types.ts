@@ -385,7 +385,8 @@ export interface ReadinessResponse {
 }
 
 export const CONNECTOR_LABELS: Record<string, string> = {
-  postgres: "Database",
+  trino: "Database (Trino)",
+  postgres: "Database (legacy)",
   upload: "Uploaded files",
   file_path: "Local files",
   api: "API",

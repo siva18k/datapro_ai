@@ -1,6 +1,5 @@
 import os
 import re
-import ssl
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, unquote
@@ -69,29 +68,16 @@ def _safe_identifier(name):
 
 
 def _ssl_context(sslmode):
-    if sslmode in ("require", "verify-ca", "verify-full"):
-        ctx = ssl.create_default_context()
-        if sslmode == "require":
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-        return ctx
-    return None
+    from catalog_pg import _ssl_context as _catalog_ssl_context
+
+    return _catalog_ssl_context(sslmode)
 
 
 def connect():
-    import pg8000.native
+    from catalog_pg import connect_catalog
 
     cfg = get_db_config()
-    conn = pg8000.native.Connection(
-        user=cfg["user"],
-        password=cfg["password"],
-        host=cfg["host"],
-        port=cfg["port"],
-        database=cfg["database"],
-        ssl_context=_ssl_context(cfg["sslmode"]),
-        timeout=15,
-    )
-    return conn, _safe_identifier(cfg["schema"])
+    return connect_catalog(cfg), _safe_identifier(cfg["schema"])
 
 
 def vector_literal(values):
@@ -283,8 +269,8 @@ def _search_chunks_with_vector(
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         catalog_cols = ", domain_id::text, source_id::text" if has_catalog else ", NULL::text, NULL::text"
 
-        # Prefer SQL top-k (fast). pg8000 may return no rows with ORDER BY+LIMIT on
-        # some setups — fall back to full scan + Python sort.
+        # Prefer SQL top-k (fast). Fall back to full scan + Python sort if the driver
+        # returns no rows (legacy pg8000 quirk on some ORDER BY+LIMIT setups).
         candidate_limit = max(top_k * 40, 200)
         params["candidate_limit"] = candidate_limit
         rows = conn.run(

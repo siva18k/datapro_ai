@@ -34,12 +34,19 @@ MANAGED_KEYS = (
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
     "OPENROUTER_API_KEY",
+    "TRINO_HOST",
+    "TRINO_PORT",
+    "TRINO_USER",
+    "TRINO_PASSWORD",
+    "TRINO_HTTP_SCHEME",
+    "TRINO_VERIFY_SSL",
     "ASK_CONVERSATION_TURNS",
 )
 
 SECRET_KEYS = frozenset(
     {
         "PGPASSWORD",
+        "TRINO_PASSWORD",
         "MISTRAL_API_KEY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
@@ -251,6 +258,7 @@ def get_public_settings() -> dict[str, Any]:
         LLM_BACKENDS,
         MISTRAL_MODEL_OPTIONS,
     )
+    from trino_settings import get_public_trino_settings
 
     raw = get_raw_settings()
     public: dict[str, Any] = {
@@ -288,6 +296,7 @@ def get_public_settings() -> dict[str, Any]:
             "conversation_turns": get_ask_conversation_turns(),
             "max_conversation_turns": 20,
         },
+        "trino": get_public_trino_settings(),
     }
     if raw.get("DATABASE_URL"):
         parsed = _parse_database_url(raw["DATABASE_URL"])
@@ -344,6 +353,20 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
     if payload.get("mcp_url") is not None:
         updates["MCP_URL"] = str(payload.get("mcp_url", "")).strip()
+
+    trino = payload.get("trino") or {}
+    if trino.get("host") is not None:
+        updates["TRINO_HOST"] = str(trino.get("host", "")).strip()
+    if trino.get("port") is not None:
+        updates["TRINO_PORT"] = str(int(trino.get("port") or 8081))
+    if trino.get("user") is not None:
+        updates["TRINO_USER"] = str(trino.get("user", "")).strip()
+    if trino.get("password"):
+        updates["TRINO_PASSWORD"] = str(trino["password"])
+    if trino.get("http_scheme") is not None:
+        updates["TRINO_HTTP_SCHEME"] = str(trino.get("http_scheme", "http")).strip().lower()
+    if trino.get("verify_ssl") is not None:
+        updates["TRINO_VERIFY_SSL"] = "true" if trino.get("verify_ssl") else "false"
 
     if payload.get("embedding_model") is not None:
         updates["EMBEDDING_MODEL"] = str(payload.get("embedding_model", "")).strip()
@@ -454,27 +477,19 @@ def _resolve_db_config(db: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def test_database_connection(overrides: dict[str, Any] | None = None) -> tuple[bool, str]:
-    import pg8000.native
-
-    from db import _ssl_context
-
     try:
         cfg = _resolve_db_config((overrides or {}).get("database"))
     except Exception as exc:
         return False, str(exc)
 
     try:
-        conn = pg8000.native.Connection(
-            user=cfg["user"],
-            password=cfg["password"],
-            host=cfg["host"],
-            port=cfg["port"],
-            database=cfg["database"],
-            ssl_context=_ssl_context(cfg["sslmode"]),
-            timeout=10,
-        )
-        conn.run("SELECT 1")
-        conn.close()
+        from catalog_pg import connect_catalog
+
+        conn = connect_catalog(cfg)
+        try:
+            conn.run("SELECT 1")
+        finally:
+            conn.close()
         return True, f"Connected to {cfg['database']}@{cfg['host']}:{cfg['port']}"
     except Exception as exc:
         return False, str(exc)

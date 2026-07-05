@@ -6,6 +6,13 @@ import requests
 
 from llm_providers import API_KEY_ENV, DEFAULT_MODELS
 from settings_service import get_api_key, get_llm_settings
+from sql_dialect import (
+    dialect_for_context,
+    dialect_label,
+    generation_rules,
+    partial_generation_rules,
+    repair_rules,
+)
 from sql_sanitize import normalize_llm_sql
 
 
@@ -27,25 +34,6 @@ def resolve_llm_runtime(
 
 def _strip_sql_response(text: str) -> str:
     return normalize_llm_sql(text)
-
-
-_SQL_GENERATION_RULES = """
-Rules:
-- Return ONLY the SQL (no markdown, no explanation).
-- Return exactly ONE read-only SELECT (WITH ... SELECT is allowed) — never multiple statements separated by semicolons.
-- Read the Dataset definition section first — it documents scope, join paths, hub/bridge tables, and caveats.
-- Read **Table business rules** — apply status filters, revenue definitions, exclusions, and metric logic exactly as written per table.
-- Use Column reference for exact column names and types — match natural-language time phrases to date columns via names and labels.
-- When the user names a calendar year (e.g. 2024), filter the chosen date column to that year; use relative date math only when they ask relatively (e.g. "last year").
-- Use ONLY tables listed under Allowed tables — never invent names like customers, orders, or products.
-- Follow join paths from the Dataset definition (especially hub and bridge tables) instead of guessing FKs.
-- If a dimension is listed as unavailable below, omit it — do not fail; answer with what exists.
-- Schema-qualify every table exactly as shown (e.g. finance_data.customer_profiles).
-- SELECT only — no INSERT, UPDATE, DELETE, DDL.
-- Prefer COUNT/SUM/aggregates when the question asks "how many" or totals.
-- For overview / "tell me about" questions, SELECT representative columns with LIMIT 25 (or COUNT + sample rows).
-- When prior conversation or query results are provided, treat the latest message as a follow-up — keep the same filters, grouping, and grain unless the user clearly changes scope.
-""".strip()
 
 
 def _sql_context_block(
@@ -75,12 +63,14 @@ def generate_sql(
     prior_result=None,
 ) -> str:
     """LLM text-to-SQL from catalog schema context."""
+    dialect = dialect_for_context(schema_context)
+    expert = dialect_label(dialect)
     rag_block = f"\n{rag_supplement.strip()}\n" if rag_supplement.strip() else ""
     context_block = _sql_context_block(
         conversation_history=conversation_history,
         prior_result=prior_result,
     )
-    prompt = f"""You are a PostgreSQL expert. Write ONE read-only SELECT query to answer the user question.
+    prompt = f"""You are a {expert} SQL expert. Write ONE read-only SELECT query to answer the user question.
 
 {schema_context.to_llm_prompt_block()}
 {rag_block}
@@ -88,7 +78,7 @@ def generate_sql(
 {question}
 {gap_instructions}
 
-{_SQL_GENERATION_RULES}
+{generation_rules(dialect)}
 """
     raw = generate_answer(prompt, model=model, backend=backend, base_url=base_url)
     return _strip_sql_response(raw)
@@ -108,13 +98,15 @@ def repair_sql(
     conversation_history: list[dict[str, str]] | None = None,
     prior_result=None,
 ) -> str:
-    """Rewrite SQL after a validation or PostgreSQL execution error."""
+    """Rewrite SQL after a validation or execution error."""
+    dialect = dialect_for_context(schema_context)
+    expert = dialect_label(dialect)
     rag_block = f"\n{rag_supplement.strip()}\n" if rag_supplement.strip() else ""
     context_block = _sql_context_block(
         conversation_history=conversation_history,
         prior_result=prior_result,
     )
-    prompt = f"""You are a PostgreSQL expert. Fix the failed query using ONLY cataloged tables.
+    prompt = f"""You are a {expert} SQL expert. Fix the failed query using ONLY cataloged tables.
 
 {schema_context.to_llm_prompt_block()}
 {rag_block}
@@ -128,16 +120,7 @@ Failed SQL:
 Error:
 {error_message}
 
-Rules:
-- Return ONLY the corrected SELECT (no markdown, no explanation).
-- Return exactly ONE read-only SELECT — no semicolon-separated batches, no DDL, no prose after the query.
-- Read the Dataset definition for correct join paths — use bridge/hub tables as documented.
-- Read **Table business rules** — preserve status filters and metric exclusions from the catalog.
-- Remove or replace missing tables/columns — skip dimensions that caused the error.
-- Use ONLY tables from Allowed tables — map business terms to real catalog names.
-- Use Column reference for exact column names — do not invent columns.
-- Schema-qualify every table exactly as in the catalog.
-- SELECT only. Prefer a partial answer over failing.
+{repair_rules(dialect)}
 """
     raw = generate_answer(prompt, model=model, backend=backend, base_url=base_url)
     return _strip_sql_response(raw)
@@ -156,9 +139,11 @@ def generate_partial_sql(
     base_url: str | None = None,
 ) -> str:
     """Best-effort SQL when full question cannot be answered — skip missing elements."""
+    dialect = dialect_for_context(schema_context)
+    expert = dialect_label(dialect)
     errors = "\n".join(error_messages or []) or "(none)"
     rag_block = f"\n{rag_supplement.strip()}\n" if rag_supplement.strip() else ""
-    prompt = f"""You are a PostgreSQL expert. The user asked a question that could not be fully answered.
+    prompt = f"""You are a {expert} SQL expert. The user asked a question that could not be fully answered.
 
 {schema_context.to_llm_prompt_block()}
 {rag_block}
@@ -173,12 +158,7 @@ Errors:
 {errors}
 
 Write ONE simpler read-only SELECT that answers what you CAN from the catalog only.
-- Return exactly ONE SELECT — no semicolon-separated batches.
-- Read the Dataset definition for join paths and caveats before simplifying.
-- Read **Table business rules** — keep documented status filters and revenue rules when simplifying.
-- Skip any dimension that is missing or caused errors (department, unknown tables, etc.).
-- Use ONLY allowed catalog tables and Column reference column names.
-- Return ONLY the SQL (no markdown).
+{partial_generation_rules(dialect)}
 """
     raw = generate_answer(prompt, model=model, backend=backend, base_url=base_url)
     return _strip_sql_response(raw)

@@ -910,6 +910,9 @@ button.sidebar-hint {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
 }
+.modal-card--wide {
+  @apply max-w-2xl;
+}
 .modal-header {
   @apply mb-2 flex items-start justify-between gap-3;
 }
@@ -948,40 +951,24 @@ button.sidebar-hint {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-.settings-db-stack {
-  @apply space-y-4;
+@media (min-width: 1200px) {
+  .settings-servers-stack {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
-.settings-panel {
-  border-width: 1px;
-  border-style: solid;
+.db-connection-summary {
+  @apply m-0 grid gap-1.5 text-sm;
 }
-.settings-panel--catalog {
-  background: color-mix(in srgb, var(--color-primary-soft) 30%, var(--color-surface));
-  border-color: color-mix(in srgb, var(--color-primary) 38%, var(--color-border));
+.db-connection-summary-row {
+  @apply grid gap-x-4;
+  grid-template-columns: 5.5rem 1fr;
 }
-.settings-panel--connections {
-  background: var(--color-surface);
-  border-color: color-mix(in srgb, var(--color-text-muted) 22%, var(--color-border));
+.db-connection-summary-row dt {
+  color: var(--color-text-muted);
 }
-.settings-panel-badge {
-  @apply rounded-full px-2 py-0.5 text-xs font-medium;
-  background: color-mix(in srgb, var(--color-primary-soft) 70%, var(--color-surface));
-  color: var(--color-primary-text);
-  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, var(--color-border));
-}
-.settings-catalog-summary {
-  @apply rounded-lg px-4 py-3;
-  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
-}
-.settings-catalog-summary-line {
+.db-connection-summary-row dd {
+  @apply m-0 font-medium;
   color: var(--color-text);
-  word-break: break-all;
-}
-.settings-connections-empty {
-  @apply rounded-lg px-4 py-6 text-center;
-  border: 1px dashed var(--color-border);
-  background: var(--color-surface-subtle);
 }
 .mcp-page-split {
   @apply grid gap-4 lg:grid-cols-2 lg:items-start;
@@ -1605,6 +1592,24 @@ button.sidebar-hint {
   border: 1px solid var(--color-border);
   background: var(--color-surface-subtle);
 }
+.saved-connection-card--catalog {
+  background: color-mix(in srgb, var(--color-primary-soft) 32%, var(--color-surface-subtle));
+  border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
+}
+.saved-connection-card--editing {
+  @apply sm:col-span-2;
+}
+.saved-connection-card--trino-server {
+  background: color-mix(in srgb, var(--color-surface-subtle) 88%, var(--color-primary-soft) 12%);
+  border-color: color-mix(in srgb, var(--color-border) 70%, var(--color-primary) 30%);
+}
+.saved-connection-card-desc {
+  @apply mt-0.5 text-xs leading-snug;
+  color: var(--color-text-muted);
+}
+.saved-connection-card-form {
+  @apply w-full;
+}
 .saved-connection-card-header {
   @apply flex items-start justify-between gap-2;
 }
@@ -1617,8 +1622,13 @@ button.sidebar-hint {
   background: var(--color-badge-muted-bg);
   color: var(--color-badge-muted-text);
 }
+.saved-connection-card-badge--required {
+  background: color-mix(in srgb, var(--color-primary-soft) 70%, var(--color-surface));
+  color: var(--color-primary-text);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, var(--color-border));
+}
 .saved-connection-card-meta {
-  @apply truncate font-mono text-xs;
+  @apply text-xs;
   color: var(--color-text-muted);
 }
 .saved-connection-card-actions {

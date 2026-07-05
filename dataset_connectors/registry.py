@@ -5,8 +5,10 @@ from typing import Any
 from dataset_connectors.base import DatasetConnector
 from dataset_connectors.file import ApiConnector, FilePathConnector, SharePointConnector, UploadConnector, WebUrlConnector
 from dataset_connectors.postgres import PostgresConnector
+from dataset_connectors.trino import TrinoConnector
 
 CONNECTOR_SOURCE_TYPES: dict[str, str] = {
+    "trino": "structured",
     "postgres": "structured",
     "upload": "unstructured",
     "file_path": "unstructured",
@@ -26,6 +28,7 @@ CONTENT_CONNECTORS: tuple[str, ...] = (
 REMOTE_CONNECTORS: tuple[str, ...] = ("api", "web_url", "sharepoint")
 
 _REGISTRY: dict[str, DatasetConnector] = {
+    "trino": TrinoConnector(),
     "postgres": PostgresConnector(),
     "upload": UploadConnector(),
     "file_path": FilePathConnector(),

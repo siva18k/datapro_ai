@@ -34,6 +34,8 @@ from dataset_router import pick_structured_dataset as _pick_structured_dataset
 from domain_router import route_question
 from api.answer_format import build_sql_summary_prompt
 from serde import coerce_json_rows
+from sql_dialect import dialect_for_connector, dialect_label, prepare_sql_for_execution
+from structured_sql import is_structured_sql_connector
 from structured_db import postgres_config_from_source
 
 RetrievalMode = Literal["unstructured", "structured", "hybrid"]
@@ -92,7 +94,7 @@ def question_references_catalog_tables(question: str, domain_id: str) -> bool:
         if domain["id"] != domain_id:
             continue
         for source in domain.get("sources") or []:
-            if source.get("connector") != "postgres":
+            if not is_structured_sql_connector(source.get("connector")):
                 continue
             for table_name in source.get("table_names") or []:
                 if table_mentioned_in_question(table_name, question):
@@ -100,7 +102,7 @@ def question_references_catalog_tables(question: str, domain_id: str) -> bool:
         return False
 
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
-        if source.get("connector") != "postgres":
+        if not is_structured_sql_connector(source.get("connector")):
             continue
         for table in list_table_metadata(source["id"]):
             if table_mentioned_in_question(table["table_name"], question):
@@ -249,8 +251,8 @@ def should_use_structured_sql(question: str, domain_id: str | None) -> bool:
     if not domain_id:
         return False
     structured = list_sources(domain_id=domain_id, source_type="structured", enabled_only=True)
-    postgres = [s for s in structured if s.get("connector") == "postgres"]
-    if not postgres:
+    structured_sources = [s for s in structured if is_structured_sql_connector(s.get("connector"))]
+    if not structured_sources:
         return False
     if _GUIDANCE_PATTERNS.search(question):
         return False
@@ -260,7 +262,7 @@ def should_use_structured_sql(question: str, domain_id: str | None) -> bool:
         return True
     if _DESCRIPTIVE_STRUCTURED_PATTERNS.search(question):
         q_tokens = {t for t in re.findall(r"[a-z0-9]+", question.lower()) if len(t) > 2}
-        for source in postgres:
+        for source in structured_sources:
             for table in list_table_metadata(source["id"]):
                 for part in table["table_name"].lower().split("_"):
                     if len(part) > 2 and part in q_tokens:
@@ -279,9 +281,17 @@ class StructuredSchemaContext:
     connector: str
     dataset_definition_md: str
     tables: list[dict[str, Any]] = field(default_factory=list)
+    trino_catalog: str = ""
+
+    def qualified_relation(self, table: dict[str, Any]) -> str:
+        schema = table["table_schema"]
+        name = table["table_name"]
+        if self.connector == "trino" and self.trino_catalog:
+            return f"{self.trino_catalog}.{schema}.{name}"
+        return f"{schema}.{name}"
 
     def cataloged_relations(self) -> list[str]:
-        return [f"{t['table_schema']}.{t['table_name']}" for t in self.tables]
+        return [self.qualified_relation(t) for t in self.tables]
 
     def _active_tables(self) -> list[dict[str, Any]]:
         return [
@@ -297,7 +307,7 @@ class StructuredSchemaContext:
             table_def = (table.get("definition") or "").strip()
             if not table_def:
                 continue
-            rel = f"{table['table_schema']}.{table['table_name']}"
+            rel = self.qualified_relation(table)
             blocks.append(f"### `{rel}`\n{table_def}")
         if not blocks:
             return ""
@@ -309,12 +319,13 @@ class StructuredSchemaContext:
         )
 
     def to_llm_prompt_block(self) -> str:
-        relations = [f"{t['table_schema']}.{t['table_name']}" for t in self._active_tables()]
+        relations = [self.qualified_relation(t) for t in self._active_tables()]
         definition = prepare_definition_for_llm(self.dataset_definition_md)
         lines = [
             f"# Dataset: {self.source_name}",
             f"Domain: {self.domain_name}",
             f"Connector: {self.connector}",
+            f"SQL dialect: {dialect_label(dialect_for_connector(self.connector))}",
             "",
             "## Allowed tables (use ONLY these exact schema-qualified names)",
         ]
@@ -348,7 +359,7 @@ class StructuredSchemaContext:
         )
         for table in self._active_tables():
             role = table.get("table_role") or "fact"
-            lines.append(f"### {table['table_schema']}.{table['table_name']} (role: {role})")
+            lines.append(f"### {self.qualified_relation(table)} (role: {role})")
             table_def = (table.get("definition") or "").strip()
             if table_def:
                 lines.append(
@@ -453,7 +464,7 @@ def load_table_business_rules_for_domain(domain_id: str | None) -> str:
         return ""
     parts: list[str] = []
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
-        if source.get("connector") != "postgres":
+        if not is_structured_sql_connector(source.get("connector")):
             continue
         try:
             block = build_schema_context(source["id"]).table_business_rules_block()
@@ -491,6 +502,9 @@ def build_schema_context(
             }
         )
 
+    cfg = source.get("config") or {}
+    trino_catalog = (cfg.get("catalog") or cfg.get("trino_catalog") or "").strip()
+
     return StructuredSchemaContext(
         source_id=source_id,
         source_name=source["name"],
@@ -499,6 +513,7 @@ def build_schema_context(
         connector=source["connector"],
         dataset_definition_md=load_definition_for_prompt(source),
         tables=tables_out,
+        trino_catalog=trino_catalog,
     )
 
 
@@ -519,7 +534,7 @@ def build_domain_schema_context(
     seen: set[tuple[str, str]] = set()
 
     for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True):
-        if source.get("connector") != "postgres":
+        if not is_structured_sql_connector(source.get("connector")):
             continue
         def_md = load_definition_for_prompt(source)
         if def_md.strip() and def_md != "(none)":
@@ -544,9 +559,12 @@ def build_domain_schema_context(
         source_name=primary["name"],
         domain_id=domain_id,
         domain_name=primary.get("domain_name", ""),
-        connector="postgres",
+        connector=primary.get("connector") or "trino",
         dataset_definition_md="\n\n".join(definition_parts),
         tables=tables_out,
+        trino_catalog=(primary.get("config") or {}).get("catalog")
+        or (primary.get("config") or {}).get("trino_catalog")
+        or "",
     )
 
 
@@ -621,13 +639,16 @@ def _extract_sql_identifiers(sql: str) -> tuple[set[str], set[str]]:
     """
     normalized = _neutralize_function_from_keywords(sql.lower())
 
-    # Table references: FROM x, JOIN x, from schema.x, join schema.x
+    # Table references: FROM/JOIN with optional catalog.schema.table qualification (Trino).
     table_pattern = re.compile(
-        r"(?:from|join)\s+(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)"
+        r"(?:from|join)\s+([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*)"
         r"(?:\s+(?:as\s+)?[a-z_][a-z0-9_]*)?",
         re.I,
     )
-    table_refs = {m.group(1).lower() for m in table_pattern.finditer(normalized)}
+    table_refs: set[str] = set()
+    for match in table_pattern.finditer(normalized):
+        parts = match.group(1).lower().split(".")
+        table_refs.add(parts[-1])
 
     # Column references: simple name.col or bare col in SELECT list (before FROM)
     from_pos = normalized.find("from")
@@ -696,8 +717,13 @@ def validate_generated_sql(
         "date", "now", "interval", "asc", "desc", "the", "this", "that", "with",
     }
     candidate_tables = sql_tables - sql_keywords
+    allowed_schemas = {t.get("table_schema", "").lower() for t in schema_context.tables}
+    if schema_context.trino_catalog:
+        allowed_schemas.add(schema_context.trino_catalog.lower())
     catalog_violations: list[str] = []
     for tname in candidate_tables:
+        if tname in allowed_schemas:
+            continue
         if not _matches_catalog_table_name(tname, allowed_table_names):
             # EXTRACT(... FROM col) and similar can still leak column names here.
             if tname in all_column_names:
@@ -729,6 +755,9 @@ def _is_recoverable_sql_error(message: str) -> bool:
         or "undefined column" in lower
         or "42703" in lower
         or "ambiguous" in lower
+        or "type_mismatch" in lower
+        or "cannot apply operator" in lower
+        or "cannot be applied to" in lower
     )
 
 
@@ -863,6 +892,10 @@ def generate_and_execute_readonly_sql(
         sql = _revalidate_sql_after_repair(sql, schema_context, repair_label="repair")
     # ────────────────────────────────────────────────────────────────────────
 
+    source = get_source(source_id=source_id)
+    if source:
+        sql = prepare_sql_for_execution(sql, source.get("connector"))
+
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
@@ -920,13 +953,19 @@ def generate_and_execute_readonly_sql(
 
 def execute_readonly_sql(source_id: str, sql: str, *, max_rows: int = 500) -> tuple[list[str], list[list[Any]]]:
     """
-    Run validated read-only SQL against a cataloged postgres dataset.
-  Uses the dataset's stored connection config (read-only DB user in production).
+    Run validated read-only SQL against a structured dataset via Trino (or legacy direct Postgres).
     """
     validate_readonly_sql(sql)
     source = get_source(source_id=source_id)
-    if not source or source.get("connector") != "postgres":
-        raise ValueError("Dataset is not a postgres connection")
+    if not source or not is_structured_sql_connector(source.get("connector")):
+        raise ValueError("Dataset is not a structured SQL connection")
+
+    connector = (source.get("connector") or "").strip().lower()
+    if connector == "trino":
+        from structured_trino import execute_readonly_trino_sql, trino_config_from_source
+
+        sql = prepare_sql_for_execution(sql, connector)
+        return execute_readonly_trino_sql(trino_config_from_source(source), sql, max_rows=max_rows)
 
     import pg8000.native
 

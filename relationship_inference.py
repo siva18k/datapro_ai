@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from catalog_db import get_source, list_columns_by_source, list_table_metadata
-from structured_db import list_foreign_keys, postgres_config_from_source
+from structured_sql import is_structured_sql_connector
 
 RELATIONSHIPS_START = "<!-- datapro:relationships:start -->"
 RELATIONSHIPS_END = "<!-- datapro:relationships:end -->"
@@ -236,13 +236,14 @@ def _infer_from_database_fks(
     source: dict[str, Any],
     tables: list[dict[str, Any]],
 ) -> list[InferredRelationship]:
-    if source.get("connector") != "postgres":
+    if source.get("connector") not in ("postgres", "trino"):
         return []
     catalog_keys = {(t["table_schema"], t["table_name"]) for t in tables}
     table_by_key = {(t["table_schema"], t["table_name"]): t for t in tables}
     try:
-        config = postgres_config_from_source(source)
-        fks = list_foreign_keys(config)
+        from structured_db import list_foreign_keys_for_source
+
+        fks = list_foreign_keys_for_source(source)
     except Exception:
         return []
 

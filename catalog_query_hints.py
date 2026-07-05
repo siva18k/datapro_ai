@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from sql_dialect import dialect_for_context
 from temporal_context import fetch_time_context, format_time_period_hints, has_temporal_signal
 
 _METRIC_QUESTION = re.compile(
@@ -165,10 +166,12 @@ def build_temporal_sql_hints(
     if not has_temporal_signal(question):
         return ""
 
+    dialect = dialect_for_context(ctx)
     resolved = fetch_time_context(
         question,
         reference_date=reference_date,
         fiscal_year_start_month=fiscal_year_start_month,
+        sql_dialect=dialect,
     )
     if not resolved:
         resolved = {"periods": []}

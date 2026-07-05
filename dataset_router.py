@@ -257,7 +257,7 @@ def pick_structured_dataset(
         embedder,
         query_vector=query_vector,
         source_type="structured",
-        connector="postgres",
+        connectors=["trino", "postgres"],
         chunks=chunks,
     )
     return source

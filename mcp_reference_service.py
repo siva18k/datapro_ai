@@ -54,18 +54,18 @@ def reference_uris_for_execution(execution_kind: str) -> tuple[str, ...]:
 
 def build_domain_schema_markdown(domain_id: str) -> str:
     """Catalog schema for SQL — tables, columns, definitions (read-only reference)."""
-    postgres_sources = [
+    structured_sources = [
         s
         for s in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True)
-        if s.get("connector") == "postgres"
+        if s.get("connector") in ("trino", "postgres")
     ]
-    if not postgres_sources:
+    if not structured_sources:
         return (
             "# Catalog schema\n\n"
             "No structured Postgres datasets are cataloged in this domain. "
             "Add datasets on the Data tab or use document RAG instead."
         )
-    ctx = build_domain_schema_context(domain_id, postgres_sources[0]["id"])
+    ctx = build_domain_schema_context(domain_id, structured_sources[0]["id"])
     return ctx.to_llm_prompt_block()
 
 
