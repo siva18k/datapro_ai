@@ -8,9 +8,15 @@ from typing import Any
 from api.analytics_builder import build_dashboard
 from api.analytics_models import AnalyticsRequest, AnalyticsResponse
 from api.answer_format import build_analytics_summary_prompt
+from orchestrator import build_attachment_answer_prompt, build_domain_rag_prompt
 from api.llm import generate_answer, resolve_llm_runtime
 from catalog_service import ensure_catalog_ready, normalize_domain_overrides
-from conversation_context import contextual_question_with_history, truncate_history
+from conversation_context import (
+    contextual_question_with_history,
+    select_relevant_attachment_content,
+    split_attached_documents,
+    truncate_history,
+)
 from conversation_session import prepare_session_context
 from hybrid_prompt import prioritize_chunks, retrieve_hybrid_chunks
 from mcp_ask_planner import (
@@ -124,6 +130,35 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         domain_overrides=body.domain_overrides,
     )
 
+    if plan.execution_kind == "attachment":
+        user_question, attachment_raw = split_attached_documents(routing_prompt)
+        yield _status("Reading attached document…")
+        relevant = select_relevant_attachment_content(
+            user_question or prompt,
+            attachment_raw or "",
+        )
+        yield _status("Analyzing attached document…")
+        attachment_prompt = build_attachment_answer_prompt(
+            user_question,
+            relevant,
+        )
+        summary = generate_answer(
+            attachment_prompt,
+            model=llm_model,
+            backend=llm_backend,
+            base_url=llm_base_url,
+        )
+        dash = build_dashboard(
+            prompt=prompt,
+            summary=summary,
+            columns=None,
+            rows=None,
+            domain_name=None,
+            routing_method="attachment",
+        )
+        yield _result(_attach_session(dash, session))
+        return
+
     needs_structured_fallback = (
         plan.execution_kind not in ("sql", "hybrid")
         or not plan.domain_id
@@ -154,18 +189,50 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         yield _status("Structured dataset found.")
 
     if plan.execution_kind not in ("sql", "hybrid") or not plan.domain_id:
+        yield _status("Searching document context for your question…")
+        rag_chunks = prioritize_chunks(
+            retrieve_hybrid_chunks(
+                prompt,
+                embedder,
+                domain_id=plan.domain_id,
+                source_id=plan.rag_source_id,
+                top_k=5,
+                table_names=plan.table_names,
+                file_names=plan.file_names,
+            )
+        )
+        if not rag_chunks:
+            dash = build_dashboard(
+                prompt=prompt,
+                summary="Could not find relevant data for this question.",
+                columns=None,
+                rows=None,
+                domain_name=plan.domain_name,
+                routing_method=plan.routing.get("method"),
+                query_kind="guidance",
+            )
+            yield _result(_attach_session(dash, session))
+            return
+
+        yield _status(f"Analyzing {len(rag_chunks)} relevant document(s)…")
+        _, rag_prompt = build_domain_rag_prompt(
+            prompt,
+            rag_chunks,
+            domain_name=plan.domain_name,
+        )
+        summary = generate_answer(
+            rag_prompt,
+            model=llm_model,
+            backend=llm_backend,
+            base_url=llm_base_url,
+        )
         dash = build_dashboard(
             prompt=prompt,
-            summary=(
-                "Could not match this prompt to a structured SQL dataset. Analytics works best with "
-                "**structured SQL datasets** — try metrics like *revenue by country*, "
-                "*top customers*, or *employee count by department*."
-            ),
+            summary=summary,
             columns=None,
             rows=None,
             domain_name=plan.domain_name,
             routing_method=plan.routing.get("method"),
-            query_kind="guidance",
         )
         yield _result(_attach_session(dash, session))
         return

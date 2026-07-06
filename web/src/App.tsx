@@ -4,6 +4,8 @@ import { Layout } from "./components/Layout";
 import { ApiConnectionProvider } from "./context/ApiConnectionContext";
 import { SidebarProvider } from "./context/SidebarContext";
 import { ThemeProvider } from "./context/ThemeContext";
+import { AgentFlowsPage } from "./pages/AgentFlowsPage";
+import { AgentsPage } from "./pages/AgentsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AskPage } from "./pages/AskPage";
 import { CatalogPage } from "./pages/CatalogPage";
@@ -33,6 +35,8 @@ export default function App() {
             <Route index element={<CatalogPage />} />
             <Route path="ask" element={<AskPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
+            <Route path="agent-flows" element={<AgentFlowsPage />} />
+            <Route path="agents" element={<AgentsPage />} />
             <Route path="rag" element={<RagPage />} />
             <Route path="mcp" element={<McpPage />} />
             <Route path="settings" element={<SettingsPage />} />

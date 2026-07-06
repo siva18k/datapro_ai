@@ -2,12 +2,14 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnalyticsDashboard } from "../components/AnalyticsDashboard";
 import { AnalyticsPanel } from "../components/AnalyticsPanel";
-import { DomainScopePromptOptions } from "../components/DomainScopePromptOptions";
+import { AgentRunResearchView } from "../components/AgentRunResearchView";
 import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import { api } from "../api/client";
-import type { AnalyticsResponse } from "../types";
+import { AskPromptComposer, buildAskQuestion, type AskAttachment } from "../components/AskPromptComposer";
+import type { AnalyticsResponse, Agent, AgentFlow, AgentRunStep } from "../types";
 import { buildAskConversationHistory, sessionResetTurns, shouldSendConversationHistory, type ConversationTurn } from "../utils/askConversation";
+import { applyAgentRunStreamEvent, createLiveRunState, type LiveAgentRunState } from "../utils/agentRunStream";
 
 export function AnalyticsPage() {
   const [prompt, setPrompt] = useState("");
@@ -16,6 +18,18 @@ export function AnalyticsPage() {
   const [sessionTurns, setSessionTurns] = useState<ConversationTurn[]>([]);
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+  const [selectedFlow, setSelectedFlow] = useState<AgentFlow | null>(null);
+  const [attachments, setAttachments] = useState<AskAttachment[]>([]);
+  const [debugMode, setDebugMode] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [liveRun, setLiveRun] = useState<LiveAgentRunState | null>(null);
+  const [completedRun, setCompletedRun] = useState<{
+    entityLabel: string;
+    entityKind: "agent" | "flow";
+    steps: AgentRunStep[];
+    reportHtml: string | null;
+  } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
   const { data: settings } = useQuery({
@@ -65,8 +79,13 @@ export function AnalyticsPage() {
         },
         (message) => setActivityStatus(message),
       ),
-    onSettled: () => setActivityStatus(null),
+    onMutate: () => setProcessing(true),
+    onSettled: () => {
+      setProcessing(false);
+      setActivityStatus(null);
+    },
     onSuccess: (res, variables) => {
+      setProcessing(false);
       setDashboard(res);
       const assistantContent = res.summary?.trim() || res.title;
       const userTurn: ConversationTurn = { role: "user", content: variables.text };
@@ -88,11 +107,137 @@ export function AnalyticsPage() {
     },
   });
 
+  const agentRun = useMutation({
+    mutationFn: async ({ agent, extraInstructions }: { agent: Agent; extraInstructions: string }) => {
+      const steps: AgentRunStep[] = [];
+      let reportHtml: string | null = null;
+      await api.agentRunStream(
+        agent.id,
+        (event) => {
+          setLiveRun((prev) => (prev ? applyAgentRunStreamEvent(prev, event) : prev));
+          if (event.type === "step" && event.step_id) {
+            const step: AgentRunStep = {
+              step_id: event.step_id,
+              message: event.message || "",
+              status: event.status,
+              payload: event.payload,
+            };
+            const idx = steps.findIndex((s) => s.step_id === step.step_id);
+            if (idx >= 0) steps[idx] = step;
+            else steps.push(step);
+            if (event.step_id === "report" && event.payload?.html) {
+              reportHtml = String(event.payload.html);
+            }
+          }
+        },
+        extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+      );
+      return { entityLabel: agent.name, entityKind: "agent" as const, steps: [...steps], reportHtml };
+    },
+    onMutate: ({ agent }) => {
+      setCompletedRun(null);
+      setProcessing(true);
+      setLiveRun(createLiveRunState(agent.name, "agent"));
+    },
+    onSettled: () => {
+      setProcessing(false);
+      setLiveRun(null);
+      setActivityStatus(null);
+    },
+    onSuccess: (result) => {
+      setProcessing(false);
+      setCompletedRun(result);
+    },
+  });
+
+  const flowRun = useMutation({
+    mutationFn: async ({ flow, extraInstructions }: { flow: AgentFlow; extraInstructions: string }) => {
+      const steps: AgentRunStep[] = [];
+      let reportHtml: string | null = null;
+      await api.agentFlowRunStream(
+        flow.id,
+        (event) => {
+          setLiveRun((prev) => (prev ? applyAgentRunStreamEvent(prev, event) : prev));
+          if (event.type === "step" && event.step_id) {
+            const step: AgentRunStep = {
+              step_id: event.step_id,
+              message: event.message || "",
+              status: event.status,
+              payload: event.payload,
+            };
+            const idx = steps.findIndex((s) => s.step_id === step.step_id);
+            if (idx >= 0) steps[idx] = step;
+            else steps.push(step);
+            if (event.step_id.endsWith(":report") && event.payload?.html) {
+              reportHtml = String(event.payload.html);
+            }
+          }
+          if (event.type === "result" && event.payload?.report_html) {
+            reportHtml = String(event.payload.report_html);
+          }
+        },
+        extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+      );
+      return { entityLabel: flow.name, entityKind: "flow" as const, steps: [...steps], reportHtml };
+    },
+    onMutate: ({ flow }) => {
+      setCompletedRun(null);
+      setProcessing(true);
+      setLiveRun(createLiveRunState(flow.name, "flow"));
+    },
+    onSettled: () => {
+      setProcessing(false);
+      setLiveRun(null);
+      setActivityStatus(null);
+    },
+    onSuccess: (result) => {
+      setProcessing(false);
+      setCompletedRun(result);
+    },
+  });
+
+  const isPending = processing;
+  const submitError = run.isError
+    ? String(run.error)
+    : agentRun.isError
+      ? String(agentRun.error)
+      : flowRun.isError
+        ? String(flowRun.error)
+        : null;
+
   const submit = () => {
-    const text = prompt.trim();
+    if (isPending) return;
+
+    if (selectedFlow) {
+      const extra = buildAskQuestion(prompt, attachments);
+      setDashboard(null);
+      setCompletedRun(null);
+      const flow = selectedFlow;
+      setPrompt("");
+      setAttachments([]);
+      setSelectedFlow(null);
+      flowRun.mutate({ flow, extraInstructions: extra });
+      return;
+    }
+
+    if (selectedAgent) {
+      const extra = buildAskQuestion(prompt, attachments);
+      setDashboard(null);
+      setCompletedRun(null);
+      const agent = selectedAgent;
+      setPrompt("");
+      setAttachments([]);
+      setSelectedAgent(null);
+      agentRun.mutate({ agent, extraInstructions: extra });
+      return;
+    }
+
+    const displayText = prompt.trim();
+    const text = buildAskQuestion(prompt, attachments);
     if (!text || run.isPending) return;
     setDashboard(null);
-    const useFollowUp = shouldSendConversationHistory(sessionTurns, text);
+    setCompletedRun(null);
+    const useFollowUp = shouldSendConversationHistory(sessionTurns, displayText);
     const history = useFollowUp
       ? buildAskConversationHistory(sessionTurns, conversationTurns)
       : [];
@@ -104,25 +249,22 @@ export function AnalyticsPage() {
 
   const clearSession = () => {
     setDashboard(null);
+    setCompletedRun(null);
     setSessionTurns([]);
     setPrompt("");
+    setAttachments([]);
+    setSelectedAgent(null);
+    setSelectedFlow(null);
   };
 
   const hasSession = sessionTurns.length > 0 || Boolean(dashboard);
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  };
 
   return (
     <div className="analytics-page">
       <div className="shrink-0">
         <PageHeader
           title="Analytics"
-          description="Dashboards from catalog data"
+          description="Analyze your multi-domain data effortlessly"
         />
       </div>
 
@@ -136,40 +278,67 @@ export function AnalyticsPage() {
       <div className="card analytics-shell mb-0 flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="analytics-prompt-bar shrink-0 border-b">
           <div className="analytics-prompt-row">
-            <textarea
-              className="ask-prompt analytics-prompt min-h-0 flex-1"
-              rows={2}
-              placeholder="Describe a dashboard… e.g. revenue by country"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={onKeyDown}
-              disabled={run.isPending}
-            />
-            <button type="button" className="btn shrink-0" disabled={run.isPending || !prompt.trim()} onClick={submit}>
-              {run.isPending ? "Building…" : "Run"}
-            </button>
+            <div className="min-w-0 flex-1">
+              <AskPromptComposer
+                value={prompt}
+                onChange={setPrompt}
+                onSubmit={submit}
+                isPending={isPending}
+                error={submitError}
+                attachments={attachments}
+                onAttachmentsChange={setAttachments}
+                debugMode={debugMode}
+                onDebugModeChange={setDebugMode}
+                selectedDomains={selectedDomains}
+                onSelectedDomainsChange={setSelectedDomains}
+                selectedAgent={selectedAgent}
+                onSelectedAgentChange={setSelectedAgent}
+                selectedFlow={selectedFlow}
+                onSelectedFlowChange={setSelectedFlow}
+                showDebugToggle={false}
+                showAgentFlowSelection={false}
+                showDomainPillsInToolbar={true}
+                submitOnEnter={false}
+              />
+            </div>
             {hasSession && (
               <button
                 type="button"
-                className="btn btn-secondary shrink-0"
-                disabled={run.isPending}
+                className="analytics-new-chat-btn self-start"
+                disabled={isPending}
                 onClick={clearSession}
                 title="Clear follow-up context and start fresh"
               >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
                 New chat
               </button>
             )}
           </div>
-          <div className="ask-composer-options">
-            <DomainScopePromptOptions
-              selectedSlugs={selectedDomains}
-              onChange={setSelectedDomains}
-            />
-          </div>
-          {run.isError && <p className="alert-error mt-2">{String(run.error)}</p>}
+          {submitError && !attachments.length && <p className="alert-error mt-2">{submitError}</p>}
         </div>
 
         <div ref={previewRef} className="analytics-preview min-h-0 flex-1 overflow-y-auto">
+          {liveRun && (
+            <AgentRunResearchView
+              entityLabel={liveRun.entityLabel}
+              entityKind={liveRun.entityKind}
+              steps={liveRun.steps}
+              reportHtml={liveRun.reportHtml}
+              isRunning
+              statusMessage={liveRun.statusMessage}
+            />
+          )}
+          {completedRun && !liveRun && (
+            <AgentRunResearchView
+              entityLabel={completedRun.entityLabel}
+              entityKind={completedRun.entityKind}
+              steps={completedRun.steps}
+              reportHtml={completedRun.reportHtml}
+              isRunning={false}
+            />
+          )}
           {dashboard?.session_reset && dashboard.session_summary && (
             <div className="message-bar message-bar--info m-4" role="status">
               <div className="message-bar-inner">
@@ -185,13 +354,15 @@ export function AnalyticsPage() {
               </div>
             </div>
           )}
-          <AnalyticsDashboard
-            data={dashboard}
-            isRunning={run.isPending}
-            activityStatus={activityStatus}
-            isFullscreen={isFullscreen}
-            onToggleFullscreen={dashboard ? toggleFullscreen : undefined}
-          />
+          {!liveRun && !completedRun && (
+            <AnalyticsDashboard
+              data={dashboard}
+              isRunning={run.isPending}
+              activityStatus={activityStatus}
+              isFullscreen={isFullscreen}
+              onToggleFullscreen={dashboard ? toggleFullscreen : undefined}
+            />
+          )}
         </div>
       </div>
     </div>

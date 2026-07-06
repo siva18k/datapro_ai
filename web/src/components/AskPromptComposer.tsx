@@ -33,6 +33,10 @@ interface AskPromptComposerProps {
   onSelectedAgentChange: (agent: Agent | null) => void;
   selectedFlow: AgentFlow | null;
   onSelectedFlowChange: (flow: AgentFlow | null) => void;
+  showDebugToggle?: boolean;
+  showAgentFlowSelection?: boolean;
+  showDomainPillsInToolbar?: boolean;
+  submitOnEnter?: boolean;
 }
 
 function OptionPill({
@@ -77,6 +81,10 @@ export function AskPromptComposer({
   onSelectedAgentChange,
   selectedFlow,
   onSelectedFlowChange,
+  showDebugToggle = true,
+  showAgentFlowSelection = true,
+  showDomainPillsInToolbar = false,
+  submitOnEnter = true,
 }: AskPromptComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -87,6 +95,7 @@ export function AskPromptComposer({
   const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const wasPendingRef = useRef(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuKind, setMenuKind] = useState<"agent" | "flow" | null>(null);
   const [menuFilter, setMenuFilter] = useState("");
@@ -138,12 +147,14 @@ export function AskPromptComposer({
   const visibleFlows = useMemo(() => filteredFlows.slice(0, 8), [filteredFlows]);
   const visibleMenuItems = menuKind === "flow" ? visibleFlows : visibleAgents;
 
-  const canSend = Boolean((value.trim() || selectedAgent || selectedFlow) && !isPending);
-  const hasContent = value.length > 0 || attachments.length > 0 || Boolean(selectedAgent) || Boolean(selectedFlow);
+  const canSend = Boolean((value.trim() || (showAgentFlowSelection && (selectedAgent || selectedFlow))) && !isPending);
+  const hasContent = value.length > 0 || attachments.length > 0 || (showAgentFlowSelection && (Boolean(selectedAgent) || Boolean(selectedFlow)));
   const showFocusEffects = isFocused && hasContent;
+  const textRows = Math.min(Math.max(value.split("\n").length, 1), 8);
 
   useEffect(() => {
     if (wasPendingRef.current && !isPending) {
+      setSubmitted(true);
       textareaRef.current?.blur();
       setIsFocused(false);
     }
@@ -157,6 +168,7 @@ export function AskPromptComposer({
   }, [menuOpen, atStart]);
 
   const detectAtMenu = useCallback((text: string, pos: number) => {
+    if (!showAgentFlowSelection) return;
     const textBefore = text.slice(0, pos);
     const flowMatch = textBefore.match(/(?:^|\s)@@([a-z0-9_-]*)$/i);
     if (flowMatch) {
@@ -181,7 +193,7 @@ export function AskPromptComposer({
       setMenuPos(null);
       setMenuHighlightIndex(0);
     }
-  }, []);
+  }, [showAgentFlowSelection]);
 
   const insertAgent = (agent: Agent) => {
     const el = textareaRef.current;
@@ -232,7 +244,7 @@ export function AskPromptComposer({
   const shellClass = [
     "ask-composer-shell",
     isPending ? "ask-composer-shell--pending" : "",
-    !isPending && hasContent ? "ask-composer-shell--engaged" : "",
+    !isPending && !submitted && hasContent ? "ask-composer-shell--engaged" : "",
     showFocusEffects ? "ask-composer-shell--focused" : "",
     !isPending && value.length > 0 ? "ask-composer-shell--typing" : "",
   ]
@@ -284,15 +296,23 @@ export function AskPromptComposer({
         return;
       }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (canSend) onSubmit();
+    if (submitOnEnter) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (canSend) onSubmit();
+      }
+    } else {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (canSend) onSubmit();
+      }
     }
   };
 
   const onInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const next = e.target.value;
     const pos = e.target.selectionStart;
+    if (submitted) setSubmitted(false);
     onChange(next);
     detectAtMenu(next, pos);
   };
@@ -457,9 +477,9 @@ export function AskPromptComposer({
       >
         <div className={shellClass}>
           <div className={`ask-composer-inner${menuOpen ? " ask-composer-inner--menu-open" : ""}`}>
-          {(attachments.length > 0 || selectedAgent || selectedFlow) && (
+          {(showAgentFlowSelection && (selectedAgent || selectedFlow)) && (
             <div className="ask-composer-attachments">
-              {selectedFlow && (
+              {showAgentFlowSelection && selectedFlow && (
                 <span className="ask-composer-agent-chip ask-composer-flow-chip">
                   <span className="ask-composer-agent-chip-label">@@{selectedFlow.name}</span>
                   <button
@@ -473,7 +493,7 @@ export function AskPromptComposer({
                   </button>
                 </span>
               )}
-              {selectedAgent && (
+              {showAgentFlowSelection && selectedAgent && (
                 <span className="ask-composer-agent-chip">
                   <span className="ask-composer-agent-chip-label">@{selectedAgent.name}</span>
                   <button
@@ -487,19 +507,6 @@ export function AskPromptComposer({
                   </button>
                 </span>
               )}
-              {attachments.map((file, i) => (
-                <span key={`${file.name}-${i}`} className="ask-composer-attachment">
-                  <span className="ask-composer-attachment-name">{file.name}</span>
-                  <button
-                    type="button"
-                    className="ask-composer-attachment-remove"
-                    onClick={() => removeAttachment(i)}
-                    aria-label={`Remove ${file.name}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
             </div>
           )}
 
@@ -511,13 +518,15 @@ export function AskPromptComposer({
             <textarea
               ref={textareaRef}
               className="ask-composer-input"
-              rows={1}
+              rows={submitOnEnter ? 1 : textRows}
               placeholder={
-                selectedFlow
+                showAgentFlowSelection && selectedFlow
                   ? "Add instructions for this flow run…"
-                  : selectedAgent
+                  : showAgentFlowSelection && selectedAgent
                     ? "Add instructions for this agent run…"
-                    : "Ask a question — @ for an agent, @@ for a flow — e.g. travel policy, revenue by region"
+                    : showAgentFlowSelection
+                      ? "Ask a question — @ for an agent, @@ for a flow — e.g. travel policy, revenue by region"
+                      : "Ask a question — e.g. travel policy, revenue by region"
               }
               value={value}
               onChange={onInput}
@@ -561,6 +570,29 @@ export function AskPromptComposer({
                   <path d="M12 5v14M5 12h14" />
                 </svg>
               </button>
+              {attachments.length > 0 && (
+                <div className="ask-composer-attachment-list">
+                  {attachments.map((file, i) => (
+                    <span key={`${file.name}-${i}`} className="ask-composer-attachment">
+                      <span className="ask-composer-attachment-name">{file.name}</span>
+                      <button
+                        type="button"
+                        className="ask-composer-attachment-remove"
+                        onClick={() => removeAttachment(i)}
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {showDomainPillsInToolbar && (
+                <DomainScopePromptOptions
+                  selectedSlugs={selectedDomains}
+                  onChange={onSelectedDomainsChange}
+                />
+              )}
             </div>
             <button
               type="submit"
@@ -578,16 +610,20 @@ export function AskPromptComposer({
       </form>
 
       <div className="ask-composer-options">
-        <DomainScopePromptOptions
-          selectedSlugs={selectedDomains}
-          onChange={onSelectedDomainsChange}
-        />
-        <OptionPill
-          active={debugMode}
-          onClick={() => onDebugModeChange(!debugMode)}
-          icon={<IconDebug width={14} height={14} />}
-          label="Debug"
-        />
+        {!showDomainPillsInToolbar && (
+          <DomainScopePromptOptions
+            selectedSlugs={selectedDomains}
+            onChange={onSelectedDomainsChange}
+          />
+        )}
+        {showDebugToggle && (
+          <OptionPill
+            active={debugMode}
+            onClick={() => onDebugModeChange(!debugMode)}
+            icon={<IconDebug width={14} height={14} />}
+            label="Debug"
+          />
+        )}
       </div>
 
       {error && <p className="alert-error mt-2 text-sm">{error}</p>}
