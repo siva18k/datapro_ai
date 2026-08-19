@@ -4,5 +4,5 @@
 # Tables are queried as finance.finance_data.<table>
 connector.name=postgresql
 connection-url=jdbc:postgresql://db:5432/ragpro
-connection-user=ragpro
-connection-password=ragpro
+connection-user=ragpro_dev
+connection-password=DataIntDB_9

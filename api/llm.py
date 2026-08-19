@@ -8,7 +8,7 @@ from pathlib import Path
 import certifi
 import requests
 
-from llm_providers import API_KEY_ENV, DEFAULT_MODELS
+from llm_providers import API_KEY_ENV, DEFAULT_MODELS, MLX_MODEL_PATH_ENV
 from settings_service import get_api_key, get_llm_settings
 from sql_dialect import (
     dialect_for_context,
@@ -250,6 +250,19 @@ def generate_answer(
     resolved_backend, resolved_model, resolved_base = resolve_llm_runtime(
         backend=backend, model=model, base_url=base_url
     )
+
+    if resolved_backend == "mlx":
+        model_path = _env_value(MLX_MODEL_PATH_ENV) or (
+            settings.get("mlx_model_path") or ""
+        ).strip()
+        base_url = (resolved_base or "http://127.0.0.1:18080").strip()
+        r = requests.post(
+            f"{base_url.rstrip('/')}/generate",
+            json={"prompt": prompt, "max_tokens": 2048, "temperature": 0.2},
+            timeout=300,
+        )
+        r.raise_for_status()
+        return r.json()["response"]
 
     if resolved_backend == "ollama":
         r = requests.post(

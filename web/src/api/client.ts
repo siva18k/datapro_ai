@@ -1107,6 +1107,7 @@ export interface LlmSettingsPublic {
   default_backend: string;
   default_model: string;
   ollama_base_url: string;
+  mlx_model_path: string;
   mistral_api_key_set: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
@@ -1118,6 +1119,7 @@ export interface LlmSettingsPayload {
   default_backend?: string;
   default_model?: string;
   ollama_base_url?: string;
+  mlx_model_path?: string;
   mistral_api_key?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;

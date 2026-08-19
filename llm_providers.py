@@ -93,6 +93,7 @@ LLM_BACKENDS: list[dict[str, str]] = [
     {"id": "gemini", "label": "Gemini (Google)", "default_model": "gemini-2.0-flash"},
     {"id": "openrouter", "label": "OpenRouter", "default_model": "openai/gpt-4o-mini"},
     {"id": "ollama", "label": "Ollama (local)", "default_model": "phi3:mini"},
+    {"id": "mlx", "label": "Local MLX (Qwen)", "default_model": ""},
 ]
 
 DEFAULT_LLM_BACKEND = "mistral"
@@ -106,3 +107,5 @@ API_KEY_ENV: dict[str, str] = {
     "gemini": "GEMINI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
 }
+
+MLX_MODEL_PATH_ENV = "MLX_MODEL_PATH"

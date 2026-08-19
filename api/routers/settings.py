@@ -28,6 +28,7 @@ class LlmSettings(BaseModel):
     default_backend: str | None = None
     default_model: str | None = None
     ollama_base_url: str | None = None
+    mlx_model_path: str | None = None
     mistral_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

@@ -34,6 +34,7 @@ export default function App() {
       <BrowserRouter>
         <SidebarProvider>
         <Routes>
+          <Route path="about" element={<AboutPage />} />
           <Route element={<Layout />}>
             <Route index element={<CatalogPage />} />
             <Route path="ask" element={<AskPage />} />
@@ -45,7 +46,6 @@ export default function App() {
             <Route path="rag" element={<RagPage />} />
             <Route path="mcp" element={<McpPage />} />
             <Route path="settings" element={<SettingsPage />} />
-            <Route path="about" element={<AboutPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

@@ -123,6 +123,7 @@ export function SettingsPage() {
     default_backend: "mistral",
     default_model: "",
     ollama_base_url: "http://localhost:11434",
+    mlx_model_path: "/Users/siva/models/qwen3.6-35b-4bit",
   });
   const [apiKeys, setApiKeys] = useState({
     mistral: "",
@@ -325,6 +326,7 @@ export function SettingsPage() {
       default_backend: data.llm.default_backend,
       default_model: sanitizeModelOverride(data.llm.default_model),
       ollama_base_url: data.llm.ollama_base_url,
+      mlx_model_path: data.llm.mlx_model_path || "/Users/siva/models/qwen3.6-35b-4bit",
     });
     const model = sanitizeModelOverride(data.llm.default_model);
     const knownMistralIds = new Set((data.mistral_model_options ?? []).map((option) => option.id));
@@ -809,6 +811,16 @@ export function SettingsPage() {
                     className="input font-mono text-xs"
                     value={llm.ollama_base_url ?? "http://localhost:11434"}
                     onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
+                  />
+                </div>
+              ) : selectedBackend === "mlx" ? (
+                <div className="field mb-0">
+                  <label className="label">Model path</label>
+                  <input
+                    className="input font-mono text-xs"
+                    placeholder="/path/to/model"
+                    value={llm.mlx_model_path || ""}
+                    onChange={(e) => setLlm((prev) => ({ ...prev, mlx_model_path: e.target.value }))}
                   />
                 </div>
               ) : null}
