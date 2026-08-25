@@ -89,8 +89,13 @@ def postgres_config_from_source(source: dict) -> dict:
         except Exception:
             pass
     merged = dict(resolved)
+    linked_connection = bool(resolved) and bool(
+        connection_id or str(cfg.get("connection_name") or "").strip()
+    )
     for key, value in cfg.items():
         if value is None:
+            continue
+        if linked_connection and key in {"host", "port", "user", "password", "database", "sslmode"}:
             continue
         if isinstance(value, str):
             # Keep saved-connection values when dataset config contains blank placeholders.

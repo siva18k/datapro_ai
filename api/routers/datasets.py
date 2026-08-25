@@ -40,6 +40,7 @@ from catalog_service import (
     test_dataset_connection,
 )
 from dataset_connectors.registry import CONNECTOR_SOURCE_TYPES, is_content_connector, is_remote_connector
+from connections_service import get_connection_by_name, list_connections
 from ingest_service import SUPPORTED_EXTENSIONS
 from structured_db import (
     list_schema_tables_for_source,
@@ -69,7 +70,21 @@ def _normalize_structured_config(connector: str, config: dict | None) -> dict | 
 
     from connections_service import connection_config
 
-    linked = connection_config(connection_id)
+    try:
+        linked = connection_config(connection_id)
+    except ValueError:
+        # Repair datasets whose saved connection was deleted and recreated.
+        replacement = get_connection_by_name(str(cfg.get("connection_name") or ""))
+        if not replacement:
+            postgres_connections = [
+                row for row in list_connections()
+                if str(row.get("connector") or "").strip().lower() == "postgres"
+            ]
+            replacement = postgres_connections[0] if len(postgres_connections) == 1 else None
+        if not replacement:
+            raise
+        connection_id = str(replacement["id"])
+        linked = connection_config(connection_id)
     normalized: dict[str, object] = {
         "connection_id": connection_id,
         "connection_name": str(

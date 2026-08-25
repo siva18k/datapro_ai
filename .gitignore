@@ -50,3 +50,5 @@ pages/
 # Personal / production AWS deployment (ECS Fargate, account IDs, ARNs, secrets)
 # Templates live in deploy.example/ — copy locally with: ./deploy.example/scripts/init-deploy.sh
 deploy/
+
+README.local.md
