@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
+import { AgentAutoSetupPanel } from "../components/AgentAutoSetupPanel";
 import { AgentInstructionsEditor } from "../components/AgentInstructionsEditor";
 import { AgentRunResults, useAgentRun } from "../components/AgentRunPanel";
-import { AgentToolPicker } from "../components/AgentToolPicker";
 import { AgentsSidebarPanel, AgentsTopSelector } from "../components/AgentsSidebarPanel";
 import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
@@ -11,34 +11,19 @@ import { api } from "../api/client";
 import { useApiPageState } from "../context/ApiConnectionContext";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import type { AgentCapabilities, AgentToolBinding } from "../types";
+import { inferAgentCapabilities } from "../utils/agentCapabilities";
 
 const DEFAULT_INSTRUCTIONS = `## Goal
-Describe what this agent monitors or automates.
+What should this agent find or produce? Write it in plain language.
 
 ## Domains
-Use /finance or /hr to scope catalog data.
+Type / to pin a domain (optional). Otherwise a domain is chosen from the goal, like Ask.
 
-## KPI rules
-Define pass or fail criteria in plain language.
-
-## Steps
-1. Check the metric against KPI rules.
-2. Generate an HTML report with tables and charts as described below.
-3. Send email notification to stakeholders.
-
-## Report output
-What the HTML report should contain.
-
-## Notifications
-Who should be emailed and when.
+## Rules
+Any limits — for example price above 20, last quarter only.
 `;
 
-const DEFAULT_CAPS: AgentCapabilities = {
-  kpi_check: true,
-  generate_report: true,
-  send_email: true,
-  email_to: "",
-};
+const DEFAULT_CAPS: AgentCapabilities = inferAgentCapabilities(DEFAULT_INSTRUCTIONS);
 
 export function AgentsPage() {
   const qc = useQueryClient();
@@ -75,7 +60,10 @@ export function AgentsPage() {
     setName(agentDetail.name);
     setDescription(agentDetail.description || "");
     setInstructions(agentDetail.instructions || "");
-    setCapabilities({ ...DEFAULT_CAPS, ...agentDetail.capabilities });
+    setCapabilities({
+      ...inferAgentCapabilities(agentDetail.instructions || ""),
+      ...agentDetail.capabilities,
+    });
     setTools(agentDetail.tools ?? []);
     setEnabled(agentDetail.enabled);
     setDirty(false);
@@ -104,11 +92,11 @@ export function AgentsPage() {
         instructions,
         capabilities,
         enabled,
+        extra_tools: tools.map((t) => ({
+          mcp_server_id: t.mcp_server_id,
+          tool_name: t.tool_name,
+        })),
       });
-      await api.setAgentTools(
-        selectedId,
-        tools.map((t) => ({ mcp_server_id: t.mcp_server_id, tool_name: t.tool_name })),
-      );
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["agents"] });
@@ -129,6 +117,10 @@ export function AgentsPage() {
     mutationFn: () => api.formatAgentInstructions(selectedId, instructions),
     onSuccess: (res) => {
       setInstructions(res.markdown);
+      setCapabilities((prev) => ({
+        ...inferAgentCapabilities(res.markdown),
+        email_to: prev.email_to,
+      }));
       setDirty(true);
     },
   });
@@ -199,7 +191,7 @@ export function AgentsPage() {
 
         <div className="agents-editor min-w-0">
           {!selectedId && !isLoading && (
-            <p className="text-sm text-zinc-500">Select or create an agent to edit.</p>
+            <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Select or create an agent to edit.</p>
           )}
 
           {selectedId && agentDetail && (
@@ -247,6 +239,10 @@ export function AgentsPage() {
                   value={instructions}
                   onChange={(v) => {
                     setInstructions(v);
+                    setCapabilities((prev) => ({
+                      ...inferAgentCapabilities(v),
+                      email_to: prev.email_to,
+                    }));
                     markDirty();
                   }}
                   onFormat={() => formatInstructions.mutate()}
@@ -260,67 +256,32 @@ export function AgentsPage() {
                   </p>
                 )}
 
-                <AgentToolPicker
-                  selected={tools}
-                  onChange={(next) => {
+                {agentDetail.mcp_kit && !dirty && (
+                  <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                    Saved MCP kit: {agentDetail.mcp_kit.tool_count ?? 0} tools,{" "}
+                    {agentDetail.mcp_kit.prompt_count ?? 0} prompts,{" "}
+                    {agentDetail.mcp_kit.resource_count ?? 0} resources
+                    {agentDetail.mcp_kit.domain_slugs?.length
+                      ? ` · /${agentDetail.mcp_kit.domain_slugs.join(" /")}`
+                      : ""}
+                    . Used immediately when this agent runs.
+                  </p>
+                )}
+
+                <AgentAutoSetupPanel
+                  capabilities={capabilities}
+                  onCapabilitiesChange={(next) => {
+                    setCapabilities(next);
+                    markDirty();
+                  }}
+                  tools={tools}
+                  onToolsChange={(next) => {
                     setTools(next);
                     markDirty();
                   }}
                   disabled={saveAgent.isPending}
+                  mcpKit={agentDetail.mcp_kit}
                 />
-
-                <fieldset className="field mb-0">
-                  <legend className="label mb-2">Abilities</legend>
-                  <div className="space-y-2 text-sm">
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={!!capabilities.kpi_check}
-                        onChange={(e) => {
-                          setCapabilities({ ...capabilities, kpi_check: e.target.checked });
-                          markDirty();
-                        }}
-                      />
-                      Check KPI (rules in instructions)
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={!!capabilities.generate_report}
-                        onChange={(e) => {
-                          setCapabilities({ ...capabilities, generate_report: e.target.checked });
-                          markDirty();
-                        }}
-                      />
-                      Generate HTML report
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={!!capabilities.send_email}
-                        onChange={(e) => {
-                          setCapabilities({ ...capabilities, send_email: e.target.checked });
-                          markDirty();
-                        }}
-                      />
-                      Send email (preview only in test run)
-                    </label>
-                    {capabilities.send_email && (
-                      <div className="field mb-0 pl-6">
-                        <label className="label">Email to</label>
-                        <input
-                          className="input"
-                          value={capabilities.email_to || ""}
-                          onChange={(e) => {
-                            setCapabilities({ ...capabilities, email_to: e.target.value });
-                            markDirty();
-                          }}
-                          placeholder="team@example.com"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </fieldset>
 
                 <div className="flex flex-wrap items-center gap-2">
                   <button

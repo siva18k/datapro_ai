@@ -10,9 +10,9 @@
 
 **RAG** — chunk size, overlap, ingest.
 
-**MCP** — server status, prompts, domain bindings. Bound tools, resources, and prompts are used automatically during **Ask** and **Analytics** when a domain is routed (planner picks what helps per question).
+**Settings → MCP** — catalog of tools, prompts, and resources. **Settings → Servers** — start/stop DATA Pro MCP, Email, API, and Trino. Domain bindings still live on each domain in the Catalog. Bound tools, resources, and prompts are used automatically during **Ask** and **Analytics** when a domain is routed.
 
-**Settings** — DB, LLM, embeddings, start/stop API and MCP.
+**Settings** — connections, LLM, MCP catalog, and server start/stop.
 
 Fastest path to a first answer: Catalog → add files → **RAG** → ingest → **Ask**. After `migrate.py`, `sample_docs/` is wired to General → Sample Documents.
 
@@ -90,7 +90,7 @@ Details in [docs/finance-data-guide.md](finance-data-guide.md). Then add a Postg
 
 ## Agents and Agent Flows
 
-**Agents** — saved jobs (KPI check, report, email, MCP tools). They are not a chat like Ask. KPI/report still query the warehouse through Analytics SQL.
+**Agents** — write a goal in plain language and type `/` to pin a domain if you want. On **Save agent**, DATA Pro identifies the MCP tools, prompts, and resources that domain needs (plus any extras you add under Advanced) and stores them on the agent. The next run uses that saved kit immediately — it does not re-plan MCP each time. KPI vs report vs email is inferred from the instructions; Advanced still lets you override. Warehouse data still uses Analytics SQL.
 
 **Agent Flows** — a canvas of steps. Each card is either:
 

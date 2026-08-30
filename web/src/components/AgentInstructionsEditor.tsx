@@ -206,7 +206,7 @@ export function AgentInstructionsEditor({
         </button>
       </div>
       <p className="mt-1 text-xs text-zinc-500">
-        Type <code>/</code> in the instructions to pick a domain. KPI rules go here.
+        Type <code>/</code> to pin a domain. Write the goal in plain language — tools are chosen automatically.
       </p>
       <div ref={containerRef} className="agent-instructions-input relative mt-2">
         <div ref={mirrorRef} className="agent-instructions-mirror" aria-hidden>

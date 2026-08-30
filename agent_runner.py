@@ -13,12 +13,13 @@ from agent_mcp_runner import (
     mcp_summary_for_report,
     run_agent_mcp_enrichment,
 )
+from agent_setup import effective_agent_capabilities, resolve_agent_domains
 from api.analytics_models import AnalyticsRequest
 from api.analytics_runner import run_analytics_events
 from api.ask_export import build_html_page
 from api.llm import generate_answer, resolve_llm_runtime
-from catalog_db import get_agent, parse_domain_slugs_from_instructions
-from catalog_service import ensure_catalog_ready, resolve_domains
+from catalog_db import get_agent
+from catalog_service import ensure_catalog_ready
 
 
 def _status(message: str) -> dict[str, Any]:
@@ -46,15 +47,6 @@ def _smtp_configured() -> bool:
     password = os.environ.get("SMTP_PASSWORD", "")
     from_addr = os.environ.get("SMTP_FROM", "")
     return bool(host and user and password and from_addr)
-
-
-def _validate_domain_slugs(slugs: list[str]) -> tuple[list[dict], list[str]]:
-    if not slugs:
-        return [], []
-    resolved = resolve_domains(slugs)
-    found = {d["slug"] for d in resolved}
-    unknown = [s for s in slugs if s not in found]
-    return resolved, unknown
 
 
 def _kpi_prompt_from_instructions(instructions: str) -> str:
@@ -123,22 +115,35 @@ def run_agent_events(
         yield _error("Agent has no instructions")
         return
 
-    caps = agent.get("capabilities") or {}
+    caps = effective_agent_capabilities(agent.get("capabilities"), instructions)
     kpi_check = bool(caps.get("kpi_check"))
     generate_report = bool(caps.get("generate_report"))
     send_email = bool(caps.get("send_email"))
     email_to = (caps.get("email_to") or "").strip()
 
-    domain_slugs = parse_domain_slugs_from_instructions(instructions)
-    resolved, unknown = _validate_domain_slugs(domain_slugs)
+    resolved, unknown, domain_method = resolve_agent_domains(instructions, embedder)
     if unknown:
         yield _error(f"Unknown domain slug(s) in instructions: {', '.join(unknown)}")
         return
 
-    domain_names = ", ".join(d["name"] for d in resolved) if resolved else "Auto"
-    yield _status(f"Running agent «{agent['name']}» — domains: {domain_names}")
+    if resolved:
+        domain_names = ", ".join(d["name"] for d in resolved)
+        if domain_method == "slash":
+            yield _status(f"Running agent «{agent['name']}» — domains: {domain_names}")
+        else:
+            yield _status(
+                f"Running agent «{agent['name']}» — matched {domain_names} from the goal "
+                "(same domain routing as Ask)."
+            )
+    else:
+        domain_names = "Auto"
+        yield _status(f"Running agent «{agent['name']}» — no domain pinned; catalog routing will decide.")
 
     tools = agent.get("tools") or []
+    prompts = agent.get("prompts") or []
+    resources = agent.get("resources") or []
+    kit_meta = (agent.get("capabilities") or {}).get("mcp_kit")
+    use_saved_kit = bool(kit_meta)
 
     llm_backend, llm_model, llm_base_url = resolve_llm_runtime(
         backend=backend,
@@ -148,8 +153,11 @@ def run_agent_events(
 
     mcp_enrichment = None
     mcp_context = ""
-    if tools or resolved:
-        yield _status("Loading MCP tools, resources, and prompts…")
+    if tools or prompts or resources or resolved:
+        if use_saved_kit:
+            yield _status("Loading saved MCP kit…")
+        else:
+            yield _status("Loading MCP tools, resources, and prompts…")
         mcp_enrichment = run_agent_mcp_enrichment(
             instructions,
             agent_tools=tools,
@@ -157,10 +165,31 @@ def run_agent_events(
             model=llm_model,
             backend=llm_backend,
             base_url=llm_base_url,
+            agent_prompts=prompts,
+            agent_resources=resources,
+            use_saved_kit=use_saved_kit,
         )
         mcp_context = format_agent_mcp_context(mcp_enrichment)
         if mcp_enrichment.trace:
-            if tools:
+            if use_saved_kit:
+                parts = []
+                if tools:
+                    parts.append(f"{len(tools)} tools")
+                if prompts:
+                    parts.append(f"{len(prompts)} prompts")
+                if resources:
+                    parts.append(f"{len(resources)} resources")
+                yield _step(
+                    "mcp_catalog",
+                    "Saved MCP kit: " + (", ".join(parts) if parts else "empty"),
+                    payload={"tools": tools, "prompts": prompts, "resources": resources},
+                )
+            elif not tools:
+                yield _step(
+                    "mcp_catalog",
+                    "Using domain tools automatically (same as Ask / Analytics)",
+                )
+            else:
                 tool_list = ", ".join(
                     f"{t['server_name']}.{t['tool_name']}" for t in tools
                 )
@@ -406,8 +435,5 @@ def format_agent_instructions(instructions: str) -> str:
 
 
 def warn_unknown_domain_slugs(instructions: str) -> list[str]:
-    slugs = parse_domain_slugs_from_instructions(instructions)
-    if not slugs:
-        return []
-    _, unknown = _validate_domain_slugs(slugs)
+    _, unknown, _ = resolve_agent_domains(instructions)
     return unknown

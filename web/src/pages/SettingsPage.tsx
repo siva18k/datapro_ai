@@ -5,6 +5,7 @@ import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { CatalogDatabaseCard } from "../components/CatalogDatabaseCard";
 import { McpSettingsPanel } from "../components/McpSettingsPanel";
+import { McpServersPanel } from "../components/McpServersPanel";
 import { PageHeader } from "../components/PageHeader";
 import { SavedConnectionsPanel } from "../components/SavedConnectionsPanel";
 import { useApiPageState } from "../context/ApiConnectionContext";
@@ -948,11 +949,13 @@ export function SettingsPage() {
             </>
           )}
 
-          {settingsTab === "mcp" && <McpSettingsPanel envPath={data.env_path} />}
+          {settingsTab === "mcp" && <McpSettingsPanel />}
 
           {settingsTab === "servers" && (
             <>
               <div className="settings-servers-stack">
+                <McpServersPanel envPath={data.env_path} />
+
                 <div className="card card-pad space-y-4">
                   <div>
                     <h2 className="font-semibold">API server</h2>

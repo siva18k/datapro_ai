@@ -1129,6 +1129,12 @@ button.sidebar-hint {
   @apply inline-flex shrink-0 items-center gap-2 pb-2 text-sm;
   color: var(--color-text);
 }
+.agent-advanced-setup summary {
+  cursor: pointer;
+}
+.agent-advanced-setup summary:hover {
+  color: var(--color-text);
+}
 .agent-flow-builder {
   @apply grid gap-4 lg:grid-cols-[minmax(10rem,12rem)_1fr];
 }

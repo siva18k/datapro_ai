@@ -132,7 +132,8 @@ export function DomainMcpBindingsPanel({
         <div className="catalog-domain-mcp-body space-y-4">
           <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
             Attach MCP capabilities used when answering questions in{" "}
-            <strong>{domainName ?? "this domain"}</strong>. Manage servers under Settings → MCP.
+            <strong>{domainName ?? "this domain"}</strong>. Manage servers under Settings → Servers.
+            Browse the full catalog under Settings → MCP.
           </p>
 
           <div className="tabs">

@@ -404,8 +404,10 @@ export const api = {
   getAgent: (id: string) => request<Agent>(`/agents/${id}`),
   createAgent: (data: { name: string; description?: string; instructions?: string; capabilities?: Agent["capabilities"] }) =>
     request<Agent>("/agents", { method: "POST", body: JSON.stringify(data) }),
-  updateAgent: (id: string, data: Partial<Agent>) =>
-    request<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateAgent: (
+    id: string,
+    data: Partial<Agent> & { extra_tools?: Pick<AgentToolBinding, "mcp_server_id" | "tool_name">[] },
+  ) => request<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteAgent: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/agents/${id}`, { method: "DELETE" }),
   setAgentTools: (id: string, tools: Pick<AgentToolBinding, "mcp_server_id" | "tool_name">[]) =>

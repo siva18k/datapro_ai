@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type McpOptionalServerSpec, type McpServerRecord } from "../api/client";
 import { McpEditServerModal } from "./McpEditServerModal";
 import { mcpServerCardClass, mcpServerTagline } from "../utils/mcpServerUi";
@@ -14,6 +14,23 @@ export function McpServersPanel({ envPath }: { envPath?: string }) {
   const [serverKind, setServerKind] = useState<"public" | "enterprise">("public");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+  });
+
+  const { data: status } = useQuery({
+    queryKey: ["mcp", "status"],
+    queryFn: api.mcpStatus,
+    refetchInterval: 15_000,
+  });
+
+  const { data: log } = useQuery({
+    queryKey: ["mcp", "log"],
+    queryFn: () => api.mcpLog(),
+    enabled: Boolean(status?.running || status?.reachable),
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ["mcp", "servers"],
@@ -136,6 +153,19 @@ export function McpServersPanel({ envPath }: { envPath?: string }) {
   const servers = data?.servers ?? [];
   const dismissed = data?.dismissed_optional ?? [];
 
+  const cursorConfig = useMemo(() => {
+    const enabled = servers.filter((s) => s.enabled);
+    const mcpServers: Record<string, { url: string }> = {};
+    for (const server of enabled) {
+      mcpServers[server.slug] = { url: server.url };
+    }
+    if (!Object.keys(mcpServers).length) {
+      const fallback = status?.url ?? settings?.mcp_url ?? "http://127.0.0.1:8000/mcp";
+      mcpServers.datapro = { url: fallback };
+    }
+    return JSON.stringify({ mcpServers }, null, 2);
+  }, [servers, status?.url, settings?.mcp_url]);
+
   return (
     <div className="space-y-3">
       <div className="card card-pad space-y-4">
@@ -257,6 +287,21 @@ export function McpServersPanel({ envPath }: { envPath?: string }) {
           ))}
         </div>
       </div>
+
+      <div className="card card-pad space-y-3">
+        <h2 className="font-semibold">Cursor / Claude Desktop</h2>
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+          MCP client config for all enabled servers
+        </p>
+        <pre className="mcp-code-block">{cursorConfig}</pre>
+      </div>
+
+      {log?.log && (
+        <details className="card card-pad">
+          <summary className="cursor-pointer font-medium">Recent MCP server log</summary>
+          <pre className="mt-3 max-h-64 overflow-auto mcp-text-faint">{log.log}</pre>
+        </details>
+      )}
 
       <McpEditServerModal
         open={editingServer != null}

@@ -299,6 +299,33 @@ export interface AgentToolBinding {
   server_slug?: string;
 }
 
+export interface AgentPromptBinding {
+  id?: string;
+  agent_id?: string;
+  mcp_server_id: string;
+  prompt_name: string;
+  server_name?: string;
+  server_slug?: string;
+}
+
+export interface AgentResourceBinding {
+  id?: string;
+  agent_id?: string;
+  mcp_server_id: string;
+  resource_uri: string;
+  server_name?: string;
+  server_slug?: string;
+}
+
+export interface AgentMcpKit {
+  resolved_at?: string;
+  domain_method?: string;
+  domain_slugs?: string[];
+  tool_count?: number;
+  prompt_count?: number;
+  resource_count?: number;
+}
+
 export interface Agent {
   id: string;
   slug: string;
@@ -310,6 +337,9 @@ export interface Agent {
   domain_slugs?: string[];
   domain_warnings?: string[];
   tools?: AgentToolBinding[];
+  prompts?: AgentPromptBinding[];
+  resources?: AgentResourceBinding[];
+  mcp_kit?: AgentMcpKit;
   created_at?: string;
   updated_at?: string;
 }
