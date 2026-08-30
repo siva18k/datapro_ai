@@ -233,5 +233,6 @@ SQL path is read-only by design; dataset credentials sit in catalog config (encr
 - Routing tweaks: `domain_router.py` or richer domain descriptions
 - Agents: MCP tools or plain `/api/ask`
 - Configurable agents (`agent_runner.py`, `agent_mcp_runner.py`): at run time invoke agent-bound MCP tools plus domain-bound tools/resources/prompts; SQL KPI/report still uses `run_analytics_events` (which also loads domain MCP for SQL)
+- Agent flows (`agent_flow_runner.py`): DAG of **agent** nodes and **custom** instruction nodes; connected steps pass result summaries (including table previews) downstream
 - **Per-table / per-file RAG** (Catalog → dataset → **RAG** tab): `table_metadata.rag_enabled`, per-row chunk settings, `source_file_rag` for documents; ingest via `POST /api/datasets/{id}/rag/ingest`
 - Domain MCP: bind tools/resources/prompts per domain in Catalog → MCP; Ask uses `mcp_ask_planner` automatically

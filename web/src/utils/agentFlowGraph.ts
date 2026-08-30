@@ -5,7 +5,14 @@ export function emptyAgentFlowGraph(): AgentFlowGraph {
 }
 
 export function linearStepsToGraph(
-  steps: Array<{ agent_id: string; handoff?: string; id?: string }>,
+  steps: Array<{
+    agent_id?: string;
+    handoff?: string;
+    id?: string;
+    kind?: "agent" | "task";
+    title?: string;
+    instructions?: string;
+  }>,
 ): AgentFlowGraph {
   const nodes: AgentFlowGraphNode[] = [];
   const edges: AgentFlowGraphEdge[] = [];
@@ -13,14 +20,20 @@ export function linearStepsToGraph(
   let prevHandoff = "";
 
   steps.forEach((step, index) => {
-    if (!step.agent_id) return;
+    const kind = (step as { kind?: string }).kind === "task" || (!step.agent_id && ((step as { instructions?: string }).instructions || (step as { title?: string }).title))
+      ? "task"
+      : "agent";
+    if (kind === "agent" && !step.agent_id) return;
     const nodeId = step.id ?? `n${index}`;
     nodes.push({
       id: nodeId,
+      kind,
       agent_id: step.agent_id,
       column: (index % 2) as 0 | 1,
       agent_name: (step as { agent_name?: string }).agent_name,
       agent_slug: (step as { agent_slug?: string }).agent_slug,
+      title: (step as { title?: string }).title,
+      instructions: (step as { instructions?: string }).instructions,
     });
     if (prevId) {
       edges.push({
@@ -41,7 +54,9 @@ export function parseAgentFlowSteps(steps: unknown): AgentFlowGraph {
     const graph = steps as AgentFlowGraph;
     return {
       v: 2,
-      nodes: (graph.nodes ?? []).filter((node) => node.id && node.agent_id),
+      nodes: (graph.nodes ?? []).filter(
+        (node) => node.id && (node.kind === "task" || node.agent_id || (node.instructions || node.title)),
+      ),
       edges: (graph.edges ?? []).filter((edge) => edge.from && edge.to),
     };
   }
@@ -94,8 +109,44 @@ export function validateAgentFlowGraph(graph: AgentFlowGraph): string | null {
   return null;
 }
 
+export function nodeKind(node: AgentFlowGraphNode): "agent" | "task" {
+  if (node.kind === "task") return "task";
+  if (node.agent_id) return "agent";
+  if ((node.instructions || "").trim() || (node.title || "").trim()) return "task";
+  return "agent";
+}
+
 export function nodeLabel(node: AgentFlowGraphNode, index: number): string {
+  if (nodeKind(node) === "task") {
+    return (node.title || "").trim() || `Custom step ${index + 1}`;
+  }
   return node.agent_name ?? node.agent_slug ?? `Step ${index + 1}`;
+}
+
+export function updateNode(
+  graph: AgentFlowGraph,
+  nodeId: string,
+  patch: Partial<AgentFlowGraphNode>,
+): AgentFlowGraph {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => (node.id === nodeId ? { ...node, ...patch } : node)),
+  };
+}
+
+export function appendNode(
+  graph: AgentFlowGraph,
+  node: AgentFlowGraphNode,
+  options?: { linkFromLast?: boolean },
+): AgentFlowGraph {
+  const edges = [...graph.edges];
+  if (options?.linkFromLast && graph.nodes.length > 0) {
+    const last = graph.nodes[graph.nodes.length - 1];
+    if (last && !edges.some((edge) => edge.from === last.id && edge.to === node.id)) {
+      edges.push({ from: last.id, to: node.id, handoff: "" });
+    }
+  }
+  return { v: 2, nodes: [...graph.nodes, node], edges };
 }
 
 export function addEdge(

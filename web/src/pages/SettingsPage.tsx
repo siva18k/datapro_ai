@@ -886,46 +886,48 @@ export function SettingsPage() {
                       Follow-up context and RAG retrieval for Ask queries
                     </p>
                   </div>
-                  <div className="field mb-0 max-w-md">
-                    <div className="sidebar-label-row">
-                      <label className="label mb-0" htmlFor="ask-retrieval-top-k">
-                        Retrieval top K
-                      </label>
-                      <span className="sidebar-range-value">{retrievalTopK}</span>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="field mb-0">
+                      <div className="sidebar-label-row">
+                        <label className="label mb-0" htmlFor="ask-retrieval-top-k">
+                          Retrieval top K
+                        </label>
+                        <span className="sidebar-range-value">{retrievalTopK}</span>
+                      </div>
+                      <input
+                        id="ask-retrieval-top-k"
+                        type="range"
+                        className="sidebar-range mt-2 w-full"
+                        min={1}
+                        max={data.ask?.max_retrieval_top_k ?? 8}
+                        step={1}
+                        value={retrievalTopK}
+                        onChange={(e) => setRetrievalTopK(Number(e.target.value))}
+                        aria-valuemin={1}
+                        aria-valuemax={data.ask?.max_retrieval_top_k ?? 8}
+                        aria-valuenow={retrievalTopK}
+                      />
+                      <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                        Number of document chunks retrieved per Ask query (1–{data.ask?.max_retrieval_top_k ?? 8}).
+                      </p>
                     </div>
-                    <input
-                      id="ask-retrieval-top-k"
-                      type="range"
-                      className="sidebar-range mt-2 w-full"
-                      min={1}
-                      max={data.ask?.max_retrieval_top_k ?? 8}
-                      step={1}
-                      value={retrievalTopK}
-                      onChange={(e) => setRetrievalTopK(Number(e.target.value))}
-                      aria-valuemin={1}
-                      aria-valuemax={data.ask?.max_retrieval_top_k ?? 8}
-                      aria-valuenow={retrievalTopK}
-                    />
-                    <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      Number of document chunks retrieved per Ask query (1–{data.ask?.max_retrieval_top_k ?? 8}).
-                    </p>
-                  </div>
-                  <div className="field mb-0 max-w-md">
-                    <label className="label" htmlFor="ask-conversation-turns">
-                      Conversation turns to remember
-                    </label>
-                    <input
-                      id="ask-conversation-turns"
-                      type="number"
-                      className="input"
-                      min={0}
-                      max={data.ask?.max_conversation_turns ?? 20}
-                      value={conversationTurns}
-                      onChange={(e) => setConversationTurns(Number(e.target.value))}
-                    />
-                    <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      Number of prior Q&amp;A exchanges included in each follow-up (0 = disabled). Cleared when you start a new chat.
-                    </p>
+                    <div className="field mb-0">
+                      <label className="label" htmlFor="ask-conversation-turns">
+                        Conversation turns to remember
+                      </label>
+                      <input
+                        id="ask-conversation-turns"
+                        type="number"
+                        className="input"
+                        min={0}
+                        max={data.ask?.max_conversation_turns ?? 20}
+                        value={conversationTurns}
+                        onChange={(e) => setConversationTurns(Number(e.target.value))}
+                      />
+                      <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                        Number of prior Q&amp;A exchanges included in each follow-up (0 = disabled). Cleared when you start a new chat.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -950,7 +952,7 @@ export function SettingsPage() {
 
           {settingsTab === "servers" && (
             <>
-              <div className="settings-servers-stack settings-servers-stack--two">
+              <div className="settings-servers-stack">
                 <div className="card card-pad space-y-4">
                   <div>
                     <h2 className="font-semibold">API server</h2>

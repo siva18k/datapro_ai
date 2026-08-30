@@ -9,12 +9,14 @@ import type { Agent, AgentFlowGraph, AgentFlowGraphNode } from "../types";
 import {
   addEdge,
   incomingTargets,
+  nodeKind,
   nodeLabel,
   outgoingTargets,
   repositionNode,
   removeEdge,
   removeNode,
   updateEdgeHandoff,
+  updateNode,
 } from "../utils/agentFlowGraph";
 import {
   flowLinkColorIndex,
@@ -30,6 +32,7 @@ type AgentFlowGraphCanvasProps = {
   onGraphChange: (graph: AgentFlowGraph) => void;
   onDragOverColumn: (column: 0 | 1 | null) => void;
   onDropAgent: (agent: Agent, column: 0 | 1) => void;
+  onDropTask?: (column: 0 | 1) => void;
 };
 
 type LinkPreview = {
@@ -71,6 +74,7 @@ export function AgentFlowGraphCanvas({
   onGraphChange,
   onDragOverColumn,
   onDropAgent,
+  onDropTask,
 }: AgentFlowGraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const nodeRefs = useRef<Map<string, HTMLLIElement>>(new Map());
@@ -97,7 +101,7 @@ export function AgentFlowGraphCanvas({
 
   const startCardDrag = (nodeId: string, event: React.PointerEvent<HTMLElement>) => {
     if (linkingFromRef.current || cardDragRef.current) return;
-    if ((event.target as HTMLElement).closest(".icon-btn")) return;
+    if ((event.target as HTMLElement).closest(".icon-btn, input, textarea, button")) return;
     event.preventDefault();
     event.stopPropagation();
     cardDragRef.current = nodeId;
@@ -258,8 +262,14 @@ export function AgentFlowGraphCanvas({
     const column = columnFromPointer(event);
     onDragOverColumn(null);
     const agentId = event.dataTransfer.getData("application/x-agent-id");
-    const agent = agentById.get(agentId);
-    if (agent) onDropAgent(agent, column);
+    if (agentId) {
+      const agent = agentById.get(agentId);
+      if (agent) onDropAgent(agent, column);
+      return;
+    }
+    if (event.dataTransfer.getData("application/x-flow-task") === "1") {
+      onDropTask?.(column);
+    }
   };
 
   const handleRemoveEdge = useCallback(
@@ -289,9 +299,12 @@ export function AgentFlowGraphCanvas({
 
   const renderNode = (node: AgentFlowGraphNode) => {
     const index = nodeIndex.get(node.id) ?? 0;
-    const agent = agentById.get(node.agent_id);
-    const label = node.agent_name || agent?.name || "Unknown agent";
-    const slug = node.agent_slug || agent?.slug || "";
+    const isTask = nodeKind(node) === "task";
+    const agent = node.agent_id ? agentById.get(node.agent_id) : undefined;
+    const label = isTask
+      ? (node.title || "").trim() || "Custom step"
+      : node.agent_name || agent?.name || "Unknown agent";
+    const slug = isTask ? "" : node.agent_slug || agent?.slug || "";
     const outgoing = outgoingTargets(graph, node.id);
     const incoming = incomingTargets(graph, node.id);
     const column = node.column ?? 0;
@@ -307,6 +320,8 @@ export function AgentFlowGraphCanvas({
         ref={setNodeRef(node.id)}
         data-flow-node-id={node.id}
         className={`agent-flow-step-card agent-flow-step-card--col-${column}${
+          isTask ? " agent-flow-step-card--task" : ""
+        }${
           isLinkTarget ? " agent-flow-step-card--link-target" : ""
         }${isDragging ? " agent-flow-step-card--dragging" : ""}${
           dropBefore ? " agent-flow-step-card--drop-before" : ""
@@ -329,11 +344,26 @@ export function AgentFlowGraphCanvas({
         >
           <span className="agent-flow-step-index">{index + 1}</span>
           <div className="min-w-0 flex-1">
-            <p className="font-medium">{label}</p>
-            {slug && (
-              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                @{slug}
-              </p>
+            {isTask ? (
+              <>
+                <span className="agent-flow-step-kind">Custom</span>
+                <input
+                  className="input agent-flow-step-title-input"
+                  value={node.title ?? ""}
+                  placeholder="Step name (e.g. Top 5)"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onChange={(e) => onGraphChange(updateNode(graph, node.id, { title: e.target.value }))}
+                />
+              </>
+            ) : (
+              <>
+                <p className="font-medium">{label}</p>
+                {slug && (
+                  <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                    @{slug}
+                  </p>
+                )}
+              </>
             )}
           </div>
           <button
@@ -347,6 +377,17 @@ export function AgentFlowGraphCanvas({
             ×
           </button>
         </div>
+
+        {isTask && (
+          <textarea
+            className="input agent-flow-step-task-input mt-2 w-full resize-y text-xs"
+            rows={3}
+            value={node.instructions ?? ""}
+            placeholder="What should this step do with the previous result? e.g. Pick the top 5 most expensive items and build an HTML table and chart."
+            onPointerDown={(event) => event.stopPropagation()}
+            onChange={(e) => onGraphChange(updateNode(graph, node.id, { instructions: e.target.value }))}
+          />
+        )}
 
         {(outgoing.length > 0 || incoming.length > 0) && (
           <div className="agent-flow-step-connections">
@@ -463,7 +504,7 @@ export function AgentFlowGraphCanvas({
       )}
       {graph.nodes.length === 0 ? (
         <p className="agent-flow-steps-grid-empty">
-          Drop agents here — left half is column 1, right half is column 2
+          Drop agents or a Custom step here — left half is column 1, right half is column 2
         </p>
       ) : (
         <>

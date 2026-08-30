@@ -2386,7 +2386,7 @@ def _enrich_flow_steps(flow: dict) -> dict:
             continue
         agent_id = node.get("agent_id")
         item = dict(node)
-        if agent_id:
+        if agent_id and item.get("kind") != "task":
             agent = get_agent(agent_id)
             if agent:
                 item["agent_name"] = agent.get("name")

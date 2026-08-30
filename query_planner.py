@@ -368,3 +368,99 @@ def structured_fallback_available(
         column_hints=scope.column_hints,
         notes=["No matching documents — querying catalog database instead."],
     )
+
+
+def coerce_to_sql_plan(
+    plan: QueryPlan,
+    question: str,
+    embedder=None,
+    *,
+    allowed_domain_ids: list[str] | None = None,
+) -> QueryPlan:
+    """Ask and Analytics share this: run warehouse SQL when a structured dataset exists.
+
+    RAG is kept for schema/how-to questions and domains with no SQL sources.
+    """
+    if plan.execution_kind == "attachment":
+        return plan
+    if plan.execution_kind in ("sql", "hybrid") and plan.source_id:
+        return plan
+
+    fallback = structured_fallback_available(
+        question,
+        embedder,
+        allowed_domain_ids=allowed_domain_ids,
+    )
+    if fallback:
+        merged_notes = list(plan.notes) + list(fallback.notes)
+        fallback.notes = merged_notes
+        return fallback
+
+    from catalog_db import list_sources
+    from structured_sql import is_structured_sql_connector
+    from structured_orchestrator import _GUIDANCE_PATTERNS
+
+    if _GUIDANCE_PATTERNS.search(question):
+        return plan
+
+    domain_id = plan.domain_id
+    domain_name = plan.domain_name
+    domain_slug = plan.domain_slug
+    if not domain_id:
+        match = find_best_structured_domain(
+            question,
+            embedder,
+            allowed_domain_ids=allowed_domain_ids,
+        )
+        if not match.domain:
+            return plan
+        domain_id = match.domain["id"]
+        domain_name = match.domain["name"]
+        domain_slug = match.domain.get("slug")
+
+    structured = [
+        source
+        for source in list_sources(domain_id=domain_id, source_type="structured", enabled_only=True)
+        if is_structured_sql_connector(source.get("connector"))
+    ]
+    if not structured:
+        return plan
+
+    query_vector = None
+    if embedder is not None:
+        try:
+            query_vector = embedder.encode([question])[0]
+        except Exception:
+            query_vector = None
+    dataset = pick_structured_dataset(
+        question, domain_id, embedder, query_vector=query_vector
+    ) or structured[0]
+    scope = resolve_catalog_scope(
+        question,
+        domain_id=domain_id,
+        source_id=dataset["id"],
+        rag_source_id=None,
+        execution_kind="sql",
+        embedder=embedder,
+    )
+    notes = list(plan.notes)
+    notes.append(f"Querying structured dataset «{dataset['name']}» for values (same path as Ask).")
+    return QueryPlan(
+        question=question,
+        domain_id=domain_id,
+        domain_name=domain_name,
+        domain_slug=domain_slug,
+        execution_kind="sql",
+        routing={
+            **plan.routing,
+            "method": f"{plan.routing.get('method', 'none')}+sql_coerce",
+            "domain_id": domain_id,
+            "scope_method": scope.method,
+        },
+        source_id=dataset["id"],
+        source_name=dataset["name"],
+        table_names=scope.table_names,
+        file_names=scope.file_names,
+        column_hints=scope.column_hints,
+        notes=notes,
+    )

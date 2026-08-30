@@ -10,6 +10,74 @@ def empty_graph() -> dict[str, Any]:
     return {"v": 2, "nodes": [], "edges": []}
 
 
+def node_kind(node: dict[str, Any] | None) -> str:
+    if not node:
+        return "agent"
+    kind = str(node.get("kind") or "").strip().lower()
+    if kind in {"task", "custom"}:
+        return "task"
+    if node.get("agent_id"):
+        return "agent"
+    if (node.get("instructions") or "").strip() or (node.get("title") or "").strip():
+        return "task"
+    return "agent"
+
+
+def node_label(node: dict[str, Any] | None, *, fallback: str = "Step") -> str:
+    if not node:
+        return fallback
+    if node_kind(node) == "task":
+        return (node.get("title") or "").strip() or "Custom step"
+    return (
+        (node.get("agent_name") or "").strip()
+        or (node.get("agent_slug") or "").strip()
+        or fallback
+    )
+
+
+def _normalized_node(node: dict[str, Any], *, index: int) -> dict[str, Any] | None:
+    node_id = str(node.get("id") or "").strip()
+    if not node_id:
+        return None
+    kind = node_kind(node)
+    column = node.get("column")
+    try:
+        column_i = int(column) % 2 if column is not None else index % 2
+    except (TypeError, ValueError):
+        column_i = index % 2
+    if kind == "task":
+        return {
+            "id": node_id,
+            "kind": "task",
+            "title": (node.get("title") or "").strip(),
+            "instructions": (node.get("instructions") or "").strip(),
+            "column": column_i,
+        }
+    agent_id = node.get("agent_id")
+    if not agent_id:
+        return None
+    out: dict[str, Any] = {
+        "id": node_id,
+        "kind": "agent",
+        "agent_id": agent_id,
+        "column": column_i,
+    }
+    if node.get("agent_name"):
+        out["agent_name"] = node["agent_name"]
+    if node.get("agent_slug"):
+        out["agent_slug"] = node["agent_slug"]
+    return out
+
+
+def _is_keepable_node(node: Any) -> bool:
+    if not isinstance(node, dict) or not node.get("id"):
+        return False
+    kind = node_kind(node)
+    if kind == "task":
+        return True
+    return bool(node.get("agent_id"))
+
+
 def linear_steps_to_graph(steps: list[dict[str, Any]]) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
@@ -18,17 +86,12 @@ def linear_steps_to_graph(steps: list[dict[str, Any]]) -> dict[str, Any]:
     for index, step in enumerate(steps):
         if not isinstance(step, dict):
             continue
-        agent_id = step.get("agent_id")
-        if not agent_id:
-            continue
         node_id = str(step.get("id") or f"n{index}")
-        nodes.append(
-            {
-                "id": node_id,
-                "agent_id": agent_id,
-                "column": index % 2,
-            }
-        )
+        raw = {**step, "id": node_id}
+        normalized = _normalized_node(raw, index=index)
+        if not normalized:
+            continue
+        nodes.append(normalized)
         if prev_id is not None:
             edges.append(
                 {
@@ -44,7 +107,12 @@ def linear_steps_to_graph(steps: list[dict[str, Any]]) -> dict[str, Any]:
 
 def normalize_flow_steps(steps: Any) -> dict[str, Any]:
     if isinstance(steps, dict) and steps.get("v") == 2:
-        nodes = [n for n in (steps.get("nodes") or []) if isinstance(n, dict) and n.get("id") and n.get("agent_id")]
+        raw_nodes = [n for n in (steps.get("nodes") or []) if _is_keepable_node(n)]
+        nodes = []
+        for index, node in enumerate(raw_nodes):
+            normalized = _normalized_node(node, index=index)
+            if normalized:
+                nodes.append(normalized)
         edges = [
             e
             for e in (steps.get("edges") or [])

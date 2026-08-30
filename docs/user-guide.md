@@ -85,3 +85,18 @@ python scripts/migrate_finance_data.py --fresh
 ```
 
 Details in [docs/finance-data-guide.md](finance-data-guide.md). Then add a Postgres dataset in the catalog pointing at schema `finance_data`.
+
+---
+
+## Agents and Agent Flows
+
+**Agents** — saved jobs (KPI check, report, email, MCP tools). They are not a chat like Ask. KPI/report still query the warehouse through Analytics SQL.
+
+**Agent Flows** — a canvas of steps. Each card is either:
+
+- an **agent** (fetch data, KPI, report), or
+- a **custom step** (your instructions: top N, HTML, filter, rewrite)
+
+Connect cards with the O handle so the next step receives the previous result (tables, summaries). **Flow goal** is optional shared purpose (audience, constraints). It is not a recipe — if you write “pick top 5” only there, it will not run until you add a Custom step and connect it.
+
+The editor warns on save when instructions describe extra actions that are not on the canvas, when @mentions are missing, or when steps are not connected. Run output repeats those warnings.

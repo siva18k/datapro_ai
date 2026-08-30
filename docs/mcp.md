@@ -28,7 +28,7 @@ Restart MCP after you change **built-in registry prompts**. Domain bindings appl
 
 ## MCP servers & domain bindings
 
-Register multiple MCP servers on the **MCP** page (built-in DATA Pro plus public/enterprise endpoints). Per domain, bind **tools**, **resources**, and **prompts** from any server. Ask uses those bindings for retrieval and prompt templates.
+Register MCP servers under **Settings → MCP**. **DATA Pro** is the required built-in server for Ask and Analytics. **Email (SMTP/IMAP)** is an optional add-on (remove it if you do not need mail). You can also add public or enterprise endpoints. Per domain, bind **tools**, **resources**, and **prompts** from any server. Ask uses those bindings for retrieval and prompt templates.
 
 **Prompts** on the domain bindings tab can be **Global** (built-in `mcp_registry.json` templates) or **Local** (per-domain templates stored in `domain_prompts`, bound as `local:{slug}`). Create local prompts in the Add prompt dialog; edit/delete from the bindings list. Local templates support placeholders such as `{question}`, `{context}`, `{domain_name}`, `{schema}`, `{calendar}`, `{glossary}`, `{citation_rules}`. Run migration `014_domain_prompts.sql` before using local prompts.
 

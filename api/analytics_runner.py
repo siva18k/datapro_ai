@@ -26,7 +26,7 @@ from mcp_ask_planner import (
     resolve_domain_slug,
 )
 from temporal_context import format_query_results_with_time_context
-from query_planner import resolve_query_plan, structured_fallback_available
+from query_planner import coerce_to_sql_plan, resolve_query_plan
 from scope_resolver import chunk_source_files_for_scope
 from structured_orchestrator import generate_and_execute_readonly_sql, plan_structured_query
 
@@ -129,6 +129,19 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         domain_override=body.domain_override,
         domain_overrides=body.domain_overrides,
     )
+    plan = coerce_to_sql_plan(
+        plan,
+        routing_prompt,
+        embedder,
+        allowed_domain_ids=selected_domains if scope_locked else None,
+    )
+    if plan.execution_kind not in ("sql", "hybrid") and routing_prompt != prompt:
+        plan = coerce_to_sql_plan(
+            plan,
+            prompt,
+            embedder,
+            allowed_domain_ids=selected_domains if scope_locked else None,
+        )
 
     if plan.execution_kind == "attachment":
         user_question, attachment_raw = split_attached_documents(routing_prompt)
@@ -158,27 +171,6 @@ def run_analytics_events(body: AnalyticsRequest, embedder) -> Iterator[dict[str,
         )
         yield _result(_attach_session(dash, session))
         return
-
-    needs_structured_fallback = (
-        plan.execution_kind not in ("sql", "hybrid")
-        or not plan.domain_id
-        or (plan.execution_kind in ("sql", "hybrid") and not plan.source_id)
-    )
-    if needs_structured_fallback:
-        fallback = structured_fallback_available(
-            routing_prompt,
-            embedder,
-            allowed_domain_ids=selected_domains if scope_locked else None,
-        )
-        if not fallback and routing_prompt != prompt:
-            fallback = structured_fallback_available(
-                prompt,
-                embedder,
-                allowed_domain_ids=selected_domains if scope_locked else None,
-            )
-        if fallback:
-            plan = fallback
-            yield _status("Matched a structured dataset for this analytics prompt.")
 
     for note in plan.notes:
         yield _status(note)

@@ -11,18 +11,15 @@ import { api } from "../api/client";
 import { useApiPageState } from "../context/ApiConnectionContext";
 import { useSetSidebarContent } from "../context/SidebarContext";
 import type { Agent, AgentFlowGraph } from "../types";
+import { lintAgentFlow } from "../utils/agentFlowLint";
 import {
+  appendNode,
   emptyAgentFlowGraph,
   parseAgentFlowSteps,
   validateAgentFlowGraph,
 } from "../utils/agentFlowGraph";
 
-const DEFAULT_INSTRUCTIONS = `Build a data flow by connecting agent steps. Each connection can pass context to downstream agents.
-
-Example:
-1. @kpi-checker validates metrics
-2. Connect step 1 → step 2 and step 1 → step 3 for parallel follow-ups
-3. Connect step 2 → step 4 to merge results
+const DEFAULT_INSTRUCTIONS = `Weekly view of the most expensive items for finance review. Keep amounts in USD.
 `;
 
 export function AgentFlowsPage() {
@@ -94,19 +91,37 @@ export function AgentFlowsPage() {
 
   const addAgentToFlow = useCallback((agent: Agent, column: 0 | 1 = 0) => {
     setGraph((prev) => {
-      const next: AgentFlowGraph = {
-        ...prev,
-        nodes: [
-          ...prev.nodes,
-          {
-            id: crypto.randomUUID(),
-            agent_id: agent.id,
-            column,
-            agent_name: agent.name,
-            agent_slug: agent.slug,
-          },
-        ],
-      };
+      const next = appendNode(
+        prev,
+        {
+          id: crypto.randomUUID(),
+          kind: "agent",
+          agent_id: agent.id,
+          column,
+          agent_name: agent.name,
+          agent_slug: agent.slug,
+        },
+        { linkFromLast: prev.nodes.length > 0 },
+      );
+      setGraphError(validateAgentFlowGraph(next));
+      return next;
+    });
+    markDirty();
+  }, []);
+
+  const addTaskToFlow = useCallback((column: 0 | 1 = 0) => {
+    setGraph((prev) => {
+      const next = appendNode(
+        prev,
+        {
+          id: crypto.randomUUID(),
+          kind: "task",
+          column,
+          title: "",
+          instructions: "",
+        },
+        { linkFromLast: prev.nodes.length > 0 },
+      );
       setGraphError(validateAgentFlowGraph(next));
       return next;
     });
@@ -142,8 +157,11 @@ export function AgentFlowsPage() {
           v: 2,
           nodes: graph.nodes.map((node) => ({
             id: node.id,
+            kind: node.kind === "task" ? "task" : "agent",
             agent_id: node.agent_id,
             column: node.column ?? 0,
+            title: node.title || "",
+            instructions: node.instructions || "",
           })),
           edges: graph.edges.map((edge) => ({
             from: edge.from,
@@ -178,6 +196,16 @@ export function AgentFlowsPage() {
     e.dataTransfer.effectAllowed = "copy";
   };
 
+  const onDragStartTask = (e: React.DragEvent) => {
+    e.dataTransfer.setData("application/x-flow-task", "1");
+    e.dataTransfer.effectAllowed = "copy";
+  };
+
+  const lintWarnings = useMemo(
+    () => lintAgentFlow(instructions, graph, enabledAgents),
+    [instructions, graph, enabledAgents],
+  );
+
   const flowRun = useAgentFlowRun(selectedId);
   const runDisabled = dirty || saveFlow.isPending || !!graphError || flowRun.running;
 
@@ -206,7 +234,7 @@ export function AgentFlowsPage() {
   if (showConnecting) {
     return (
       <div className="agent-flows-page">
-        <PageHeader title="Agent Flows" description="Connect agents in flexible data flows" />
+        <PageHeader title="Agent Flows" description="Connect agents and custom steps so each one can use the previous result" />
         <ApiConnectingPanel title={connectingTitle} />
       </div>
     );
@@ -215,7 +243,7 @@ export function AgentFlowsPage() {
   if (showOffline) {
     return (
       <div className="agent-flows-page">
-        <PageHeader title="Agent Flows" description="Connect agents in flexible data flows" />
+        <PageHeader title="Agent Flows" description="Connect agents and custom steps so each one can use the previous result" />
         <ApiOfflinePanel />
       </div>
     );
@@ -225,7 +253,7 @@ export function AgentFlowsPage() {
     <div className="agent-flows-page">
       <PageHeader
         title="Agent Flows"
-        description="Drag agents into two columns and connect steps like a data flow"
+        description="Connect agents and custom steps so each one can use the previous result"
       />
 
       <div className="agents-page-split">
@@ -301,15 +329,28 @@ export function AgentFlowsPage() {
                 <div className="agent-flow-builder">
                   <div className="agent-flow-palette">
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
-                      Available agents
+                      Available steps
                     </h3>
                     <p className="mb-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      Drag onto a column →
+                      Drag onto the canvas, or double-click. Custom steps transform the previous result.
                     </p>
                     <div className="agent-flow-palette-list">
+                      <div
+                        className="agent-flow-agent-card agent-flow-agent-card--task"
+                        draggable
+                        onDragStart={onDragStartTask}
+                        onDoubleClick={() => addTaskToFlow(0)}
+                        title="Drag to the canvas or double-click to add"
+                      >
+                        <span className="agent-flow-agent-card-name">Custom step</span>
+                        <span className="agent-flow-agent-card-slug">Instructions only</span>
+                        <p className="agent-flow-agent-card-desc">
+                          Rank, filter, format, or build HTML from the previous step’s result.
+                        </p>
+                      </div>
                       {enabledAgents.length === 0 && (
                         <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                          No enabled agents. Create agents first.
+                          No enabled agents. Create agents first, or use Custom step.
                         </p>
                       )}
                       {enabledAgents.map((agent) => (
@@ -336,7 +377,7 @@ export function AgentFlowsPage() {
                       Flow steps
                     </h3>
                     <p className="mb-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      Drag the dot to connect. Click a connection line or use Remove on a card to delete a link.
+                      Drag the O to connect so later steps receive prior results.
                     </p>
                     <AgentFlowGraphCanvas
                       graph={graph}
@@ -345,11 +386,22 @@ export function AgentFlowsPage() {
                       onGraphChange={updateGraph}
                       onDragOverColumn={setDragOverColumn}
                       onDropAgent={addAgentToFlow}
+                      onDropTask={addTaskToFlow}
                     />
                   </div>
                 </div>
 
                 {graphError && <p className="alert-error text-sm">{graphError}</p>}
+                {lintWarnings.length > 0 && (
+                  <div className="alert-warn text-sm" role="status">
+                    <p className="font-medium">Check before you save or run</p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5">
+                      {lintWarnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 <div className="flex flex-wrap items-center gap-2 border-t pt-4" style={{ borderColor: "var(--color-border-light)" }}>
                   <button

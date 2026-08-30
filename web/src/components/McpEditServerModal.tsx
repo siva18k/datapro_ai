@@ -67,7 +67,13 @@ export function McpEditServerModal({
             <h2 id="edit-mcp-server-title" className="text-lg font-semibold">
               {server.name}
             </h2>
-            <p className="mt-1 text-sm text-zinc-500">MCP server details and settings</p>
+            <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+              {server.is_builtin
+                ? "Required built-in server. Only the endpoint URL can change."
+                : server.slug === "email_smtp"
+                  ? "Optional email integration. Remove it from the list if you do not need mail."
+                  : "MCP server details and settings"}
+            </p>
           </div>
           <button type="button" className="btn-ghost btn-sm shrink-0" onClick={onClose} aria-label="Close">
             ✕
@@ -159,7 +165,9 @@ export function McpEditServerModal({
           )}
 
           {builtin && (
-            <p className="text-xs text-zinc-500">Built-in server: only the endpoint URL can be changed here.</p>
+            <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+              This URL is also saved as MCP_URL for the API.
+            </p>
           )}
 
           <div className="modal-actions">

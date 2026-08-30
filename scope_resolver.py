@@ -17,6 +17,34 @@ MAX_FILES = 5
 MIN_TABLE_SCORE = 3.0
 MIN_FILE_SCORE = 2.0
 _LOOKUP_ROLES = frozenset({"lookup", "dimension"})
+_LINE_SUFFIXES = ("_lines", "_line", "_items", "_item")
+
+
+def _header_line_companions(selected: list[str], known_tables: list[str]) -> list[str]:
+    """Keep header/line table pairs together (e.g. finance_ap_bills + finance_ap_bill_lines)."""
+    known_map = {n.lower(): n for n in known_tables}
+    extra: list[str] = []
+    selected_l = {s.lower() for s in selected}
+
+    def add(cand: str) -> None:
+        orig = known_map.get(cand.lower())
+        if orig and orig.lower() not in selected_l and orig not in extra:
+            extra.append(orig)
+
+    for name in list(selected_l):
+        add(name + "_lines")
+        add(name + "_line")
+        add(name + "_items")
+        if name.endswith("s") and not name.endswith("ss"):
+            stem = name[:-1]
+            for suffix in _LINE_SUFFIXES:
+                add(stem + suffix)
+        for suffix in _LINE_SUFFIXES:
+            if name.endswith(suffix):
+                stem = name[: -len(suffix)]
+                add(stem)
+                add(stem + "s")
+    return extra
 
 
 def _question_tokens(question: str) -> set[str]:
@@ -154,6 +182,10 @@ def resolve_table_scope(
             for hint in hints:
                 if hint not in all_hints:
                     all_hints.append(hint)
+
+    known_tables = [row[1] for row in scored] + lookup_tables
+    for tname in _header_line_companions(selected, known_tables):
+        selected.append(tname)
 
     # Lookups (channels, countries, …) must stay available for joins even when
     # fact-table narrowing already filled MAX_TABLES.

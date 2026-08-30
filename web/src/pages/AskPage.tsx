@@ -441,7 +441,7 @@ export function AskPage() {
             const displayContent =
               m.role === "assistant" && !debugMode ? stripSourceCitations(m.content) : m.content;
             return (
-            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div key={i} className={`flex min-w-0 max-w-full ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               {m.role === "user" ? (
                 <div className="chat-user">
                   {m.flowName ? (
@@ -471,7 +471,7 @@ export function AskPage() {
                   reportHtml={m.agentRun.reportHtml}
                 />
               ) : (
-                <div>
+                <div className="min-w-0 max-w-full">
                   <ChatAssistantMessage
                     content={displayContent}
                     rowCount={m.rows?.length}

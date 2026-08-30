@@ -42,11 +42,13 @@ RetrievalMode = Literal["unstructured", "structured", "hybrid"]
 # User wants executed data (SQL), not catalog tour / query tips.
 _DATA_REQUEST_PATTERNS = re.compile(
     r"\b("
-    r"give me|get me|show me|let me see|can you show|can you give|can you get|can you list|"
+    r"give me|get me|show me|provide me|provide|"
+    r"let me see|can you show|can you give|can you get|can you list|"
     r"pull up|pull|fetch|display|return|find me|list|report on|"
     r"how many|count|total|sum|average|avg|min|max|top \d+|"
     r"breakdown|break down|trend|compare|distribution|"
-    r"between|per month|per year|group by"
+    r"between|per month|per year|group by|"
+    r"vendor[- ]wise"
     r")\b",
     re.I,
 )
@@ -772,6 +774,10 @@ def _is_recoverable_sql_error(message: str) -> bool:
         or "42p01" in lower
         or "undefined column" in lower
         or "42703" in lower
+        or "column_not_found" in lower
+        or "cannot be resolved" in lower
+        or "unknown column" in lower
+        or "invalid column" in lower
         or "ambiguous" in lower
         or "type_mismatch" in lower
         or "cannot apply operator" in lower

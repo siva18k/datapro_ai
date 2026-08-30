@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type McpOptionalServerSpec, type McpServerRecord } from "../api/client";
 import { McpEditServerModal } from "./McpEditServerModal";
 import { mcpServerCardClass, mcpServerTagline } from "../utils/mcpServerUi";
 
-export function McpServersPanel() {
+export function McpServersPanel({ envPath }: { envPath?: string }) {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editingServer, setEditingServer] = useState<McpServerRecord | null>(null);
@@ -47,15 +47,24 @@ export function McpServersPanel() {
   });
 
   const saveServer = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       id,
       data,
+      persistEnvUrl,
     }: {
       id: string;
       data: Parameters<typeof api.updateMcpServer>[1];
-    }) => api.updateMcpServer(id, data),
+      persistEnvUrl?: boolean;
+    }) => {
+      const updated = await api.updateMcpServer(id, data);
+      if (persistEnvUrl && data.url) {
+        await api.saveSettings({ mcp_url: data.url });
+      }
+      return updated;
+    },
     onSuccess: () => {
       invalidate();
+      void qc.invalidateQueries({ queryKey: ["settings"] });
       setEditingServer(null);
       setNotice("MCP server updated.");
       setError(null);
@@ -86,6 +95,16 @@ export function McpServersPanel() {
     onError: (err) => setError(String(err)),
   });
 
+  const restartBuiltin = useMutation({
+    mutationFn: api.mcpRestart,
+    onSuccess: (res) => {
+      invalidate();
+      setNotice(res.message);
+      setError(res.ok ? null : res.message);
+    },
+    onError: (err) => setError(String(err)),
+  });
+
   const startServer = useMutation({
     mutationFn: api.startMcpServer,
     onSuccess: (res) => {
@@ -111,7 +130,8 @@ export function McpServersPanel() {
     deleteServer.isPending ||
     restoreServer.isPending ||
     startServer.isPending ||
-    stopServer.isPending;
+    stopServer.isPending ||
+    restartBuiltin.isPending;
 
   const servers = data?.servers ?? [];
   const dismissed = data?.dismissed_optional ?? [];
@@ -123,7 +143,7 @@ export function McpServersPanel() {
           <div>
             <h2 className="font-semibold">MCP servers</h2>
             <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-              Start, edit, or remove servers. Use the in-app Analytics page for SQL dashboards.
+              DATA Pro is required for Ask and Analytics. Email is an optional add-on you can start or remove.
             </p>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowForm((v) => !v)}>
@@ -203,28 +223,40 @@ export function McpServersPanel() {
         {notice && !showForm && <p className="alert-ok text-sm whitespace-pre-wrap">{notice}</p>}
         {error && !showForm && !editingServer && <p className="alert-error text-sm whitespace-pre-wrap">{error}</p>}
         {isLoading && <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Loading servers…</p>}
-      </div>
 
-      {servers.map((server) => (
-        <ServerRow
-          key={server.id}
-          server={server}
-          busy={actionBusy}
-          onEdit={() => setEditingServer(server)}
-          onStart={() => startServer.mutate(server.id)}
-          onStop={() => stopServer.mutate(server.id)}
-          onDelete={() => {
-            if (
-              !server.is_builtin &&
-              window.confirm(
-                `Remove MCP server "${server.name}"?\n\nDomain bindings that use this server will also be deleted.`,
-              )
-            ) {
-              deleteServer.mutate(server.id);
-            }
-          }}
-        />
-      ))}
+        <div className="space-y-3">
+          {servers.map((server) => (
+            <ServerRow
+              key={server.id}
+              server={server}
+              busy={actionBusy}
+              envPath={envPath}
+              savingUrl={saveServer.isPending}
+              onSaveUrl={(nextUrl) =>
+                saveServer.mutate({
+                  id: server.id,
+                  data: { url: nextUrl },
+                  persistEnvUrl: server.is_builtin,
+                })
+              }
+              onEdit={() => setEditingServer(server)}
+              onStart={() => startServer.mutate(server.id)}
+              onStop={() => stopServer.mutate(server.id)}
+              onRestart={server.is_builtin ? () => restartBuiltin.mutate() : undefined}
+              onDelete={() => {
+                if (
+                  !server.is_builtin &&
+                  window.confirm(
+                    `Remove MCP server "${server.name}"?\n\nDomain bindings that use this server will also be deleted.`,
+                  )
+                ) {
+                  deleteServer.mutate(server.id);
+                }
+              }}
+            />
+          ))}
+        </div>
+      </div>
 
       <McpEditServerModal
         open={editingServer != null}
@@ -233,7 +265,11 @@ export function McpServersPanel() {
         onClose={() => setEditingServer(null)}
         onSave={(payload) => {
           if (!editingServer) return;
-          saveServer.mutate({ id: editingServer.id, data: payload });
+          saveServer.mutate({
+            id: editingServer.id,
+            data: payload,
+            persistEnvUrl: editingServer.is_builtin,
+          });
         }}
       />
     </div>
@@ -259,20 +295,34 @@ function DismissedServerChip({
 function ServerRow({
   server,
   busy,
+  envPath,
+  savingUrl,
+  onSaveUrl,
   onEdit,
   onStart,
   onStop,
+  onRestart,
   onDelete,
 }: {
   server: McpServerRecord;
   busy: boolean;
+  envPath?: string;
+  savingUrl: boolean;
+  onSaveUrl: (url: string) => void;
   onEdit: () => void;
   onStart: () => void;
   onStop: () => void;
+  onRestart?: () => void;
   onDelete: () => void;
 }) {
+  const [url, setUrl] = useState(server.url);
   const canManage = Boolean(server.can_manage);
   const isRunning = Boolean(server.running || server.reachable);
+  const urlDirty = url.trim() !== (server.url ?? "").trim();
+
+  useEffect(() => {
+    setUrl(server.url);
+  }, [server.url]);
 
   return (
     <div className={mcpServerCardClass(server)}>
@@ -280,19 +330,28 @@ function ServerRow({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{server.name}</span>
-            {server.is_builtin && <span className="badge-muted badge text-xs">Built-in</span>}
+            {server.is_builtin ? (
+              <span className="badge-muted badge text-xs">Required</span>
+            ) : server.slug === "email_smtp" ? (
+              <span className="badge-muted badge text-xs">Optional</span>
+            ) : (
+              <span className="badge-muted badge text-xs">{server.server_kind}</span>
+            )}
             {canManage && (
               <span className={`badge text-xs ${server.reachable ? "badge-ok" : "badge-muted"}`}>
                 {server.reachable ? "On" : "Off"}
               </span>
             )}
+            {server.port != null && <span className="badge-muted badge text-xs">Port {server.port}</span>}
           </div>
           <p className="mt-0.5 mcp-text-muted">{mcpServerTagline(server)}</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onEdit}>
-            Edit
-          </button>
+          {!server.is_builtin && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onEdit}>
+              Edit
+            </button>
+          )}
           {canManage && (
             <>
               <button type="button" className="btn btn-sm" disabled={busy || isRunning} onClick={onStart}>
@@ -301,6 +360,16 @@ function ServerRow({
               <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !isRunning} onClick={onStop}>
                 Stop
               </button>
+              {onRestart && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy || !isRunning}
+                  onClick={onRestart}
+                >
+                  Restart
+                </button>
+              )}
             </>
           )}
           {!server.is_builtin && (
@@ -315,6 +384,33 @@ function ServerRow({
             </button>
           )}
         </div>
+      </div>
+
+      <div className="mt-3">
+        <label className="label" htmlFor={`mcp-url-${server.id}`}>
+          MCP URL
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            id={`mcp-url-${server.id}`}
+            className="input min-w-[16rem] flex-1 font-mono text-xs"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy || !urlDirty || !url.trim()}
+            onClick={() => onSaveUrl(url.trim())}
+          >
+            {savingUrl ? "Saving…" : "Save URL"}
+          </button>
+        </div>
+        {server.is_builtin && envPath && (
+          <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+            Also written to MCP_URL in {envPath}. Restart after a URL change.
+          </p>
+        )}
       </div>
     </div>
   );

@@ -276,12 +276,14 @@ def _numeric_columns(columns: list[str], rows: list[list[Any]]) -> list[int]:
             val = row[i]
             if val is None or val == "":
                 continue
-            if isinstance(val, (int, float)):
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
                 indices.append(i)
                 break
-            if isinstance(val, str) and re.match(r"^-?\d+(\.\d+)?$", val.strip()):
-                indices.append(i)
-                break
+            if isinstance(val, str):
+                cleaned = val.strip().replace(",", "").replace("$", "").replace(" ", "")
+                if re.match(r"^-?\d+(\.\d+)?$", cleaned):
+                    indices.append(i)
+                    break
     return indices
 
 

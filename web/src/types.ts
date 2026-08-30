@@ -329,18 +329,24 @@ export interface AgentRunResult {
 }
 
 export interface AgentFlowStep {
-  agent_id: string;
+  agent_id?: string;
+  kind?: "agent" | "task";
   handoff?: string;
   agent_name?: string;
   agent_slug?: string;
+  title?: string;
+  instructions?: string;
 }
 
 export interface AgentFlowGraphNode {
   id: string;
-  agent_id: string;
+  kind?: "agent" | "task";
+  agent_id?: string;
   column: 0 | 1;
   agent_name?: string;
   agent_slug?: string;
+  title?: string;
+  instructions?: string;
 }
 
 export interface AgentFlowGraphEdge {
@@ -363,6 +369,7 @@ export interface AgentFlow {
   instructions: string;
   steps: AgentFlowStep[] | AgentFlowGraph;
   enabled: boolean;
+  lint_warnings?: string[];
   created_at?: string;
   updated_at?: string;
 }

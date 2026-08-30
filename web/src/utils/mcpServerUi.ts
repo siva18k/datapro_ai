@@ -21,9 +21,9 @@ export function mcpServerCardClass(server: McpServerRecord): string {
 export function mcpServerTagline(server: McpServerRecord): string {
   switch (server.slug) {
     case "datapro":
-      return "Built-in knowledge base MCP";
+      return "Required for Ask, Analytics, catalog tools, and prompts";
     case "email_smtp":
-      return "Email via SMTP/IMAP";
+      return "Optional — send mail and search inbox. Safe to remove.";
     default:
       if (server.server_kind === "enterprise") return "Enterprise MCP endpoint";
       return "External MCP endpoint";

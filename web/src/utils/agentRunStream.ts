@@ -49,7 +49,12 @@ export function applyAgentRunStreamEvent(
       idx >= 0 ? prev.steps.map((s, i) => (i === idx ? step : s)) : [...prev.steps, step];
 
     let reportHtml = prev.reportHtml;
-    if (
+    if (event.payload?.html && typeof event.payload.html === "string") {
+      const html = event.payload.html.trim();
+      if (html.startsWith("<")) {
+        reportHtml = html;
+      }
+    } else if (
       (event.step_id === "report" || event.step_id.endsWith(":report")) &&
       event.payload?.html
     ) {

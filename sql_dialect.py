@@ -54,6 +54,7 @@ def _shared_generation_rules() -> str:
 - Read the Dataset definition section first — it documents scope, join paths, hub/bridge tables, and caveats.
 - Read **Table business rules** — apply status filters, revenue definitions, exclusions, and metric logic exactly as written per table.
 - Use Column reference for exact column names and types — match natural-language time phrases to date columns via names and labels.
+- Qualify columns only on the table that lists them (e.g. line_amount on bill_lines, not on bills). Join the listed parent/child tables when the metric is on a line table.
 - When the user names a calendar year (e.g. 2024), filter the chosen date column to that year; use relative date math only when they ask relatively (e.g. "last year").
 - Use ONLY tables listed under Allowed tables — never invent names like customers, orders, or products.
 - Follow join paths from the Dataset definition (especially hub and bridge tables) instead of guessing FKs.
@@ -96,6 +97,7 @@ def repair_rules(dialect: str) -> str:
         "- Remove or replace missing tables/columns — skip dimensions that caused the error.",
         "- Use ONLY tables from Allowed tables — map business terms to real catalog names.",
         "- Use Column reference for exact column names — do not invent columns.",
+        "- If a column lives on a child table (e.g. *_lines), JOIN that table; do not put the column on the header alias.",
         "- Schema-qualify every table exactly as in the catalog.",
         "- SELECT only. Prefer a partial answer over failing.",
     ]
