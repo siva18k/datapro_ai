@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Prevent accidental commits of .env files containing secrets.
+# To enable: run `git config core.hooksPath .githooks` in the repo.
+
+set -euo pipefail
+
+# List staged files
+STAGED=$(git diff --cached --name-only --relative)
+
+if echo "$STAGED" | egrep -q "(^|/)\.env($|\.|/)"; then
+  echo "Error: .env or .env.* is staged for commit. Remove it from the index and re-run commit." >&2
+  echo "Run: git reset HEAD -- .env && git restore --staged --worktree .env" >&2
+  exit 1
+fi
+
+exit 0

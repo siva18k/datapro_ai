@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS rag_profiles (
     source_id UUID NOT NULL REFERENCES data_sources(id) ON DELETE CASCADE UNIQUE,
     chunk_size INTEGER NOT NULL DEFAULT 300,
     chunk_overlap INTEGER NOT NULL DEFAULT 60,
-    embedding_model TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2',
+    embedding_model TEXT NOT NULL DEFAULT 'mistral-embed-2312',
     instructions TEXT NOT NULL DEFAULT '',
     metadata_text TEXT NOT NULL DEFAULT '',
     last_ingested_at TIMESTAMPTZ,

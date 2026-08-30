@@ -40,14 +40,85 @@ def _connect_external(config: dict) -> pg8000.native.Connection:
 
 def postgres_config_from_source(source: dict) -> dict:
     cfg = dict(source.get("config") or {})
+    if not cfg:
+        cfg = dict(source)
+    resolved: dict[str, Any] = {}
+    connection_id = str(cfg.get("connection_id") or "").strip()
+    if connection_id:
+        try:
+            from connections_service import connection_config
+
+            resolved = connection_config(connection_id)
+        except Exception:
+            try:
+                from connections_service import get_connection
+
+                saved = get_connection(connection_id) or {}
+                if saved:
+                    resolved = {
+                        "host": saved.get("host") or "",
+                        "port": int(saved.get("port") or 5432),
+                        "user": saved.get("user") or "",
+                        "password": saved.get("password") or "",
+                        "database": saved.get("database") or "postgres",
+                        "schema": saved.get("schema") or "public",
+                        "sslmode": saved.get("sslmode") or "require",
+                    }
+            except Exception:
+                resolved = {}
+    if not resolved:
+        try:
+            from connections_service import get_connection, get_connection_by_name, list_connections
+
+            connection_name = str(cfg.get("connection_name") or "").strip()
+            saved = get_connection_by_name(connection_name) if connection_name else None
+            if not saved:
+                postgres_rows = [row for row in list_connections() if (row.get("connector") or "").strip().lower() == "postgres"]
+                if len(postgres_rows) == 1:
+                    saved = get_connection(str(postgres_rows[0].get("id") or ""))
+            if saved:
+                resolved = {
+                    "host": saved.get("host") or "",
+                    "port": int(saved.get("port") or 5432),
+                    "user": saved.get("user") or "",
+                    "password": saved.get("password") or "",
+                    "database": saved.get("database") or "postgres",
+                    "schema": saved.get("schema") or "public",
+                    "sslmode": saved.get("sslmode") or "require",
+                }
+        except Exception:
+            pass
+    merged = dict(resolved)
+    linked_connection = bool(resolved) and bool(
+        connection_id or str(cfg.get("connection_name") or "").strip()
+    )
+    for key, value in cfg.items():
+        if value is None:
+            continue
+        if linked_connection and key in {"host", "port", "user", "password", "database", "sslmode"}:
+            continue
+        if isinstance(value, str):
+            # Keep saved-connection values when dataset config contains blank placeholders.
+            if key in {"host", "user", "password", "database", "sslmode", "schema"} and not value.strip():
+                continue
+            merged[key] = value
+            continue
+        if key == "port":
+            try:
+                if str(value).strip():
+                    merged[key] = int(value)
+            except Exception:
+                continue
+            continue
+        merged[key] = value
     return {
-        "host": cfg.get("host", ""),
-        "port": int(cfg.get("port") or 5432),
-        "user": cfg.get("user", ""),
-        "password": cfg.get("password", ""),
-        "database": cfg.get("database") or "postgres",
-        "schema": cfg.get("schema") or "public",
-        "sslmode": cfg.get("sslmode") or "require",
+        "host": merged.get("host", ""),
+        "port": int(merged.get("port") or 5432),
+        "user": merged.get("user", ""),
+        "password": merged.get("password", ""),
+        "database": merged.get("database") or "postgres",
+        "schema": merged.get("schema") or "public",
+        "sslmode": merged.get("sslmode") or "require",
     }
 
 

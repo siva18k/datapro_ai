@@ -87,6 +87,34 @@ def vector_literal(values):
 _CATALOG_COLUMNS: bool | None = None
 _SOURCE_CHUNK_UNIQUE: bool | None = None
 _TABLE_METADATA_COLUMN: bool | None = None
+_EMBEDDING_MODEL_COLUMN: bool | None = None
+
+
+def knowledge_chunks_has_embedding_model_column() -> bool:
+    """True when knowledge_chunks has the embedding_model column."""
+    global _EMBEDDING_MODEL_COLUMN
+    if _EMBEDDING_MODEL_COLUMN is not None:
+        return _EMBEDDING_MODEL_COLUMN
+    try:
+        conn, schema = connect()
+        try:
+            rows = conn.run(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = :schema
+                  AND table_name = 'knowledge_chunks'
+                  AND column_name = 'embedding_model'
+                LIMIT 1
+                """,
+                schema=schema,
+            )
+            _EMBEDDING_MODEL_COLUMN = bool(rows)
+        finally:
+            conn.close()
+    except Exception:
+        _EMBEDDING_MODEL_COLUMN = False
+    return _EMBEDDING_MODEL_COLUMN
 
 
 def knowledge_chunks_has_table_metadata_column() -> bool:

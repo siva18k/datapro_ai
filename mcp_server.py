@@ -10,7 +10,7 @@ from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
-from sentence_transformers import SentenceTransformer
+from api.deps import get_embedder
 
 from catalog_db import (
     get_domain_stats,
@@ -72,8 +72,8 @@ mcp = FastMCP(
 
 
 @lru_cache(maxsize=1)
-def _get_embedder() -> SentenceTransformer:
-    return SentenceTransformer(EMBEDDING_MODEL)
+def _get_embedder():
+    return get_embedder()
 
 
 def _serialize_dt(value) -> str | None:

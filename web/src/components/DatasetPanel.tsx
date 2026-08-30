@@ -22,7 +22,7 @@ function visibleTabs(_connector: string): Tab[] {
   return ["definition", "data", "rag", "connection"];
 }
 
-const CONNECTOR_OPTIONS = ["trino", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
+const CONNECTOR_OPTIONS = ["trino", "postgres", "upload", "file_path", "api", "sharepoint", "web_url"] as const;
 
 function normalizeConnectionConfig(connector: string, form: PgForm, existing: PgForm, dataset?: Dataset): Record<string, unknown> {
   const merged = { ...existing, ...form };
@@ -41,6 +41,22 @@ function normalizeConnectionConfig(connector: string, form: PgForm, existing: Pg
   }
   if (!isStructuredSqlConnector(connector) && dataset && !merged.path) {
     merged.path = `data/${dataset.domain_slug}/${dataset.slug}`;
+  }
+  if (connector === "postgres") {
+    const linkedConnectionId = String(merged.connection_id ?? "").trim();
+    if (linkedConnectionId) {
+      // Keep saved connection credentials authoritative when local fields are blank.
+      for (const key of ["host", "user", "password", "database", "sslmode"]) {
+        const value = merged[key as keyof typeof merged];
+        if (typeof value === "string" && !value.trim()) {
+          delete merged[key as keyof typeof merged];
+        }
+      }
+      const portValue = merged.port;
+      if (typeof portValue === "string" && !portValue.trim()) {
+        delete merged.port;
+      }
+    }
   }
   return merged;
 }
@@ -376,7 +392,7 @@ function ConnectionTab({
   const saveConfig = async () => {
     const payload = normalizeConnectionConfig(
       connector,
-      connector === "trino" || isStructuredSqlConnector(connector) ? pgForm : form,
+      connector === "trino" || connector === "postgres" || isStructuredSqlConnector(connector) ? pgForm : form,
       existingConfig,
       dataset,
     );
@@ -410,7 +426,7 @@ function ConnectionTab({
     onSuccess: () => qc.invalidateQueries({ queryKey: ["datasets"] }),
   });
 
-  const connName = String(pgForm.connection_name ?? "");
+  const connName = String(pgForm.connection_name ?? existingConfig.connection_name ?? "");
 
   return (
     <div className="max-w-3xl space-y-5">
@@ -441,27 +457,50 @@ function ConnectionTab({
       {isStructuredSqlConnector(connector) && (
         <>
           <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-            Trino catalog and schema for this dataset. Use the <strong>Data</strong> tab to discover tables.
+            {connector === "postgres"
+              ? "PostgreSQL connection for this dataset. Use the Data tab to discover tables."
+              : "Trino catalog and schema for this dataset. Use the Data tab to discover tables."}
             {connName ? ` Linked from «${connName}».` : ""}
           </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="field mb-0">
-              <label className="label">Trino catalog</label>
-              <input
-                className="input font-mono text-xs"
-                value={String(pgForm.catalog ?? "")}
-                onChange={(e) => setPgForm({ ...pgForm, catalog: e.target.value })}
-              />
+          {connector === "postgres" ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="field mb-0">
+                <label className="label">Database</label>
+                <input
+                  className="input font-mono text-xs"
+                  value={String(pgForm.database ?? "postgres")}
+                  onChange={(e) => setPgForm({ ...pgForm, database: e.target.value })}
+                />
+              </div>
+              <div className="field mb-0">
+                <label className="label">Schema</label>
+                <input
+                  className="input font-mono text-xs"
+                  value={String(pgForm.schema ?? "public")}
+                  onChange={(e) => setPgForm({ ...pgForm, schema: e.target.value })}
+                />
+              </div>
             </div>
-            <div className="field mb-0">
-              <label className="label">Schema</label>
-              <input
-                className="input font-mono text-xs"
-                value={String(pgForm.schema ?? "public")}
-                onChange={(e) => setPgForm({ ...pgForm, schema: e.target.value })}
-              />
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="field mb-0">
+                <label className="label">Trino catalog</label>
+                <input
+                  className="input font-mono text-xs"
+                  value={String(pgForm.catalog ?? "")}
+                  onChange={(e) => setPgForm({ ...pgForm, catalog: e.target.value })}
+                />
+              </div>
+              <div className="field mb-0">
+                <label className="label">Schema</label>
+                <input
+                  className="input font-mono text-xs"
+                  value={String(pgForm.schema ?? "public")}
+                  onChange={(e) => setPgForm({ ...pgForm, schema: e.target.value })}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 

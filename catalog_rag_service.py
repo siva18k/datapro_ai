@@ -17,6 +17,7 @@ from db import connect, get_db_config, upsert_chunks
 from ingest_service import chunk_text
 from structured_db import postgres_config_from_source
 from structured_orchestrator import execute_readonly_sql
+from settings_service import get_embedding_model
 
 CATALOG_SOURCE_PREFIX = "catalog_meta/"
 LOOKUP_SOURCE_PREFIX = "lookup_data/"
@@ -279,6 +280,7 @@ def _lookup_row_chunks(source: dict, table: dict, profile: dict | None) -> list[
     source_slug = source.get("slug", "ds")
     prefix = _chunk_id_prefix(domain_slug, source_slug)
     items: list[dict[str, Any]] = []
+    model = get_embedding_model()
 
     for batch_start in range(0, len(rows), LOOKUP_ROWS_PER_CHUNK):
         batch = rows[batch_start : batch_start + LOOKUP_ROWS_PER_CHUNK]
@@ -305,6 +307,7 @@ def _lookup_row_chunks(source: dict, table: dict, profile: dict | None) -> list[
                     "source_id": source["id"],
                     "rag_profile_id": profile.get("id") if profile else None,
                     "table_metadata_id": table["id"],
+                    "embedding_model": model,
                 }
             )
     return items
@@ -332,6 +335,7 @@ def index_structured_catalog(
     source_slug = source.get("slug", "ds")
     prefix = _chunk_id_prefix(domain_slug, source_slug)
     rag_profile_id = profile.get("id")
+    model = get_embedding_model()
 
     if table_ids is not None and len(table_ids) == 0:
         return {
@@ -387,6 +391,7 @@ def index_structured_catalog(
                     "source_id": source["id"],
                     "rag_profile_id": rag_profile_id,
                     "table_metadata_id": table_meta_id,
+                    "embedding_model": model,
                 }
             )
 
@@ -407,6 +412,7 @@ def index_structured_catalog(
                     "domain_id": source["domain_id"],
                     "source_id": source["id"],
                     "rag_profile_id": rag_profile_id,
+                    "embedding_model": model,
                 }
             )
 

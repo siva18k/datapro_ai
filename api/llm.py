@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import certifi
 import requests
 
-from llm_providers import API_KEY_ENV, DEFAULT_MODELS
+from llm_providers import API_KEY_ENV, DEFAULT_MODELS, MLX_MODEL_PATH_ENV
 from settings_service import get_api_key, get_llm_settings
 from sql_dialect import (
     dialect_for_context,
@@ -14,6 +18,49 @@ from sql_dialect import (
     repair_rules,
 )
 from sql_sanitize import normalize_llm_sql
+
+
+def _read_project_env() -> dict[str, str]:
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1]
+        values[key] = val
+    return values
+
+
+def _env_value(key: str) -> str:
+    current = (os.environ.get(key) or "").strip()
+    if current:
+        return current
+    return (_read_project_env().get(key) or "").strip()
+
+
+def _resolve_external_tls_verify(insecure_env: str | None = None) -> str | bool:
+    """Resolve TLS verify option for outbound HTTPS API requests."""
+    if insecure_env:
+        insecure_flag = _env_value(insecure_env).lower()
+        if insecure_flag in {"1", "true", "yes", "on"}:
+            return False
+    generic_insecure = _env_value("LLM_TLS_INSECURE").lower()
+    if generic_insecure in {"1", "true", "yes", "on"}:
+        return False
+    ca_bundle = _env_value("REQUESTS_CA_BUNDLE")
+    if ca_bundle:
+        return ca_bundle
+    ssl_cert_file = _env_value("SSL_CERT_FILE")
+    if ssl_cert_file:
+        return ssl_cert_file
+    return certifi.where()
 
 
 def resolve_llm_runtime(
@@ -171,6 +218,7 @@ def _openai_compatible_chat(
     model: str,
     prompt: str,
     extra_headers: dict[str, str] | None = None,
+    tls_verify: str | bool = True,
 ) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -186,6 +234,7 @@ def _openai_compatible_chat(
         },
         headers=headers,
         timeout=120,
+        verify=tls_verify,
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
@@ -202,6 +251,19 @@ def generate_answer(
         backend=backend, model=model, base_url=base_url
     )
 
+    if resolved_backend == "mlx":
+        model_path = _env_value(MLX_MODEL_PATH_ENV) or (
+            settings.get("mlx_model_path") or ""
+        ).strip()
+        base_url = (resolved_base or "http://127.0.0.1:18080").strip()
+        r = requests.post(
+            f"{base_url.rstrip('/')}/generate",
+            json={"prompt": prompt, "max_tokens": 2048, "temperature": 0.2},
+            timeout=300,
+        )
+        r.raise_for_status()
+        return r.json()["response"]
+
     if resolved_backend == "ollama":
         r = requests.post(
             f"{resolved_base.rstrip('/')}/api/generate",
@@ -215,6 +277,7 @@ def generate_answer(
         api_key = get_api_key("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set (Settings → LLM)")
+        tls_verify = _resolve_external_tls_verify("MISTRAL_TLS_INSECURE")
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
             json={
@@ -228,6 +291,7 @@ def generate_answer(
                 "Content-Type": "application/json",
             },
             timeout=120,
+            verify=tls_verify,
         )
         r.raise_for_status()
         data = r.json()
@@ -238,11 +302,13 @@ def generate_answer(
         api_key = get_api_key("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is not set (Settings → LLM)")
+        tls_verify = _resolve_external_tls_verify("MISTRAL_TLS_INSECURE")
         r = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{resolved_model}:generateContent",
             params={"key": api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=120,
+            verify=tls_verify,
         )
         r.raise_for_status()
         data = r.json()
@@ -260,15 +326,18 @@ def generate_answer(
     if resolved_backend == "openai":
         url = "https://api.openai.com/v1/chat/completions"
         extra_headers = None
+        tls_verify = _resolve_external_tls_verify("MISTRAL_TLS_INSECURE")
     elif resolved_backend == "openrouter":
         url = "https://openrouter.ai/api/v1/chat/completions"
         extra_headers = {
             "HTTP-Referer": "https://datapro.local",
             "X-Title": "DATA Pro",
         }
+        tls_verify = _resolve_external_tls_verify("MISTRAL_TLS_INSECURE")
     else:
         url = "https://api.mistral.ai/v1/chat/completions"
         extra_headers = None
+        tls_verify = _resolve_external_tls_verify("MISTRAL_TLS_INSECURE")
 
     return _openai_compatible_chat(
         url=url,
@@ -276,4 +345,5 @@ def generate_answer(
         model=resolved_model,
         prompt=prompt,
         extra_headers=extra_headers,
+        tls_verify=tls_verify,
     )

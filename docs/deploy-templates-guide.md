@@ -2,7 +2,7 @@
 
 Templates for deploying DATA Pro to **Amazon Web Services (AWS)** — ECS Fargate, ECR, RDS, Secrets Manager.
 
-This folder is **checked into the public repo**. It contains generic templates only — no real AWS account IDs, ARNs, passwords, or API keys.
+The `deploy.example/` folder is **checked into the public repo**. It contains generic templates only — no real AWS account IDs, ARNs, passwords, or API keys.
 
 ## Quick start
 
@@ -60,4 +60,4 @@ Postgres is **not** bundled for ECS. Use **Amazon RDS** (or another managed Post
 - **Commit:** changes under `deploy.example/` and `docs/deploy-ecs.md`
 - **Do not commit:** anything under `deploy/`, `.env`, or production credentials
 
-See [docs/deploy-ecs.md](../docs/deploy-ecs.md) for architecture and RDS/pgvector notes.
+See [deploy-ecs.md](deploy-ecs.md) for architecture and RDS/pgvector notes.

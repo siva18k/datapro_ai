@@ -6,13 +6,34 @@ Built with React, FastAPI, Postgres + pgvector, sentence-transformers, and Mistr
 
 ## Catalog database (required)
 
-DATA Pro stores **catalog metadata and RAG embeddings** in **your own PostgreSQL** database (domains, datasets, `knowledge_chunks`, pgvector). **Business warehouse queries** run through **Trino** — configure the coordinator in Settings and register catalogs in `docker/trino/catalog/` (local) or on the Trino server (AWS).
+DATA Pro stores **catalog metadata and RAG embeddings** in **your own PostgreSQL** database (domains, datasets, `knowledge_chunks`, pgvector). This is the required database for the app.
 
 **→ [Set up your catalog database](docs/catalog-database.md)** — create Postgres + pgvector, set `DATABASE_URL`, run migrations.
 
-**→ [Trino for business data](docs/trino.md)** — Docker Trino service, catalog bindings, finance demo.
+Podman Compose includes Postgres for local dev; for your own RDS or existing Postgres, follow the same doc.
 
-Docker Compose includes Postgres for local dev; for your own RDS or existing Postgres, follow the same doc.
+## Trino setup (optional)
+
+Use Trino only if you want DATA Pro to query business or warehouse data through Trino-backed connections. Trino is separate from the catalog database and is not required for the core RAG/catalog setup.
+
+**→ [Trino for business data](docs/trino.md)** — Docker Trino service, catalog bindings, finance demo, supported warehouse types, and migration from legacy direct Postgres connections.
+
+Typical local setup:
+
+1. Start the app stack with Podman Compose.
+2. Start Trino separately if you want the coordinator running before opening the UI.
+3. Copy `docker/trino/catalog/finance.properties.example` to `docker/trino/catalog/finance.properties` for the local finance demo.
+4. In **Settings → Database connections**, set the Trino coordinator, add a binding, and save.
+
+If you do not need warehouse SQL, you can skip Trino entirely.
+
+## Multiple database connections (optional)
+
+DATA Pro can manage more than one warehouse connection. Add one Trino binding per warehouse, with a separate catalog name for each connection.
+
+For example, keep `finance` for the demo warehouse and add another binding such as `analytics` or `sales` for a second source. Each catalog gets its own Trino properties file under `docker/trino/catalog/`.
+
+If you already have saved legacy connections, use the migration flow in [docs/trino.md](docs/trino.md) to convert them into Trino bindings.
 
 ## AWS deployment (optional)
 
@@ -20,7 +41,7 @@ Production deploy targets **Amazon Web Services (AWS)** — **ECS Fargate**, **E
 
 **→ [Deploy to AWS ECS](docs/deploy-ecs.md)** — build images, push to ECR, run on Fargate.
 
-Local dev uses Docker Compose only; AWS is not required to use the app.
+Local dev uses Podman Compose only; AWS is not required to use the app.
 
 ## Get running
 
@@ -31,18 +52,27 @@ cp .env.example .env
 # Put your MISTRAL_API_KEY in .env — or set DEFAULT_LLM_BACKEND=ollama
 # Optional: cp saved_db_connections.json.example saved_db_connections.json
 
-docker compose up --build
+podman machine start
+podman compose up --build
+```
 
+Then open the UI (default port **5173**).
+
+## Optional warehouse demo
+
+If you want to try Trino right away, load the bundled finance demo after the app is running:
+
+```bash
 # First run: Trino finance catalog (local demo Postgres)
 cp docker/trino/catalog/finance.properties.example docker/trino/catalog/finance.properties
 
 # Optional: load demo finance warehouse (queried via Trino catalog `finance`)
-docker compose run --rm api python scripts/migrate_finance_data.py --fresh
+podman compose run --rm api python scripts/migrate_finance_data.py --fresh
 ```
 
-Then open the UI (default port **5173**). In **Settings → Database connections**, set Trino to `localhost:8081`, add a binding (`finance` / `finance_data`), and save. See [docs/trino.md](docs/trino.md).
+If Trino is enabled, set the coordinator in **Settings → Database connections**, add a binding such as `finance` / `finance_data`, and save. See [docs/trino.md](docs/trino.md).
 
-Prefer running things locally without Docker? Same doc covers local setup.
+Prefer running things locally without Podman Compose? Same doc covers local setup.
 
 ## What it does
 

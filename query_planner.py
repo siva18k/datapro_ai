@@ -136,6 +136,9 @@ def resolve_query_plan(
     if has_attached_documents(question):
         return QueryPlan(
             question=question,
+            domain_id=None,
+            domain_name=None,
+            domain_slug=None,
             execution_kind="attachment",
             routing={"method": "attachment"},
             notes=["Attached file(s) — answering from upload only."],

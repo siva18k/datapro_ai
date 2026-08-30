@@ -17,16 +17,16 @@ export function SavedConnectionsPanel({
   onTrinoPasswordChange,
   onTrinoNotice,
 }: {
-  catalog: ReactNode;
-  trino: TrinoSettingsPayload;
-  trinoPassword: string;
-  trinoEditing: boolean;
-  trinoNotice: { ok: boolean; text: string } | null;
-  onTrinoEdit: () => void;
-  onTrinoCancel: () => void;
-  onTrinoChange: (patch: Partial<TrinoSettingsPayload>) => void;
-  onTrinoPasswordChange: (value: string) => void;
-  onTrinoNotice: (notice: { ok: boolean; text: string } | null) => void;
+  catalog?: ReactNode;
+  trino?: TrinoSettingsPayload;
+  trinoPassword?: string;
+  trinoEditing?: boolean;
+  trinoNotice?: { ok: boolean; text: string } | null;
+  onTrinoEdit?: () => void;
+  onTrinoCancel?: () => void;
+  onTrinoChange?: (patch: Partial<TrinoSettingsPayload>) => void;
+  onTrinoPasswordChange?: (value: string) => void;
+  onTrinoNotice?: (notice: { ok: boolean; text: string } | null) => void;
 }) {
   const qc = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
@@ -84,7 +84,10 @@ export function SavedConnectionsPanel({
     .map((conn) => conn.name);
 
   const datasetCount = connections?.length ?? 0;
-  const trinoConfigured = Boolean(trino.host?.trim());
+  const trinoConfigured = Boolean(trino?.host?.trim());
+  const showTrinoCard = Boolean(
+    trino && onTrinoEdit && onTrinoCancel && onTrinoChange && onTrinoPasswordChange && onTrinoNotice,
+  );
 
   return (
     <div className="flex h-full flex-col space-y-4">
@@ -92,7 +95,7 @@ export function SavedConnectionsPanel({
         <div>
           <h2 className="font-semibold">Connections</h2>
           <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-            Catalog database, Trino coordinator, and warehouse bindings for business datasets
+            Catalog database, Trino coordinator, native Postgres, and warehouse bindings for business datasets
           </p>
         </div>
         <button type="button" className="btn btn-sm shrink-0" onClick={openNew}>
@@ -108,27 +111,32 @@ export function SavedConnectionsPanel({
 
       <ul className="saved-connections-grid">
         {catalog}
-        <TrinoServerCard
-          form={trino}
-          password={trinoPassword}
-          passwordSet={settings?.trino?.password_set ?? false}
-          configured={trinoConfigured}
-          editing={trinoEditing}
-          notice={trinoNotice}
-          onEdit={onTrinoEdit}
-          onCancel={onTrinoCancel}
-          onChange={onTrinoChange}
-          onPasswordChange={onTrinoPasswordChange}
-          onNotice={onTrinoNotice}
-        />
+        {showTrinoCard && trino ? (
+          <TrinoServerCard
+            form={trino}
+            password={trinoPassword ?? ""}
+            passwordSet={settings?.trino?.password_set ?? false}
+            configured={trinoConfigured}
+            editing={Boolean(trinoEditing)}
+            notice={trinoNotice ?? null}
+            onEdit={onTrinoEdit!}
+            onCancel={onTrinoCancel!}
+            onChange={onTrinoChange!}
+            onPasswordChange={onTrinoPasswordChange!}
+            onNotice={onTrinoNotice!}
+          />
+        ) : null}
         {!isLoading &&
           connections?.map((conn) => (
             <li key={conn.id} className="saved-connection-card">
               <div className="saved-connection-card-header">
                 <p className="saved-connection-card-name">{conn.name}</p>
-                <span className="saved-connection-card-badge">Dataset</span>
+                <span className="saved-connection-card-badge">
+                  {conn.connector === "postgres" ? "Native PostgreSQL" : "Trino catalog"}
+                </span>
               </div>
               <DbConnectionSummary
+                connector={conn.connector}
                 warehouseTypeLabel={conn.warehouse_type_label}
                 catalog={conn.catalog}
                 schema={conn.schema}
@@ -166,7 +174,7 @@ export function SavedConnectionsPanel({
 
       {!isLoading && datasetCount === 0 && (
         <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-          No business connections yet. Add one with Trino engine and warehouse credentials, then create structured datasets from it.
+          No business connections yet. Add a native Postgres or Trino warehouse connection, then create structured datasets from it.
         </p>
       )}
 

@@ -17,6 +17,7 @@ import {
   type TrinoSettingsPayload,
 } from "../api/client";
 import { devBootstrap, isDevBootstrapAvailable } from "../api/devBootstrap";
+import type { MetadataRagStatus } from "../types";
 import { parsePostgresUrl } from "../utils/postgresUrl";
 
 const MISTRAL_CUSTOM_MODEL = "__custom__";
@@ -131,12 +132,15 @@ export function SettingsPage() {
 
   const [db, setDb] = useState<DatabaseSettingsPayload>(emptyDb);
   const [embeddingModel, setEmbeddingModel] = useState("all-MiniLM-L6-v2");
+  const [metadataRagEmbedModel, setMetadataRagEmbedModel] = useState("all-MiniLM-L6-v2");
+  const [metadataRagStatus, setMetadataRagStatus] = useState<MetadataRagStatus | null>(null);
   const [conversationTurns, setConversationTurns] = useState(5);
   const [retrievalTopK, setRetrievalTopK] = useState(3);
   const [llm, setLlm] = useState<LlmSettingsPayload>({
     default_backend: "mistral",
     default_model: "",
     ollama_base_url: "http://localhost:11434",
+    mlx_model_path: "",
   });
   const [apiKeys, setApiKeys] = useState({
     mistral: "",
@@ -293,12 +297,14 @@ export function SettingsPage() {
       password: "",
     });
     setEmbeddingModel(data.embedding_model);
+    setMetadataRagEmbedModel(data.embedding_model || embeddingModel);
     setConversationTurns(data.ask?.conversation_turns ?? 5);
     setRetrievalTopK(data.ask?.retrieval_top_k ?? 3);
     setLlm({
       default_backend: data.llm.default_backend,
       default_model: sanitizeModelOverride(data.llm.default_model),
       ollama_base_url: data.llm.ollama_base_url,
+      mlx_model_path: data.llm.mlx_model_path || "",
     });
     const model = sanitizeModelOverride(data.llm.default_model);
     const knownMistralIds = new Set((data.mistral_model_options ?? []).map((option) => option.id));
@@ -414,6 +420,32 @@ export function SettingsPage() {
     },
   });
 
+  const metadataRagStatusQuery = useQuery<MetadataRagStatus>({
+    queryKey: ["metadata-rag-status"],
+    queryFn: api.metadataRagStatus,
+    enabled: apiOnline,
+    refetchInterval: apiOnline ? 30_000 : false,
+  });
+
+  useEffect(() => {
+    if (metadataRagStatusQuery.data) {
+      setMetadataRagStatus(metadataRagStatusQuery.data);
+    }
+  }, [metadataRagStatusQuery.data]);
+
+  const reRag = useMutation({
+    mutationFn: (model?: string) => api.reRagMetadata(model),
+    onMutate: () => {
+      setMessage(null);
+      setError(null);
+    },
+    onSuccess: (res) => {
+      setMetadataRagStatus(res.status);
+      setMessage(res.summary || `Re-RAG complete — ${res.updated} metadata chunk(s) updated.`);
+    },
+    onError: (err) => setError(String(err)),
+  });
+
   const updateDb = (patch: Partial<DatabaseSettingsPayload>) => setDb((prev) => ({ ...prev, ...patch }));
 
   const openCatalogEdit = () => {
@@ -469,6 +501,7 @@ export function SettingsPage() {
   };
 
   const catalogConfigured = isCatalogConfigured(db, data?.database.database_url === "***");
+  const metadataRagLoading = metadataRagStatusQuery.isLoading || metadataRagStatusQuery.isFetching;
   const catalogUsesUrl =
     db.use_database_url && (data?.database.database_url === "***" || Boolean(db.database_url.trim()));
   const catalogUserFallback = catalogUsesUrl ? "Configured via URL" : undefined;
@@ -724,6 +757,16 @@ export function SettingsPage() {
                         onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
                       />
                     </div>
+                  ) : selectedBackend === "mlx" ? (
+                    <div className="field mb-0">
+                      <label className="label">Model path</label>
+                      <input
+                        className="input font-mono text-xs"
+                        placeholder="/path/to/model"
+                        value={llm.mlx_model_path || ""}
+                        onChange={(e) => setLlm((prev) => ({ ...prev, mlx_model_path: e.target.value }))}
+                      />
+                    </div>
                   ) : null}
                   <div className="field mb-0">
                     <label className="label" htmlFor="datapro-embedding-model">
@@ -751,6 +794,86 @@ export function SettingsPage() {
                 ) : (
                   <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
                     Leave model blank to use the provider default. Changing the embedding model requires re-ingesting documents.
+                  </p>
+                )}
+              </div>
+
+              <div className="card card-pad space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-semibold">Metadata RAG</h2>
+                    <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      View metadata chunk RAG status and re-embed chunks with a chosen embedding model.
+                    </p>
+                  </div>
+                  <span className={`badge ${reRag.isPending ? "badge-warn" : "badge-ok"}`}>
+                    {reRag.isPending ? "Running" : "Idle"}
+                  </span>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="catalog-themed-box p-4">
+                    <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>Total metadata chunks</div>
+                    <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.total ?? "—"}</div>
+                  </div>
+                  <div className="catalog-themed-box p-4">
+                    <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>Embedded</div>
+                    <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.embedded ?? "—"}</div>
+                  </div>
+                  <div className="catalog-themed-box p-4">
+                    <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>Missing embeddings</div>
+                    <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.missing ?? "—"}</div>
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="field mb-0">
+                    <label className="label" htmlFor="metadata-rag-embed-model">
+                      Embedding model
+                    </label>
+                    <select
+                      id="metadata-rag-embed-model"
+                      className="select font-mono text-xs"
+                      value={metadataRagEmbedModel}
+                      onChange={(e) => setMetadataRagEmbedModel(e.target.value)}
+                    >
+                      {data.embedding_model_options.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field mb-0">
+                    <label className="label">Status</label>
+                    <div className="catalog-themed-box p-3 text-sm">
+                      {metadataRagLoading
+                        ? "Loading metadata RAG status…"
+                        : metadataRagStatus
+                          ? `${metadataRagStatus.embedded} embedded, ${metadataRagStatus.missing} missing`
+                          : "Status unavailable"}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={reRag.isPending || !catalogConfigured}
+                    onClick={() => reRag.mutate(metadataRagEmbedModel)}
+                  >
+                    {reRag.isPending ? "Recomputing…" : "Recompute metadata RAG"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={metadataRagLoading}
+                    onClick={() => void metadataRagStatusQuery.refetch()}
+                  >
+                    {metadataRagLoading ? "Refreshing…" : "Refresh status"}
+                  </button>
+                </div>
+                {metadataRagStatusQuery.isError && (
+                  <p className="alert-error text-sm">
+                    Unable to load metadata RAG status: {String(metadataRagStatusQuery.error)}
                   </p>
                 )}
               </div>

@@ -100,7 +100,7 @@ Creates schema `ragpro`, catalog tables, vector table, and default domains (HR, 
 python scripts/migrate.py
 ```
 
-Docker Compose runs this automatically via the `migrate` service before API/MCP start.
+Podman Compose runs this automatically via the `migrate` service before API/MCP start.
 
 Verify:
 
@@ -119,12 +119,12 @@ curl http://localhost:8080/api/readiness  # catalog + chunks checks
 
 Optional demo warehouse (separate SQL objects **inside** the same catalog DB or another DB depending on script): [migrations/finance_data/README.md](../migrations/finance_data/README.md).
 
-## Docker Compose (bundled Postgres)
+## Podman Compose (bundled Postgres)
 
 If you do not have Postgres yet, Compose includes a **`db`** service (pgvector/pg16):
 
 ```bash
-docker compose up --build
+podman compose up --build
 ```
 
 Default connection (already in `.env.example`):
@@ -149,7 +149,7 @@ Always use `PGSSLMODE=require` (or stricter) for remote RDS.
 
 | Environment | Typical `PGSSLMODE` |
 |-------------|---------------------|
-| Docker Compose `db` service | `disable` |
+| Podman Compose `db` service | `disable` |
 | Local Postgres on localhost | `disable` or `prefer` |
 | RDS / Aurora / cloud Postgres | `require` |
 

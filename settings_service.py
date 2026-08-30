@@ -29,6 +29,7 @@ MANAGED_KEYS = (
     "DEFAULT_LLM_BACKEND",
     "DEFAULT_LLM_MODEL",
     "OLLAMA_BASE_URL",
+    "MLX_MODEL_PATH",
     "MISTRAL_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -57,6 +58,7 @@ SECRET_KEYS = frozenset(
         "ANTHROPIC_API_KEY",
         "GEMINI_API_KEY",
         "OPENROUTER_API_KEY",
+        "TRINO_PASSWORD",
         "DATABASE_URL",
     }
 )
@@ -209,7 +211,9 @@ def get_embedding_model() -> str:
 
     raw = get_raw_settings()
     model = (raw.get("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL).strip()
-    return model or DEFAULT_EMBEDDING_MODEL
+    if not model or not model.startswith("mistral-embed"):
+        return DEFAULT_EMBEDDING_MODEL
+    return model
 
 
 def get_ask_conversation_turns() -> int:

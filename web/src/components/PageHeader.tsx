@@ -9,12 +9,12 @@ export function PageHeader({
 }) {
   return (
     <div className="page-header flex flex-wrap items-start justify-between gap-3">
-      <div>
+      <div className="flex items-baseline gap-3">
         <h1 className="text-2xl font-semibold">{title}</h1>
         {description && (
-          <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+          <span className="text-sm" style={{ color: "var(--color-text-muted)" }}>
             {description}
-          </p>
+          </span>
         )}
       </div>
       {children}

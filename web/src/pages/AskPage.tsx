@@ -381,7 +381,7 @@ export function AskPage() {
   return (
     <div className="ask-page">
       <div className="shrink-0">
-      <PageHeader title="Ask" description="Q&A across domains">
+      <PageHeader title="Ask" description="Explore your knowledge base">
         <button
           type="button"
           className="btn btn-secondary btn-sm"

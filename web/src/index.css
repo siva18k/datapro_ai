@@ -2236,7 +2236,6 @@ label.file-upload-btn {
   animation: ask-composer-border-drift 7s ease infinite;
 }
 .ask-composer-shell--pending {
-  padding: 1px;
   border: none;
   background: linear-gradient(
     120deg,
@@ -2428,7 +2427,7 @@ label.file-upload-btn {
   @apply flex items-center justify-between gap-3 px-3 pb-3 pt-1;
 }
 .ask-composer-toolbar-left {
-  @apply flex min-w-0 items-center gap-2;
+  @apply flex min-w-0 flex-wrap items-center gap-2;
 }
 .ask-composer-file-input {
   @apply sr-only;
@@ -2857,6 +2856,19 @@ table.data td {
 .rag-page .btn {
   @apply px-3 py-1.5 text-sm;
 }
+.analytics-new-chat-btn {
+  @apply inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-medium transition-colors;
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface));
+  color: var(--color-primary-text);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 20%, var(--color-border));
+}
+.analytics-new-chat-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-primary) 18%, var(--color-surface));
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-border));
+}
+.analytics-new-chat-btn:disabled {
+  @apply cursor-not-allowed opacity-50;
+}
 .analytics-shell {
   min-height: 0;
   flex: 1 1 auto;
@@ -2879,7 +2891,7 @@ table.data td {
   }
 }
 .analytics-prompt-row {
-  @apply flex flex-wrap items-end;
+  @apply flex flex-wrap items-start;
   gap: 0.625rem;
 }
 @media (min-width: 640px) {

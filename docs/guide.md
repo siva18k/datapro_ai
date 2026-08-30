@@ -18,4 +18,37 @@ Start with [installation](installation.md) if you're setting up for the first ti
 | [Concepts](concepts.md) | RAG and MCP in plain terms |
 | [Troubleshooting](troubleshooting.md) | Fixes for common problems |
 
-Optional sample data: [finance_data warehouse](../migrations/finance_data/README.md).
+Optional sample data: [finance_data warehouse](finance-data-guide.md).
+
+## Manual server run sequence (non-Docker)
+
+Use separate terminals and run in this order when starting locally without Docker.
+
+1. Ensure your catalog Postgres is already running and matches `.env` (`DATABASE_URL` or `PG*`).
+
+2. Terminal 1 (repo root):
+
+```bash
+source .venv/bin/activate
+python scripts/migrate.py
+uvicorn api.main:app --reload --host 127.0.0.1 --port 8080
+```
+
+3. Terminal 2 (repo root):
+
+```bash
+source .venv/bin/activate
+python mcp_server.py
+```
+
+4. Terminal 3 (repo root):
+
+```bash
+cd web && npm run dev
+```
+
+5. Optional Terminal 4 (if using Ollama backend):
+
+```bash
+ollama serve
+```
