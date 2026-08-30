@@ -6,13 +6,13 @@ Same Postgres and `.env` as the web app — agents just talk to port 8000 instea
 
 - Podman: `podman compose up datapro-mcp` (or the full stack)
 - Local: `python mcp_server.py`
-- UI: **Settings → MCP server → Start**, or the **MCP** page
+- UI: **Settings → Servers** (MCP server Start), or the process commands below
 
 Endpoint: http://127.0.0.1:8000/mcp
 
 ## Cursor / Claude Desktop
 
-Grab the JSON from the **MCP** page, or paste something like:
+Grab the JSON from **Settings → Servers**, or paste something like:
 
 ```json
 {
@@ -28,13 +28,15 @@ Restart MCP after you change **built-in registry prompts**. Domain bindings appl
 
 ## MCP servers & domain bindings
 
-Register multiple MCP servers on the **MCP** page (built-in DATA Pro plus public/enterprise endpoints). Per domain, bind **tools**, **resources**, and **prompts** from any server. Ask uses those bindings for retrieval and prompt templates.
+Register MCP servers under **Settings → Servers**. **Settings → MCP** lists every tool, prompt, and resource those servers expose (agent abilities use the same tool catalog). **DATA Pro** is the required built-in server for Ask and Analytics. **Email (SMTP/IMAP)** is an optional add-on (remove it if you do not need mail). You can also add public or enterprise endpoints. Per domain, bind **tools**, **resources**, and **prompts** from any server. Ask uses those bindings for retrieval and prompt templates.
 
 **Prompts** on the domain bindings tab can be **Global** (built-in `mcp_registry.json` templates) or **Local** (per-domain templates stored in `domain_prompts`, bound as `local:{slug}`). Create local prompts in the Add prompt dialog; edit/delete from the bindings list. Local templates support placeholders such as `{question}`, `{context}`, `{domain_name}`, `{schema}`, `{calendar}`, `{glossary}`, `{citation_rules}`. Run migration `014_domain_prompts.sql` before using local prompts.
 
 Default domain bindings include reference **resources** (schema, calendar, glossary, sql-notes, citation-rules), **tools** (`list_domains`, `list_domain_sources`, `search_documents`, `resolve_time_period`), and **prompts** (`domain_sql_context`, `domain_grounded_answer`).
 
-Ask / Analytics **automatically attach bound reference resources** (schema for SQL/hybrid; glossary + citation rules for RAG). Optional inventory resources (`ragpro://domains`, sources, stats) load only when the planner sets `use_resources`.
+Ask / Analytics **automatically attach bound reference resources** (schema for SQL/hybrid; glossary + citation rules for RAG) from an in-memory **domain context pack** warmed at API startup. Optional inventory resources (`ragpro://domains`, sources, stats) load only when the planner sets `use_resources`. Question-specific tools (`search_documents`, `resolve_time_period`) still run live.
+
+**Agents** resolve that same domain catalog when you **Save agent** (plus extras from Advanced). Tools, prompts, and resources are stored on the agent (`agent_mcp_tools`, `agent_mcp_prompts`, `agent_mcp_resources`). Execute uses the saved kit directly and does not run the Ask planner again. Re-save after you change the goal or `/domain` pins. Run migration `016_agent_mcp_kit.sql`.
 
 Edit domain reference docs via API: `PUT /api/domains/{id}/references/calendar` (also `glossary`, `sql_notes`). Finance is seeded with sample FY content in migration `012`.
 

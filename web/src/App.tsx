@@ -4,17 +4,15 @@ import { Layout } from "./components/Layout";
 import { ApiConnectionProvider } from "./context/ApiConnectionContext";
 import { SidebarProvider } from "./context/SidebarContext";
 import { ThemeProvider } from "./context/ThemeContext";
-import { AgentDetailPage } from "./pages/AgentDetailPage";
-import { AgentFlowDetailPage } from "./pages/AgentFlowDetailPage";
 import { AgentFlowsPage } from "./pages/AgentFlowsPage";
 import { AgentsPage } from "./pages/AgentsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { AboutPage } from "./pages/AboutPage";
+import { AskDebugPage } from "./pages/AskDebugPage";
 import { AskPage } from "./pages/AskPage";
 import { CatalogPage } from "./pages/CatalogPage";
-import { McpPage } from "./pages/McpPage";
 import { RagPage } from "./pages/RagPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { AboutPage } from "./pages/AboutPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,17 +32,16 @@ export default function App() {
       <BrowserRouter>
         <SidebarProvider>
         <Routes>
+          <Route path="ask/debug" element={<AskDebugPage />} />
           <Route path="about" element={<AboutPage />} />
           <Route element={<Layout />}>
             <Route index element={<CatalogPage />} />
             <Route path="ask" element={<AskPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
-            <Route path="agent-flows/:id" element={<AgentFlowDetailPage />} />
-            <Route path="agent-flows" element={<AgentFlowsPage />} />
-            <Route path="agents/:id" element={<AgentDetailPage />} />
             <Route path="agents" element={<AgentsPage />} />
+            <Route path="agent-flows" element={<AgentFlowsPage />} />
             <Route path="rag" element={<RagPage />} />
-            <Route path="mcp" element={<McpPage />} />
+            <Route path="mcp" element={<Navigate to="/settings?tab=mcp" replace />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

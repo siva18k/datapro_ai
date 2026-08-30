@@ -44,11 +44,17 @@ export function formatCell(value: unknown, timeContext?: TimeContext): string {
   return String(value);
 }
 
+function parseNumericValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && !Number.isNaN(value)) return value;
+  const text = String(value).trim().replace(/[$,\s]/g, "");
+  if (!text || text === "-" || text === "—") return null;
+  const n = Number(text);
+  return Number.isNaN(n) ? null : n;
+}
+
 function isNumericValue(value: unknown): boolean {
-  if (value == null || value === "") return false;
-  if (typeof value === "number" && !Number.isNaN(value)) return true;
-  const n = Number(value);
-  return !Number.isNaN(n) && String(value).trim() !== "";
+  return parseNumericValue(value) != null;
 }
 
 export function numericColumnIndices(columns: string[], rows: unknown[][]): number[] {
@@ -107,8 +113,8 @@ export function buildChartSeries(
         (rawLabel == null || rawLabel === "" ? "—" : String(rawLabel)),
     );
     const rawVal = valueIdx < row.length ? row[valueIdx] : 0;
-    const n = typeof rawVal === "number" ? rawVal : Number(rawVal);
-    values.push(Number.isNaN(n) ? 0 : n);
+    const n = parseNumericValue(rawVal);
+    values.push(n ?? 0);
   }
   return {
     labels,

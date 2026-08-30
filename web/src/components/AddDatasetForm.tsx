@@ -145,14 +145,13 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
         if (!connectionId) {
           throw new Error("Choose a saved connection from Settings.");
         }
-        const cfg = await api.getDbConnectionConfig(connectionId);
         const saved = dbConnections?.find((c) => c.id === connectionId);
         config = {
-          ...cfg,
           connection_id: connectionId,
-          connection_name: saved?.name ?? String(cfg.connection_name ?? ""),
+          connection_name: saved?.name ?? "",
+          schema: pgSchema.trim() || saved?.schema || "public",
         };
-        selectedConnector = String(cfg.connector || connector);
+        selectedConnector = String(saved?.connector || connector);
       }
       const dataset = await api.createDataset(domainId, {
         name: name.trim(),
@@ -195,7 +194,9 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
   const typeHint = fileTypes?.extensions.join(", ") ?? ".pdf, .md, .txt, .json";
   const ready = connectorReady(connector, name, connectionId, url, baseUrl, pgHost, pgPort, pgDatabase, pgUser, pgPassword);
   const savedConnections = dbConnections ?? [];
-  const selectedConnections = savedConnections.filter((c) => c.connector === connector);
+  const selectedConnections = savedConnections.filter(
+    (c) => c.connector === "trino" || c.connector === "postgres",
+  );
 
   return (
     <div className="catalog-add-dataset-form">
@@ -242,6 +243,8 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
                   setShowConnectionModal(true);
                 } else {
                   setConnectionId(value);
+                  const saved = dbConnections?.find((c) => c.id === value);
+                  if (saved?.schema) setPgSchema(saved.schema);
                 }
               }}
             >
@@ -255,10 +258,22 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
               </option>
               {selectedConnections.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} ({c.connector === "postgres" ? c.host : c.catalog}.{c.schema})
+                  {c.name} · {c.connector === "postgres" ? "Native Postgres" : "Trino"} ·{" "}
+                  {c.connector === "postgres" ? c.host : `${c.catalog}.${c.schema}`}
                 </option>
               ))}
             </select>
+          </div>
+        )}
+        {(connector === "trino" || connector === "postgres") && (
+          <div className="field mb-0">
+            <label className="label">Dataset schema</label>
+            <input
+              className="input font-mono text-xs"
+              placeholder="public"
+              value={pgSchema}
+              onChange={(e) => setPgSchema(e.target.value)}
+            />
           </div>
         )}
 
@@ -363,7 +378,8 @@ export function AddDatasetForm({ domainId, onCreated, onCancel }: Props) {
       )}
 
       <p className="add-dataset-hint mt-3 text-sm" style={{ color: "var(--color-text-muted)" }}>
-        {connector === "postgres" && "Creates a direct PostgreSQL dataset using pg8000. Use the Data tab to discover tables."}
+        {(connector === "postgres" || connector === "trino") &&
+          "Reuses a Trino or native Postgres connection from Settings. Only the dataset schema is stored here."}
         {connector === "upload" && "Files are stored under data/{domain}/{dataset}/. Use the RAG tab to embed."}
         {connector === "file_path" && "Reads documents from the folder path on disk."}
         {connector === "api" && "Creates the dataset and syncs API responses into the cache on create."}

@@ -11,7 +11,7 @@ import { AskPromptComposer, buildAskQuestion, type AskAttachment } from "../comp
 import { AskRetrievalPanel } from "../components/AskRetrievalPanel";
 import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
-import { api } from "../api/client";
+import { api, isAbortError } from "../api/client";
 import type { Agent, AgentFlow, AgentRunStep, AskSource, PipelineTraceStep } from "../types";
 import { stripSourceCitations } from "../utils/answerDisplay";
 import {
@@ -77,12 +77,12 @@ export function AskPage() {
   const [input, setInput] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [selectedFlow, setSelectedFlow] = useState<AgentFlow | null>(null);
-  const [topK, setTopK] = useState(3);
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>([]);
   const [debugMode, setDebugMode] = useState(false);
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
   const [liveRun, setLiveRun] = useState<LiveAgentRunState | null>(null);
   const [pipelineTrace, setPipelineTrace] = useState<PipelineTraceStep[]>([]);
@@ -93,6 +93,7 @@ export function AskPage() {
     queryFn: api.getSettings,
   });
   const conversationTurns = settings?.ask?.conversation_turns ?? 5;
+  const retrievalTopK = settings?.ask?.retrieval_top_k ?? 3;
 
   const appendPipelineTrace = (step: PipelineTraceStep) => {
     const prev = pipelineTraceRef.current;
@@ -117,8 +118,6 @@ export function AskPage() {
   const sidebarPanel = useMemo(
     () => (
       <AskRetrievalPanel
-        topK={topK}
-        onTopKChange={setTopK}
         selectedDomains={selectedDomains}
         onSelectedDomainsChange={setSelectedDomains}
         outputFormats={outputFormats}
@@ -126,7 +125,7 @@ export function AskPage() {
         debugMode={debugMode}
       />
     ),
-    [topK, selectedDomains, outputFormats, debugMode],
+    [selectedDomains, outputFormats, debugMode],
   );
   useSetSidebarContent(sidebarPanel);
 
@@ -142,9 +141,11 @@ export function AskPage() {
         },
         (message) => setActivityStatus(message),
         debug ? (step) => appendPipelineTrace(step) : undefined,
+        abortRef.current?.signal,
       ),
     onSettled: () => setActivityStatus(null),
-    onError: (_err, variables) => {
+    onError: (err, variables) => {
+      if (isAbortError(err)) return;
       if (variables.debug) {
         appendPipelineTrace({
           message: "Request failed — see error above",
@@ -205,6 +206,7 @@ export function AskPage() {
           }
         },
         extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+        abortRef.current?.signal,
       );
 
       return { agentName: agent.name, steps: [...steps], reportHtml };
@@ -256,6 +258,7 @@ export function AskPage() {
           }
         },
         extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+        abortRef.current?.signal,
       );
 
       return { flowName: flow.name, steps: [...steps], reportHtml };
@@ -280,13 +283,29 @@ export function AskPage() {
   });
 
   const isPending = ask.isPending || agentRun.isPending || flowRun.isPending;
-  const submitError = ask.isError
+  const submitError = ask.isError && !isAbortError(ask.error)
     ? String(ask.error)
-    : agentRun.isError
+    : agentRun.isError && !isAbortError(agentRun.error)
       ? String(agentRun.error)
-      : flowRun.isError
+      : flowRun.isError && !isAbortError(flowRun.error)
         ? String(flowRun.error)
         : null;
+
+  const startRunAbort = () => {
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    return abortRef.current.signal;
+  };
+
+  const stopRun = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    ask.reset();
+    agentRun.reset();
+    flowRun.reset();
+    setActivityStatus(null);
+    setLiveRun(null);
+  };
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -295,6 +314,7 @@ export function AskPage() {
 
   const submitQuestion = () => {
     if (isPending) return;
+    startRunAbort();
 
     if (selectedFlow) {
       const extra = buildAskQuestion(input, attachments);
@@ -349,7 +369,7 @@ export function AskPage() {
     ask.mutate({
       question: q,
       displayQuestion,
-      topK,
+      topK: retrievalTopK,
       selectedDomains,
       debug: debugMode,
       conversationHistory,
@@ -383,7 +403,7 @@ export function AskPage() {
   return (
     <div className="ask-page">
       <div className="shrink-0">
-      <PageHeader title="Ask" description="Explore your knowledge base">
+      <PageHeader title="Ask" description="Get insight, effortlessly">
         <button
           type="button"
           className="btn btn-secondary btn-sm"
@@ -401,8 +421,6 @@ export function AskPage() {
 
       <div className="card mb-4 shrink-0 md:hidden">
         <AskRetrievalPanel
-          topK={topK}
-          onTopKChange={setTopK}
           selectedDomains={selectedDomains}
           onSelectedDomainsChange={setSelectedDomains}
           outputFormats={outputFormats}
@@ -423,7 +441,7 @@ export function AskPage() {
             const displayContent =
               m.role === "assistant" && !debugMode ? stripSourceCitations(m.content) : m.content;
             return (
-            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div key={i} className={`flex min-w-0 max-w-full ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               {m.role === "user" ? (
                 <div className="chat-user">
                   {m.flowName ? (
@@ -453,7 +471,7 @@ export function AskPage() {
                   reportHtml={m.agentRun.reportHtml}
                 />
               ) : (
-                <div>
+                <div className="min-w-0 max-w-full">
                   <ChatAssistantMessage
                     content={displayContent}
                     rowCount={m.rows?.length}
@@ -531,6 +549,7 @@ export function AskPage() {
             value={input}
             onChange={setInput}
             onSubmit={submitQuestion}
+            onStop={stopRun}
             isPending={isPending}
             error={submitError}
             attachments={attachments}

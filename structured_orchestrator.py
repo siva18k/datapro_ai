@@ -36,18 +36,19 @@ from api.answer_format import build_sql_summary_prompt
 from serde import coerce_json_rows
 from sql_dialect import dialect_for_connector, dialect_label, prepare_sql_for_execution
 from structured_sql import is_structured_sql_connector
-from structured_db import postgres_config_from_source
 
 RetrievalMode = Literal["unstructured", "structured", "hybrid"]
 
 # User wants executed data (SQL), not catalog tour / query tips.
 _DATA_REQUEST_PATTERNS = re.compile(
     r"\b("
-    r"give me|get me|show me|let me see|can you show|can you give|can you get|can you list|"
+    r"give me|get me|show me|provide me|provide|"
+    r"let me see|can you show|can you give|can you get|can you list|"
     r"pull up|pull|fetch|display|return|find me|list|report on|"
     r"how many|count|total|sum|average|avg|min|max|top \d+|"
     r"breakdown|break down|trend|compare|distribution|"
-    r"between|per month|per year|group by"
+    r"between|per month|per year|group by|"
+    r"vendor[- ]wise"
     r")\b",
     re.I,
 )
@@ -475,6 +476,20 @@ def load_table_business_rules_for_domain(domain_id: str | None) -> str:
     return "\n\n".join(parts).strip()
 
 
+def _trino_catalog_for_source(source: dict[str, Any] | None) -> str:
+    cfg = (source or {}).get("config") or {}
+    catalog = str(cfg.get("catalog") or cfg.get("trino_catalog") or "").strip()
+    if catalog:
+        return catalog
+    try:
+        from connections_service import resolve_saved_connection
+
+        saved = resolve_saved_connection(source)
+    except Exception:
+        saved = None
+    return str((saved or {}).get("catalog") or "").strip()
+
+
 def build_schema_context(
     source_id: str,
     *,
@@ -493,7 +508,12 @@ def build_schema_context(
             continue
         if (table.get("table_role") or "fact") == "excluded":
             continue
-        if allowed is not None and table["table_name"].lower() not in allowed:
+        role = (table.get("table_role") or "fact").lower()
+        if (
+            allowed is not None
+            and table["table_name"].lower() not in allowed
+            and role not in {"lookup", "dimension"}
+        ):
             continue
         tables_out.append(
             {
@@ -501,9 +521,6 @@ def build_schema_context(
                 "columns": columns_by_table.get(table["id"], []),
             }
         )
-
-    cfg = source.get("config") or {}
-    trino_catalog = (cfg.get("catalog") or cfg.get("trino_catalog") or "").strip()
 
     return StructuredSchemaContext(
         source_id=source_id,
@@ -513,7 +530,7 @@ def build_schema_context(
         connector=source["connector"],
         dataset_definition_md=load_definition_for_prompt(source),
         tables=tables_out,
-        trino_catalog=trino_catalog,
+        trino_catalog=_trino_catalog_for_source(source),
     )
 
 
@@ -545,7 +562,12 @@ def build_domain_schema_context(
                 continue
             if (table.get("table_role") or "fact") == "excluded":
                 continue
-            if allowed is not None and table["table_name"].lower() not in allowed:
+            role = (table.get("table_role") or "fact").lower()
+            if (
+                allowed is not None
+                and table["table_name"].lower() not in allowed
+                and role not in {"lookup", "dimension"}
+            ):
                 continue
             key = (table["table_schema"], table["table_name"])
             if key in seen:
@@ -562,9 +584,7 @@ def build_domain_schema_context(
         connector=primary.get("connector") or "trino",
         dataset_definition_md="\n\n".join(definition_parts),
         tables=tables_out,
-        trino_catalog=(primary.get("config") or {}).get("catalog")
-        or (primary.get("config") or {}).get("trino_catalog")
-        or "",
+        trino_catalog=_trino_catalog_for_source(primary),
     )
 
 
@@ -754,6 +774,10 @@ def _is_recoverable_sql_error(message: str) -> bool:
         or "42p01" in lower
         or "undefined column" in lower
         or "42703" in lower
+        or "column_not_found" in lower
+        or "cannot be resolved" in lower
+        or "unknown column" in lower
+        or "invalid column" in lower
         or "ambiguous" in lower
         or "type_mismatch" in lower
         or "cannot apply operator" in lower
@@ -960,18 +984,18 @@ def execute_readonly_sql(source_id: str, sql: str, *, max_rows: int = 500) -> tu
     if not source or not is_structured_sql_connector(source.get("connector")):
         raise ValueError("Dataset is not a structured SQL connection")
 
-    connector = (source.get("connector") or "").strip().lower()
+    from structured_db import structured_runtime_config
+
+    cfg, connector = structured_runtime_config(source)
     if connector == "trino":
-        from structured_trino import execute_readonly_trino_sql, trino_config_from_source
+        from structured_trino import execute_readonly_trino_sql
 
         sql = prepare_sql_for_execution(sql, connector)
-        return execute_readonly_trino_sql(trino_config_from_source(source), sql, max_rows=max_rows)
+        return execute_readonly_trino_sql(cfg, sql, max_rows=max_rows)
 
     import pg8000.native
 
     from structured_db import _connect_external
-
-    cfg = postgres_config_from_source(source)
     limited = f"SELECT * FROM ({sql.rstrip(';')}) AS _q LIMIT {max_rows}"
     conn = _connect_external(cfg)
     try:

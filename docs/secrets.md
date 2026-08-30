@@ -5,6 +5,7 @@ Don't commit real credentials. `.gitignore` already excludes the files below —
 | Local file (ignored) | Copy from | What it's for |
 |----------------------|-----------|---------------|
 | `.env` | `.env.example` | Catalog DB, LLM keys, embedding model, MCP URL |
+| `docs/notes` | — | Personal scratch notes (ignored; do not paste credentials) |
 | `saved_db_connections.json` | `saved_db_connections.json.example` | Trino catalog bindings for datasets |
 | `deploy/` | `deploy.example/` | Personal **AWS** ECS deploy config and secrets ([deploy-ecs.md](deploy-ecs.md)) |
 | `certs/` | — | Local TLS / proxy CA certs (e.g. corporate SSL inspection) |

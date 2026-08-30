@@ -393,11 +393,13 @@ button.sidebar-hint {
   @apply mt-12 pt-8 text-center text-xs;
 }
 .main {
-  @apply min-h-screen flex-1;
+  @apply min-h-screen min-w-0 flex-1;
 }
 @media (min-width: 768px) {
   .main {
     margin-left: var(--sidebar-width, 272px);
+    width: calc(100% - var(--sidebar-width, 272px));
+    max-width: calc(100% - var(--sidebar-width, 272px));
   }
 }
 .page-content {
@@ -438,6 +440,9 @@ button.sidebar-hint {
 .page-content:has(.ask-page) {
   padding-top: 1.5rem;
   padding-bottom: 1rem;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
 }
 @media (min-width: 1024px) {
   .page-content:has(.ask-page) {
@@ -944,24 +949,44 @@ button.sidebar-hint {
 }
 .settings-servers-stack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
 }
-@media (min-width: 768px) {
-  .settings-servers-stack {
+.catalog-domain-mcp-wrap {
+  border-bottom: 1px solid var(--color-border);
+}
+.catalog-domain-mcp {
+  @apply px-5 py-4;
+}
+.catalog-domain-mcp-toggle {
+  @apply flex w-full items-center gap-3 text-left;
+  color: var(--color-text);
+}
+.catalog-domain-mcp-chevron {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+.catalog-domain-mcp-body {
+  @apply mt-4 border-t pt-4;
+  border-color: var(--color-border);
+}
+.db-connection-summary {
+  @apply m-0 grid gap-x-6 gap-y-2 text-sm;
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 640px) {
+  .db-connection-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (min-width: 1200px) {
-  .settings-servers-stack {
+@media (min-width: 1024px) {
+  .db-connection-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
-.db-connection-summary {
-  @apply m-0 grid gap-1.5 text-sm;
-}
 .db-connection-summary-row {
-  @apply grid gap-x-4;
-  grid-template-columns: 5.5rem 1fr;
+  @apply grid min-w-0 items-baseline gap-x-3;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
 }
 .db-connection-summary-row dt {
   color: var(--color-text-muted);
@@ -969,6 +994,7 @@ button.sidebar-hint {
 .db-connection-summary-row dd {
   @apply m-0 font-medium;
   color: var(--color-text);
+  overflow-wrap: anywhere;
 }
 .mcp-page-split {
   @apply grid gap-4 lg:grid-cols-2 lg:items-start;
@@ -1043,7 +1069,29 @@ button.sidebar-hint {
   color: var(--color-text);
 }
 .agents-page-split {
-  @apply grid gap-4 lg:grid-cols-[minmax(11rem,14rem)_1fr] lg:items-start;
+  @apply grid gap-4;
+}
+.agents-top-selector {
+  @apply mb-4 md:hidden;
+}
+.agents-top-selector-scroll {
+  @apply flex gap-2 overflow-x-auto pb-1;
+}
+.agents-top-selector-tab {
+  @apply inline-flex max-w-[12rem] shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors;
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+}
+.agents-top-selector-tab:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.agents-top-selector-tab--active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+  font-weight: 500;
 }
 .agents-list-tabs {
   @apply m-0 list-none space-y-1 p-0;
@@ -1071,6 +1119,22 @@ button.sidebar-hint {
 .agents-list-tab-dot--on {
   background: var(--color-primary);
 }
+.agent-form-name-row {
+  @apply flex flex-wrap items-end justify-between gap-3;
+}
+.agent-form-name-row .field {
+  @apply mb-0 min-w-0 flex-1;
+}
+.agent-form-enabled {
+  @apply inline-flex shrink-0 items-center gap-2 pb-2 text-sm;
+  color: var(--color-text);
+}
+.agent-advanced-setup summary {
+  cursor: pointer;
+}
+.agent-advanced-setup summary:hover {
+  color: var(--color-text);
+}
 .agent-flow-builder {
   @apply grid gap-4 lg:grid-cols-[minmax(10rem,12rem)_1fr];
 }
@@ -1090,10 +1154,15 @@ button.sidebar-hint {
   @apply block font-medium;
 }
 .agent-flow-agent-card-slug {
-  @apply text-xs text-zinc-500;
+  @apply text-xs;
+  color: var(--color-text-muted);
 }
 .agent-flow-agent-card-desc {
-  @apply mt-1 line-clamp-2 text-xs text-zinc-500;
+  @apply mt-1 line-clamp-2 text-xs;
+  color: var(--color-text-muted);
+}
+.agent-flow-agent-card--task {
+  border-style: dashed;
 }
 .agent-flow-canvas {
   @apply min-h-0;
@@ -1292,6 +1361,20 @@ button.sidebar-hint {
   border-color: var(--color-border);
   background: var(--color-surface);
   margin-right: 0.375rem;
+}
+.agent-flow-step-card--task {
+  border-style: dashed;
+}
+.agent-flow-step-kind {
+  @apply mb-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide;
+  background: var(--color-badge-muted-bg);
+  color: var(--color-badge-muted-text);
+}
+.agent-flow-step-title-input {
+  @apply mt-1 w-full text-sm;
+}
+.agent-flow-step-task-input {
+  min-height: 4.5rem;
 }
 .agent-flow-step-header {
   @apply flex items-start gap-1.5;
@@ -1585,7 +1668,7 @@ button.sidebar-hint {
   background: color-mix(in srgb, var(--color-surface-muted, #f8fafc) 80%, var(--color-surface));
 }
 .saved-connections-grid {
-  @apply m-0 grid list-none gap-3 p-0 sm:grid-cols-2;
+  @apply m-0 grid list-none gap-3 p-0;
 }
 .saved-connection-card {
   @apply flex flex-col gap-2 rounded-lg p-4;
@@ -1597,7 +1680,7 @@ button.sidebar-hint {
   border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
 }
 .saved-connection-card--editing {
-  @apply sm:col-span-2;
+  @apply col-span-1;
 }
 .saved-connection-card--trino-server {
   background: color-mix(in srgb, var(--color-surface-subtle) 88%, var(--color-primary-soft) 12%);
@@ -1883,15 +1966,16 @@ label.file-upload-btn {
 
 /* —— Chat —— */
 .chat-user {
-  @apply ml-auto max-w-[85%] rounded-3xl rounded-tr-xl px-4 py-3 text-sm text-white;
+  @apply ml-auto max-w-[min(85%,100%)] break-words rounded-3xl rounded-tr-xl px-4 py-3 text-sm text-white;
   background: var(--color-primary);
 }
 .chat-assistant {
-  @apply max-w-[min(92%,42rem)] rounded-2xl rounded-tl-md px-4 py-3.5 text-sm leading-relaxed;
+  @apply max-w-[min(100%,42rem)] min-w-0 rounded-2xl rounded-tl-md px-4 py-3.5 text-sm leading-relaxed;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   color: var(--color-text);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--color-text) 4%, transparent);
+  overflow-wrap: anywhere;
 }
 .prose-chat > :first-child {
   margin-top: 0;
@@ -1929,11 +2013,11 @@ label.file-upload-btn {
   color: var(--color-text);
 }
 .prose-table-wrap {
-  @apply my-3 -mx-1 overflow-x-auto rounded-lg;
+  @apply my-3 max-w-full overflow-x-auto rounded-lg;
   border: 1px solid var(--color-border);
 }
 .prose-chat table {
-  @apply w-full min-w-full border-collapse text-sm;
+  @apply w-full border-collapse text-sm;
 }
 .prose-chat th,
 .prose-chat td {
@@ -2005,6 +2089,9 @@ label.file-upload-btn {
   height: calc(100dvh - 5rem);
   max-height: calc(100dvh - 5rem);
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 @media (min-width: 768px) {
   .ask-page {
@@ -2032,6 +2119,7 @@ label.file-upload-btn {
 .ask-messages {
   overscroll-behavior: contain;
   padding: 1.25rem 1.5rem 1rem;
+  overflow-x: hidden;
 }
 .ask-live-run {
   @apply w-full;
@@ -2409,6 +2497,15 @@ label.file-upload-btn {
   background: var(--color-border);
   color: var(--color-text-muted);
 }
+.ask-composer-send-btn--stop {
+  background: var(--color-text);
+  color: var(--color-surface);
+  opacity: 1;
+  cursor: pointer;
+}
+.ask-composer-send-btn--stop:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
 .ask-composer-options {
   @apply mt-3 flex flex-wrap items-center gap-2;
 }
@@ -2707,6 +2804,11 @@ table.data td {
   @apply rounded-lg px-3 py-2 text-sm;
   background: var(--color-alert-error-bg);
   color: var(--color-alert-error-text);
+}
+.alert-warn {
+  @apply rounded-lg px-3 py-2 text-sm;
+  background: var(--color-badge-warn-bg);
+  color: var(--color-badge-warn-text);
 }
 
 /* —— Analytics dashboard —— */

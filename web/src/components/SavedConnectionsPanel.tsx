@@ -93,9 +93,9 @@ export function SavedConnectionsPanel({
     <div className="flex h-full flex-col space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="font-semibold">Database connections</h2>
+          <h2 className="font-semibold">Connections</h2>
           <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-            Native PostgreSQL connections live here. Trino stays separate as an optional warehouse engine.
+            Catalog database, Trino coordinator, native Postgres, and warehouse bindings for business datasets
           </p>
         </div>
         <button type="button" className="btn btn-sm shrink-0" onClick={openNew}>
@@ -174,7 +174,7 @@ export function SavedConnectionsPanel({
 
       {!isLoading && datasetCount === 0 && (
         <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-          No database connections yet. Add a native PostgreSQL connection here, and only add Trino when you need catalog-backed warehouses.
+          No business connections yet. Add a native Postgres or Trino warehouse connection, then create structured datasets from it.
         </p>
       )}
 

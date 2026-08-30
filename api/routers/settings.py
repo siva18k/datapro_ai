@@ -38,6 +38,7 @@ class LlmSettings(BaseModel):
 
 class AskSettings(BaseModel):
     conversation_turns: int | None = Field(default=None, ge=0, le=20)
+    retrieval_top_k: int | None = Field(default=None, ge=1, le=8)
 
 
 class SettingsUpdate(BaseModel):

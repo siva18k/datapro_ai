@@ -15,7 +15,7 @@ type Props = {
 type MenuPos = MentionMenuPos;
 
 const DEFAULT_PLACEHOLDER =
-  "Describe how agents interact. Type @ to mention agents — e.g. Run @kpi-checker first, pass KPI summary to @report-writer…";
+  "e.g. Weekly view of the most expensive items for finance review. Keep amounts in USD. Optional — this does not run steps.";
 
 export function AgentFlowInstructionsEditor({
   value,
@@ -240,9 +240,11 @@ export function AgentFlowInstructionsEditor({
 
   return (
     <div className="agent-flow-instructions">
-      <label className="mb-1 block text-xs font-medium text-zinc-500">
-        Flow instructions
-        <span className="ml-1 font-normal">— type @ to reference agents and describe data handoff</span>
+      <label className="mb-1 block text-xs font-medium" style={{ color: "var(--color-text-muted)" }}>
+        Flow goal
+        <span className="ml-1 font-normal">
+          — optional shared purpose for every step. What actually runs is the canvas.
+        </span>
       </label>
       <div
         ref={containerRef}
@@ -255,7 +257,7 @@ export function AgentFlowInstructionsEditor({
         <textarea
           ref={textareaRef}
           className="input agent-instructions-textarea agent-flow-instructions-textarea w-full resize-y"
-          rows={5}
+          rows={3}
           placeholder={DEFAULT_PLACEHOLDER}
           value={value}
           onChange={onInput}

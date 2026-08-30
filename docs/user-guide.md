@@ -4,15 +4,15 @@
 
 **Data Catalog** — domains, datasets, connections, table metadata, uploads.
 
-**Ask** — chat; you can override the domain, tweak Top K, turn on debug mode to see which chunks came back. Follow-up messages reuse prior SQL results (same session until **New chat**) so refinements like “show that in USD” stay on the same breakdown. After **5 follow-ups** (configurable in Settings), the app summarizes the thread and starts a fresh chat automatically. Unrelated questions are detected as a **new topic** and processed without old context.
+**Ask** — chat; you can override the domain, turn on debug mode to see which chunks came back. Configure **Top K** (RAG chunk count) in **Settings → LLM → Ask**. Follow-up messages reuse prior SQL results (same session until **New chat**) so refinements like “show that in USD” stay on the same breakdown. After **5 follow-ups** (configurable in Settings), the app summarizes the thread and starts a fresh chat automatically. Unrelated questions are detected as a **new topic** and processed without old context.
 
 **Analytics** — natural-language dashboards (needs Postgres datasets). Follow-up prompts in the same session reuse the prior dashboard data until you click **Clear**; the same auto-summary and new-topic rules apply. Time-based questions (quarters, months, last year, etc.) call the MCP **`resolve_time_period`** tool when the MCP server is running; chart and table axes show period labels like **Q1-2024** instead of raw SQL timestamp buckets.
 
 **RAG** — chunk size, overlap, ingest.
 
-**MCP** — server status, prompts, domain bindings. Bound tools, resources, and prompts are used automatically during **Ask** and **Analytics** when a domain is routed (planner picks what helps per question).
+**Settings → MCP** — catalog of tools, prompts, and resources. **Settings → Servers** — start/stop DATA Pro MCP, Email, API, and Trino. Domain bindings still live on each domain in the Catalog. Ask and Analytics reuse a warmed in-memory pack of those bindings and reference docs for the routed domain so they do not re-plan MCP on every question.
 
-**Settings** — DB, LLM, embeddings, start/stop API and MCP.
+**Settings** — connections, LLM, MCP catalog, and server start/stop.
 
 Fastest path to a first answer: Catalog → add files → **RAG** → ingest → **Ask**. After `migrate.py`, `sample_docs/` is wired to General → Sample Documents.
 
@@ -33,7 +33,7 @@ Default domains are created by `migrate.py`. To add another: **Data Catalog** �
 - **Web link** — URLs fetched into the dataset cache
 - **SharePoint** — document links synced with optional Bearer token
 
-For Postgres, pick an existing connection from **Settings → Dataset connections** or create one there.
+For Trino or native Postgres, pick an existing connection from **Settings → Connections**. Credentials live only there and are reused by every domain. A dataset can override schema, not host or password.
 
 Remote connectors: **Connection** tab → set URL/auth → **Data** tab → **Sync now** → **RAG** tab → ingest.
 
@@ -47,9 +47,9 @@ Remote connectors: **Connection** tab → set URL/auth → **Data** tab → **Sy
 
 ---
 
-## Postgres datasets
+## Postgres / Trino datasets
 
-1. **Connection** — test and save credentials.
+1. **Connection** — choose a Settings connection (Trino or native Postgres) and an optional schema.
 2. **Data** — **Refresh tables** → select → **Add selected**.
 3. Tweak table roles (fact vs lookup), **table definitions** (status filters, revenue rules, join hints), and column labels — Ask and Analytics use these in SQL generation and answer prompts.
 4. **Definition** — when two or more tables are cataloged, open this tab to auto-append a **Table relationships** section at the bottom. **AI draft** uses only cataloged tables/columns (no invented fields), strips markdown code fences, and refreshes relationships. Use **Refresh relationships** after catalog changes, then **Save definition**. **Ask** blends ingested catalog/document chunks with the definition for SQL when embeddings exist; otherwise it uses the definition and column metadata alone.
@@ -85,3 +85,18 @@ python scripts/migrate_finance_data.py --fresh
 ```
 
 Details in [docs/finance-data-guide.md](finance-data-guide.md). Then add a Postgres dataset in the catalog pointing at schema `finance_data`.
+
+---
+
+## Agents and Agent Flows
+
+**Agents** — write a goal in plain language and type `/` to pin a domain if you want. On **Save agent**, DATA Pro identifies the MCP tools, prompts, and resources that domain needs (plus any extras you add under Advanced) and stores them on the agent. The next run uses that saved kit immediately — it does not re-plan MCP each time. KPI vs report vs email is inferred from the instructions; Advanced still lets you override. Warehouse data still uses Analytics SQL.
+
+**Agent Flows** — a canvas of steps. Each card is either:
+
+- an **agent** (fetch data, KPI, report), or
+- a **custom step** (your instructions: top N, HTML, filter, rewrite)
+
+Connect cards with the O handle so the next step receives the previous result (tables, summaries). **Flow goal** is optional shared purpose (audience, constraints). It is not a recipe — if you write “pick top 5” only there, it will not run until you add a Custom step and connect it.
+
+The editor warns on save when instructions describe extra actions that are not on the canvas, when @mentions are missing, or when steps are not connected. Run output repeats those warnings.

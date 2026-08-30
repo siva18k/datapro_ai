@@ -45,18 +45,23 @@ export function AgentToolPicker({ selected, onChange, disabled = false }: Props)
 
   return (
     <div className="field mb-0">
-      <label className="label">MCP tools</label>
-      <p className="mb-2 text-xs text-zinc-500">Select tools this agent may use during a test run.</p>
+      <label className="label">MCP abilities</label>
+      <p className="mb-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+        Same catalog as Settings → MCP. Domain tools load automatically; add extras here if this
+        agent needs them (for example email).
+      </p>
       <div className="agent-tool-picker max-h-48 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--color-border)" }}>
         {entries.length === 0 && (
-          <p className="text-sm text-zinc-500">No MCP servers registered. Add servers on the MCP page.</p>
+          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+            No MCP servers registered. Add servers under Settings → MCP.
+          </p>
         )}
         {entries.map((entry) => {
           const tools = entry.tools ?? [];
           if (tools.length === 0) return null;
           return (
             <div key={entry.server.id} className="mb-3 last:mb-0">
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--color-text-muted)" }}>
                 {entry.server.name}
               </p>
               <div className="flex flex-wrap gap-1.5">

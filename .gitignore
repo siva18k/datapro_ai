@@ -12,6 +12,7 @@ certs/
 .env
 .env.*
 !.env.example
+docs/notes
 saved_db_connections.json
 !saved_db_connections.json.example
 docker/trino/catalog/*.properties
@@ -44,8 +45,8 @@ web/dist/
 *.crt
 !sample_docs/**
 
-# Legacy Streamlit UI (removed)
-pages/
+# Legacy Streamlit UI at repo root (do not use pages/ — that also ignores web/src/pages)
+/pages/
 
 # Personal / production AWS deployment (ECS Fargate, account IDs, ARNs, secrets)
 # Templates live in deploy.example/ — copy locally with: ./deploy.example/scripts/init-deploy.sh

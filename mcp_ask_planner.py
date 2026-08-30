@@ -10,6 +10,7 @@ from typing import Any
 
 from api.llm import generate_answer
 from catalog_db import get_domain
+from domain_context import get_domain_context, reference_resources_for
 from mcp_client import call_tool_text, check_mcp_server, get_default_mcp_url
 from mcp_domain_service import (
     domain_mcp_capabilities,
@@ -73,7 +74,10 @@ class McpAskEnrichment:
 
 
 def _load_domain_bindings(domain_id: str) -> dict[str, list[dict[str, Any]]]:
-    """Load all MCP bindings for a domain grouped by type. Single DB round-trip per type."""
+    """Load MCP bindings for a domain — from the in-memory pack when warmed."""
+    pack = get_domain_context(domain_id)
+    if pack:
+        return {k: list(v) for k, v in pack.bindings.items()}
     return {
         cap_type: domain_mcp_capabilities(domain_id, cap_type)
         for cap_type in ("tool", "resource", "prompt")
@@ -88,6 +92,9 @@ def has_domain_mcp_bindings(domain_id: str | None) -> bool:
     """True when the domain has any bound MCP tools, resources, or prompts."""
     if not domain_id:
         return False
+    pack = get_domain_context(domain_id)
+    if pack is not None:
+        return pack.has_bindings
     return _has_any_bindings(_load_domain_bindings(domain_id))
 
 
@@ -262,7 +269,7 @@ def _heuristic_mcp_plan(
         "use_resources": use_resources,
         "mcp_prompt": mcp_prompt,
         "tools": tools,
-        "reasoning": "Heuristic MCP plan (planner LLM unavailable or invalid).",
+        "reasoning": "Cached domain MCP plan.",
     }
 
 
@@ -370,7 +377,7 @@ def _find_bound_capability(
     capability_type: str,
     capability_name: str,
 ) -> dict[str, Any] | None:
-    for cap in domain_mcp_capabilities(domain_id, capability_type):
+    for cap in _load_domain_bindings(domain_id).get(capability_type, []):
         if cap.get("capability_name") == capability_name:
             return cap
     return None
@@ -413,9 +420,14 @@ def execute_mcp_enrichment(
     if not domain_id:
         return enrichment
 
-    for item in load_domain_reference_resources(
-        domain_id, domain_slug=domain_slug, execution_kind=execution_kind
-    ):
+    pack = get_domain_context(domain_id)
+    if pack:
+        reference_items = reference_resources_for(pack, execution_kind)
+    else:
+        reference_items = load_domain_reference_resources(
+            domain_id, domain_slug=domain_slug, execution_kind=execution_kind
+        )
+    for item in reference_items:
         enrichment.resources.append(item)
         enrichment.trace.append(
             {
@@ -423,6 +435,7 @@ def execute_mcp_enrichment(
                 "resource_kind": "reference",
                 "uri": item.get("uri"),
                 "server": item.get("server"),
+                "source": "pack" if pack else "live",
             }
         )
 

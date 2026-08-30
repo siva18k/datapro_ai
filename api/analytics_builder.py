@@ -61,6 +61,22 @@ def _time_context_model(raw: dict[str, Any] | None) -> TimeContext | None:
     )
 
 
+def _as_float(raw: Any) -> float | None:
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        cleaned = raw.strip().replace(",", "").replace("$", "").replace(" ", "")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+
 def build_dashboard(
     *,
     prompt: str,
@@ -110,15 +126,31 @@ def build_dashboard(
 
     if len(rows) == 1 and numeric_idxs:
         for idx in numeric_idxs[:4]:
-            raw = display_rows[0][idx] if idx < len(display_rows[0]) else None
-            try:
-                val = float(raw)
-            except (TypeError, ValueError):
+            val = _as_float(display_rows[0][idx] if idx < len(display_rows[0]) else None)
+            if val is None:
                 continue
             kpis.append(
                 KpiWidget(
                     label=_humanize_column(columns[idx]),
                     value=_format_number(val, currency=_is_currency_column(columns[idx])),
+                )
+            )
+    elif len(display_rows) > 1 and numeric_idxs:
+        value_idx = _pick_value_column(columns, numeric_idxs)
+        total = 0.0
+        counted = 0
+        for row in display_rows:
+            val = _as_float(row[value_idx] if value_idx < len(row) else None)
+            if val is None:
+                continue
+            total += val
+            counted += 1
+        if counted:
+            kpis.append(
+                KpiWidget(
+                    label=f"Total {_humanize_column(columns[value_idx])}",
+                    value=_format_number(total, currency=_is_currency_column(columns[value_idx])),
+                    hint=f"{counted} groups",
                 )
             )
 

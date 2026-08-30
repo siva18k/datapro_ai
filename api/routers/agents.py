@@ -8,13 +8,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent_runner import format_agent_instructions, run_agent_events, warn_unknown_domain_slugs
+from agent_setup import save_agent_mcp_kit
 from api.deps import get_embedder
 from catalog_db import (
     create_agent,
     delete_agent,
     get_agent,
     list_agents,
-    set_agent_tools,
     update_agent,
 )
 
@@ -28,17 +28,18 @@ class AgentCreate(BaseModel):
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentToolBinding(BaseModel):
+    mcp_server_id: str
+    tool_name: str
+
+
 class AgentUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
     capabilities: dict[str, Any] | None = None
     enabled: bool | None = None
-
-
-class AgentToolBinding(BaseModel):
-    mcp_server_id: str
-    tool_name: str
+    extra_tools: list[AgentToolBinding] | None = None
 
 
 class AgentToolsUpdate(BaseModel):
@@ -61,6 +62,9 @@ def _agent_response(agent: dict) -> dict:
     out = dict(agent)
     if warnings:
         out["domain_warnings"] = warnings
+    caps = agent.get("capabilities") or {}
+    if isinstance(caps, dict) and caps.get("mcp_kit"):
+        out["mcp_kit"] = caps["mcp_kit"]
     return out
 
 
@@ -77,7 +81,8 @@ def create(body: AgentCreate):
         instructions=body.instructions,
         capabilities=body.capabilities,
     )
-    return _agent_response(agent)
+    saved = save_agent_mcp_kit(agent["id"], extra_tools=[], embedder=get_embedder())
+    return _agent_response(saved or agent)
 
 
 @router.get("/{agent_id}")
@@ -92,10 +97,14 @@ def get_one(agent_id: str):
 def patch(agent_id: str, body: AgentUpdate):
     if not get_agent(agent_id):
         raise HTTPException(404, "Agent not found")
-    agent = update_agent(agent_id, **body.model_dump(exclude_none=True))
+    payload = body.model_dump(exclude_none=True)
+    extra_tools = payload.pop("extra_tools", None)
+    agent = update_agent(agent_id, **payload)
     if not agent:
         raise HTTPException(404, "Agent not found")
-    return _agent_response(agent)
+    extras = [t.model_dump() for t in body.extra_tools] if extra_tools is not None else None
+    saved = save_agent_mcp_kit(agent_id, extra_tools=extras, embedder=get_embedder())
+    return _agent_response(saved or agent)
 
 
 @router.delete("/{agent_id}")
@@ -109,9 +118,14 @@ def remove(agent_id: str):
 def replace_tools(agent_id: str, body: AgentToolsUpdate):
     if not get_agent(agent_id):
         raise HTTPException(404, "Agent not found")
-    tools = set_agent_tools(agent_id, [t.model_dump() for t in body.tools])
-    agent = get_agent(agent_id)
-    return {"ok": True, "tools": tools, "agent": _agent_response(agent)}
+    agent = save_agent_mcp_kit(
+        agent_id,
+        extra_tools=[t.model_dump() for t in body.tools],
+        embedder=get_embedder(),
+    )
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    return {"ok": True, "tools": agent.get("tools") or [], "agent": _agent_response(agent)}
 
 
 @router.post("/{agent_id}/format")

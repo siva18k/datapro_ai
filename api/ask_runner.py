@@ -20,7 +20,7 @@ from mcp_ask_planner import (
     resolve_domain_slug,
 )
 from orchestrator import build_attachment_answer_prompt, build_domain_rag_prompt, strip_source_citations, _legacy_query_kind
-from query_planner import resolve_query_plan, structured_fallback_available
+from query_planner import coerce_to_sql_plan, resolve_query_plan, structured_fallback_available
 from scope_resolver import chunk_source_files_for_scope
 from structured_orchestrator import (
     generate_and_execute_readonly_sql,
@@ -381,6 +381,12 @@ def run_ask_events(body: AskRequest, embedder) -> Iterator[dict[str, Any]]:
         domain_override=body.domain_override,
         domain_overrides=body.domain_overrides,
     )
+    plan = coerce_to_sql_plan(
+        plan,
+        routing_question,
+        embedder,
+        allowed_domain_ids=selected_domains or None,
+    )
     routing = plan.routing
     method = routing.get("method", "")
 
@@ -494,7 +500,7 @@ def _mcp_enrichment_events(
         yield {"type": "_mcp_enrichment", "enrichment": None}
         return
 
-    yield _status("Reviewing domain MCP tools, resources, and prompts…")
+    yield _status("Loading domain MCP context…")
     plan = plan_mcp_enrichment(
         body.question,
         domain_id=domain_id,

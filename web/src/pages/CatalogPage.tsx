@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
 import { CatalogDomainsPanel } from "../components/CatalogDomainsPanel";
+import { DomainMcpBindingsPanel } from "../components/DomainMcpBindingsPanel";
 import { AddDatasetForm } from "../components/AddDatasetForm";
 import { DatasetPanel } from "../components/DatasetPanel";
 import { EditableName } from "../components/EditableName";
@@ -233,6 +234,14 @@ export function CatalogPage() {
           {deleteDomain.isError && activeDomainId === deleteDomain.variables && (
             <p className="alert-error mx-5 mt-3">{String(deleteDomain.error)}</p>
           )}
+
+          <div className="catalog-domain-mcp-wrap">
+            <DomainMcpBindingsPanel
+              domainId={activeDomain.id}
+              domainName={activeDomain.name}
+              domainSlug={activeDomain.slug}
+            />
+          </div>
 
           {showAdd && activeDomainId && (
             <AddDatasetForm

@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ApiConnectingPanel } from "../components/ApiConnectingPanel";
 import { ApiOfflinePanel } from "../components/ApiOfflinePanel";
+import { CatalogDatabaseCard } from "../components/CatalogDatabaseCard";
+import { McpSettingsPanel } from "../components/McpSettingsPanel";
+import { McpServersPanel } from "../components/McpServersPanel";
 import { PageHeader } from "../components/PageHeader";
 import { SavedConnectionsPanel } from "../components/SavedConnectionsPanel";
 import { useApiPageState } from "../context/ApiConnectionContext";
@@ -11,10 +15,10 @@ import {
   type BackendStatusResponse,
   type DatabaseSettingsPayload,
   type LlmSettingsPayload,
-  type TrinoServiceActionResponse,
+  type TrinoSettingsPayload,
 } from "../api/client";
-import type { MetadataRagStatus } from "../types";
 import { devBootstrap, isDevBootstrapAvailable } from "../api/devBootstrap";
+import type { MetadataRagStatus } from "../types";
 import { parsePostgresUrl } from "../utils/postgresUrl";
 
 const MISTRAL_CUSTOM_MODEL = "__custom__";
@@ -57,11 +61,11 @@ function isCatalogConfigured(
   db: DatabaseSettingsPayload,
   databaseUrlSet: boolean,
 ): boolean {
-  if (db.host?.trim() && db.user?.trim() && db.database?.trim()) {
+  if (db.host.trim() && db.user.trim() && db.database.trim()) {
     return true;
   }
   if (db.use_database_url) {
-    return databaseUrlSet || (db.database_url?.trim().length ?? 0) > 0;
+    return databaseUrlSet || db.database_url.trim().length > 0;
   }
   return false;
 }
@@ -87,25 +91,39 @@ function buildDatabasePayload(
   };
 }
 
-function formatCatalogSummary(
-  db: DatabaseSettingsPayload,
-  databaseUrlMasked: boolean,
-): string {
-  if (db.host?.trim()) {
-    return `${db.user}@${db.host}:${db.port} · ${db.database}.${db.schema}`;
-  }
-  if (db.use_database_url) {
-    if (databaseUrlMasked) return "DATABASE_URL configured";
-    if (db.database_url?.trim()) {
-      return db.database_url.replace(/:([^:@/]+)@/, ":***@");
-    }
-    return "DATABASE_URL not set";
-  }
-  return "Not configured";
+const emptyTrino = (): TrinoSettingsPayload => ({
+  host: "localhost",
+  port: 8081,
+  user: "trino",
+  http_scheme: "http",
+  verify_ssl: false,
+});
+
+type SettingsTab = "connections" | "llm" | "mcp" | "servers";
+
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "connections", label: "Connections" },
+  { id: "llm", label: "LLM" },
+  { id: "mcp", label: "MCP" },
+  { id: "servers", label: "Servers" },
+];
+
+function parseSettingsTab(value: string | null): SettingsTab {
+  if (value === "llm" || value === "mcp" || value === "servers") return value;
+  return "connections";
 }
 
 export function SettingsPage() {
   const qc = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const settingsTab = parseSettingsTab(searchParams.get("tab"));
+  const setSettingsTab = (tab: SettingsTab) => {
+    if (tab === "connections") {
+      setSearchParams({});
+    } else {
+      setSearchParams({ tab });
+    }
+  };
   const { apiOnline, showConnecting, showOffline, connectingTitle } = useApiPageState();
   const { data, isLoading } = useQuery({
     queryKey: ["settings"],
@@ -114,16 +132,16 @@ export function SettingsPage() {
   });
 
   const [db, setDb] = useState<DatabaseSettingsPayload>(emptyDb);
-  const [mcpUrl, setMcpUrl] = useState("http://127.0.0.1:8000/mcp");
-  const [embeddingModel, setEmbeddingModel] = useState("mistral-embed-2312");
-  const [metadataRagEmbedModel, setMetadataRagEmbedModel] = useState("mistral-embed-2312");
+  const [embeddingModel, setEmbeddingModel] = useState("all-MiniLM-L6-v2");
+  const [metadataRagEmbedModel, setMetadataRagEmbedModel] = useState("all-MiniLM-L6-v2");
   const [metadataRagStatus, setMetadataRagStatus] = useState<MetadataRagStatus | null>(null);
   const [conversationTurns, setConversationTurns] = useState(5);
+  const [retrievalTopK, setRetrievalTopK] = useState(3);
   const [llm, setLlm] = useState<LlmSettingsPayload>({
     default_backend: "mistral",
     default_model: "",
     ollama_base_url: "http://localhost:11434",
-    mlx_model_path: "/Users/siva/models/qwen3.6-35b-4bit",
+    mlx_model_path: "",
   });
   const [apiKeys, setApiKeys] = useState({
     mistral: "",
@@ -137,54 +155,12 @@ export function SettingsPage() {
   const [catalogUrlPaste, setCatalogUrlPaste] = useState("");
   const [catalogUrlPasteError, setCatalogUrlPasteError] = useState<string | null>(null);
   const [catalogDbNotice, setCatalogDbNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [trino, setTrino] = useState<TrinoSettingsPayload>(emptyTrino());
+  const [trinoPassword, setTrinoPassword] = useState("");
+  const [trinoEditing, setTrinoEditing] = useState(false);
+  const [trinoNotice, setTrinoNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mcpNotice, setMcpNotice] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const { data: mcpStatus, refetch: refetchMcpStatus } = useQuery({
-    queryKey: ["mcp", "status"],
-    queryFn: api.mcpStatus,
-    enabled: apiOnline,
-    refetchInterval: apiOnline ? 10_000 : false,
-  });
-
-  const mcpIsRunning = Boolean(
-    mcpStatus?.reachable || (mcpStatus?.listener_pids?.length ?? 0) > 0,
-  );
-
-  const invalidateMcpStatus = () => {
-    void refetchMcpStatus();
-    void qc.invalidateQueries({ queryKey: ["mcp"] });
-  };
-
-  const mcpStart = useMutation({
-    mutationFn: api.mcpStart,
-    onSuccess: (res) => {
-      invalidateMcpStatus();
-      setMcpNotice({ ok: res.ok, text: res.message });
-    },
-    onError: (err) => setMcpNotice({ ok: false, text: String(err) }),
-  });
-
-  const mcpStop = useMutation({
-    mutationFn: api.mcpStop,
-    onSuccess: (res) => {
-      invalidateMcpStatus();
-      setMcpNotice({ ok: res.ok, text: res.message });
-    },
-    onError: (err) => setMcpNotice({ ok: false, text: String(err) }),
-  });
-
-  const mcpRestart = useMutation({
-    mutationFn: api.mcpRestart,
-    onSuccess: (res) => {
-      invalidateMcpStatus();
-      setMcpNotice({ ok: res.ok, text: res.message });
-    },
-    onError: (err) => setMcpNotice({ ok: false, text: String(err) }),
-  });
-
-  const mcpBusy = mcpStart.isPending || mcpStop.isPending || mcpRestart.isPending;
 
   const [backendNotice, setBackendNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -260,54 +236,56 @@ export function SettingsPage() {
 
   const backendBusy = backendStart.isPending || backendStop.isPending || backendRestart.isPending;
 
-  const [trinoNotice, setTrinoNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [trinoServiceNotice, setTrinoServiceNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const { data: trinoStatus, refetch: refetchTrinoStatus } = useQuery({
+  const { data: trinoServiceStatus, refetch: refetchTrinoServiceStatus } = useQuery({
     queryKey: ["trino-service", "status"],
     queryFn: api.trinoServiceStatus,
     enabled: apiOnline,
     refetchInterval: apiOnline ? 10_000 : false,
   });
 
-  const trinoIsRunning = Boolean(trinoStatus?.running || trinoStatus?.container_running || trinoStatus?.reachable);
+  const trinoServiceIsRunning = Boolean(
+    trinoServiceStatus?.reachable || trinoServiceStatus?.container_running,
+  );
 
-  const invalidateTrinoStatus = () => {
-    void refetchTrinoStatus();
+  const invalidateTrinoServiceStatus = () => {
+    void refetchTrinoServiceStatus();
     void qc.invalidateQueries({ queryKey: ["trino-service"] });
   };
 
-  const trinoStart = useMutation({
+  const trinoServiceStart = useMutation({
     mutationFn: api.trinoServiceStart,
     onSuccess: (res) => {
-      invalidateTrinoStatus();
-      setTrinoNotice({ ok: res.ok, text: res.message });
+      invalidateTrinoServiceStatus();
+      setTrinoServiceNotice({ ok: res.ok, text: res.message });
     },
-    onError: (err) => setTrinoNotice({ ok: false, text: String(err) }),
+    onError: (err) => setTrinoServiceNotice({ ok: false, text: String(err) }),
   });
 
-  const trinoStop = useMutation({
-    mutationFn: (): Promise<TrinoServiceActionResponse> => api.trinoServiceStop(),
+  const trinoServiceStop = useMutation({
+    mutationFn: api.trinoServiceStop,
     onSuccess: (res) => {
-      invalidateTrinoStatus();
-      setTrinoNotice({ ok: res.ok, text: res.message });
+      invalidateTrinoServiceStatus();
+      setTrinoServiceNotice({ ok: res.ok, text: res.message });
     },
-    onError: (err) => setTrinoNotice({ ok: false, text: String(err) }),
+    onError: (err) => setTrinoServiceNotice({ ok: false, text: String(err) }),
   });
 
-  const trinoRestart = useMutation({
-    mutationFn: (): Promise<TrinoServiceActionResponse> => api.trinoServiceRestart(),
+  const trinoServiceRestart = useMutation({
+    mutationFn: api.trinoServiceRestart,
     onSuccess: (res) => {
-      invalidateTrinoStatus();
-      setTrinoNotice({ ok: res.ok, text: res.message });
+      invalidateTrinoServiceStatus();
+      setTrinoServiceNotice({ ok: res.ok, text: res.message });
     },
-    onError: (err) => setTrinoNotice({ ok: false, text: String(err) }),
+    onError: (err) => setTrinoServiceNotice({ ok: false, text: String(err) }),
   });
 
-  const trinoBusy = trinoStart.isPending || trinoStop.isPending || trinoRestart.isPending;
+  const trinoServiceBusy =
+    trinoServiceStart.isPending || trinoServiceStop.isPending || trinoServiceRestart.isPending;
 
   useEffect(() => {
     if (!data) return;
-    setMetadataRagEmbedModel(data.embedding_model || embeddingModel);
     setDb({
       use_database_url: data.database.use_database_url,
       database_url: data.database.database_url === "***" ? "" : data.database.database_url,
@@ -319,14 +297,15 @@ export function SettingsPage() {
       sslmode: data.database.sslmode,
       password: "",
     });
-    setMcpUrl(data.mcp_url);
     setEmbeddingModel(data.embedding_model);
+    setMetadataRagEmbedModel(data.embedding_model || embeddingModel);
     setConversationTurns(data.ask?.conversation_turns ?? 5);
+    setRetrievalTopK(data.ask?.retrieval_top_k ?? 3);
     setLlm({
       default_backend: data.llm.default_backend,
       default_model: sanitizeModelOverride(data.llm.default_model),
       ollama_base_url: data.llm.ollama_base_url,
-      mlx_model_path: data.llm.mlx_model_path || "/Users/siva/models/qwen3.6-35b-4bit",
+      mlx_model_path: data.llm.mlx_model_path || "",
     });
     const model = sanitizeModelOverride(data.llm.default_model);
     const knownMistralIds = new Set((data.mistral_model_options ?? []).map((option) => option.id));
@@ -334,6 +313,15 @@ export function SettingsPage() {
       data.llm.default_backend === "mistral" && model !== "" && !knownMistralIds.has(model),
     );
     setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
+    setTrino({
+      host: data.trino?.host || "localhost",
+      port: data.trino?.port ?? 8081,
+      user: data.trino?.user || "trino",
+      http_scheme: data.trino?.http_scheme || "http",
+      verify_ssl: data.trino?.verify_ssl ?? false,
+    });
+    setTrinoPassword("");
+    setTrinoEditing(!Boolean((data.trino?.host || "").trim()));
     setCatalogEditing(
       !isCatalogConfigured(
         {
@@ -352,7 +340,38 @@ export function SettingsPage() {
     );
   }, [data]);
 
-  const save = useMutation({
+  const applySaveSuccess = (res: Awaited<ReturnType<typeof api.saveSettings>>, successMessage: string) => {
+    qc.setQueryData(["settings"], res);
+    setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
+    setDb((prev) => ({ ...prev, password: "" }));
+    setTrinoPassword("");
+    setTrinoEditing(false);
+    setCatalogEditing(false);
+    setMessage(successMessage);
+    setError(null);
+  };
+
+  const saveConnections = useMutation({
+    mutationFn: () =>
+      api.saveSettings({
+        database: buildDatabasePayload(db, {
+          password: db.password || undefined,
+          preserveUrl: !catalogEditing,
+          urlConfigured: data?.database.database_url === "***",
+        }),
+        trino: {
+          ...trino,
+          password: trinoPassword || undefined,
+        },
+      }),
+    onSuccess: (res) => applySaveSuccess(res, "Connection settings saved to .env."),
+    onError: (err) => {
+      setError(String(err));
+      setMessage(null);
+    },
+  });
+
+  const saveLlm = useMutation({
     mutationFn: () => {
       const keyPayload: Record<string, string> = {};
       for (const backend of LLM_KEY_BACKENDS) {
@@ -362,14 +381,8 @@ export function SettingsPage() {
         }
       }
       return api.saveSettings({
-        database: buildDatabasePayload(db, {
-          password: db.password || undefined,
-          preserveUrl: !catalogEditing,
-          urlConfigured: data?.database.database_url === "***",
-        }),
-        mcp_url: mcpUrl,
         embedding_model: embeddingModel,
-        ask: { conversation_turns: conversationTurns },
+        ask: { conversation_turns: conversationTurns, retrieval_top_k: retrievalTopK },
         llm: {
           ...llm,
           default_model: sanitizeModelOverride(llm.default_model),
@@ -377,14 +390,7 @@ export function SettingsPage() {
         },
       });
     },
-    onSuccess: (res) => {
-      qc.setQueryData(["settings"], res);
-      setApiKeys({ mistral: "", openai: "", anthropic: "", gemini: "", openrouter: "" });
-      setDb((prev) => ({ ...prev, password: "" }));
-      setCatalogEditing(false);
-      setMessage("Settings saved to .env and applied for this API server.");
-      setError(null);
-    },
+    onSuccess: (res) => applySaveSuccess(res, "LLM and Ask settings saved to .env."),
     onError: (err) => {
       setError(String(err));
       setMessage(null);
@@ -482,9 +488,24 @@ export function SettingsPage() {
     setCatalogUrlPasteError(null);
   };
 
+  const resetTrinoFromData = () => {
+    if (!data?.trino) return;
+    setTrino({
+      host: data.trino.host || "localhost",
+      port: data.trino.port ?? 8081,
+      user: data.trino.user || "trino",
+      http_scheme: data.trino.http_scheme || "http",
+      verify_ssl: data.trino.verify_ssl ?? false,
+    });
+    setTrinoPassword("");
+    setTrinoNotice(null);
+  };
+
   const catalogConfigured = isCatalogConfigured(db, data?.database.database_url === "***");
-  const catalogSummary = formatCatalogSummary(db, data?.database.database_url === "***");
   const metadataRagLoading = metadataRagStatusQuery.isLoading || metadataRagStatusQuery.isFetching;
+  const catalogUsesUrl =
+    db.use_database_url && (data?.database.database_url === "***" || Boolean(db.database_url.trim()));
+  const catalogUserFallback = catalogUsesUrl ? "Configured via URL" : undefined;
 
   const selectedBackend = llm.default_backend ?? "mistral";
   const selectedBackendMeta = data?.llm_backends.find((b) => b.id === selectedBackend);
@@ -503,243 +524,191 @@ export function SettingsPage() {
     <div className="max-w-6xl space-y-4">
       <PageHeader
         title="Settings"
-        description="Database, models, and servers"
+        description="Connections, models, and local services"
       />
 
       {showConnecting && <ApiConnectingPanel title={connectingTitle} />}
 
       {showOffline && <ApiOfflinePanel title="Start the API server" />}
 
-      {apiOnline && isLoading && <p className="text-sm text-zinc-500">Loading settings…</p>}
+      {apiOnline && isLoading && (
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+          Loading settings…
+        </p>
+      )}
 
       {apiOnline && data && (
         <>
-          <div className="settings-db-stack space-y-4">
-            <div className="settings-panel settings-panel--catalog card card-pad space-y-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="font-semibold">Catalog database</h2>
-                    <span className="settings-panel-badge">Required</span>
-                  </div>
-                  <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                    Base Postgres for catalog metadata &amp; RAG vectors
-                  </p>
-                </div>
-                {!catalogEditing && (
-                  <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={openCatalogEdit}>
-                    Edit
-                  </button>
-                )}
-              </div>
-
-              {!catalogEditing ? (
-                <div className="settings-catalog-summary">
-                  <p className="settings-catalog-summary-line font-mono text-sm">{catalogSummary}</p>
-                  <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                    SSL: {db.sslmode}
-                    {data.database.password_set ? " · Password set" : ""}
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      disabled={testDb.isPending || !catalogConfigured}
-                      onClick={() => testDb.mutate()}
-                    >
-                      {testDb.isPending ? "Testing…" : "Test connection"}
-                    </button>
-                  </div>
-                  {catalogDbNotice && (
-                    <p className={catalogDbNotice.ok ? "alert-ok mt-3 text-sm" : "alert-error mt-3 text-sm"}>
-                      {catalogDbNotice.text}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <div className="field mb-0">
-                    <label className="label" htmlFor="catalog-db-url-paste">
-                      Connection URL (optional)
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      <input
-                        id="catalog-db-url-paste"
-                        className="input min-w-0 flex-1 font-mono text-xs"
-                        placeholder="postgresql://user:pass@host:5432/database?sslmode=require"
-                        value={catalogUrlPaste}
-                        onChange={(e) => {
-                          setCatalogUrlPaste(e.target.value);
-                          setCatalogUrlPasteError(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            applyCatalogUrlPaste();
-                          }
-                        }}
-                      />
-                      <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={applyCatalogUrlPaste}>
-                        Apply URL
-                      </button>
-                    </div>
-                    <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      Paste a full Postgres URL to fill the fields below.
-                    </p>
-                    {catalogUrlPasteError && <p className="alert-error mt-2 text-xs">{catalogUrlPasteError}</p>}
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="field mb-0 sm:col-span-2">
-                      <label className="label">Host / endpoint</label>
-                      <input className="input" value={db.host} onChange={(e) => updateDb({ host: e.target.value })} />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Port</label>
-                      <input
-                        className="input"
-                        type="number"
-                        value={db.port}
-                        onChange={(e) => updateDb({ port: Number(e.target.value) })}
-                      />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">SSL mode</label>
-                      <select className="select" value={db.sslmode} onChange={(e) => updateDb({ sslmode: e.target.value })}>
-                        <option value="require">require</option>
-                        <option value="verify-full">verify-full</option>
-                        <option value="prefer">prefer</option>
-                        <option value="disable">disable</option>
-                      </select>
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Username</label>
-                      <input className="input" value={db.user} onChange={(e) => updateDb({ user: e.target.value })} />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Password</label>
-                      <input
-                        className="input"
-                        type="password"
-                        placeholder={data.database.password_set ? "Leave blank to keep current password" : ""}
-                        value={db.password}
-                        onChange={(e) => updateDb({ password: e.target.value })}
-                      />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Database</label>
-                      <input className="input" value={db.database} onChange={(e) => updateDb({ database: e.target.value })} />
-                    </div>
-                    <div className="field mb-0">
-                      <label className="label">Schema</label>
-                      <input className="input" value={db.schema} onChange={(e) => updateDb({ schema: e.target.value })} />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      disabled={testDb.isPending}
-                      onClick={() => testDb.mutate()}
-                    >
-                      {testDb.isPending ? "Testing…" : "Test connection"}
-                    </button>
-                    {catalogConfigured && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => {
-                          resetCatalogFromData();
-                          setCatalogEditing(false);
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                  {catalogDbNotice && (
-                    <p className={catalogDbNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>
-                      {catalogDbNotice.text}
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="settings-panel settings-panel--connections card card-pad">
-              <SavedConnectionsPanel />
-            </div>
+          <div className="tabs">
+            {SETTINGS_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`tab ${settingsTab === tab.id ? "tab-active" : ""}`}
+                onClick={() => setSettingsTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          <div className="card card-pad space-y-4">
-            <div>
-              <h2 className="font-semibold">LLM</h2>
-              <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                Default for Ask &amp; Analytics
-              </p>
-            </div>
-            <form className="settings-llm-grid" autoComplete="off" onSubmit={(e) => e.preventDefault()}>
-              <div className="field mb-0">
-                <label className="label" htmlFor="datapro-llm-provider">
-                  Provider
-                </label>
-                <select
-                  id="datapro-llm-provider"
-                  className="select"
-                  autoComplete="off"
-                  value={selectedBackend}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    const backend = data.llm_backends.find((b) => b.id === id);
-                    setLlm((prev) => ({
-                      ...prev,
-                      default_backend: id,
-                      default_model: sanitizeModelOverride(backend?.default_model ?? prev.default_model),
-                    }));
-                    setMistralCustomMode(false);
+          {settingsTab === "connections" && (
+            <>
+              <div className="card card-pad">
+                <SavedConnectionsPanel
+                  catalog={
+                    <CatalogDatabaseCard
+                      db={db}
+                      passwordSet={data.database.password_set}
+                      configured={catalogConfigured}
+                      editing={catalogEditing}
+                      userFallback={catalogUserFallback}
+                      urlPaste={catalogUrlPaste}
+                      urlPasteError={catalogUrlPasteError}
+                      notice={catalogDbNotice}
+                      testing={testDb.isPending}
+                      onEdit={openCatalogEdit}
+                      onCancel={() => {
+                        resetCatalogFromData();
+                        setCatalogEditing(false);
+                      }}
+                      onUpdateDb={updateDb}
+                      onUrlPasteChange={(value) => {
+                        setCatalogUrlPaste(value);
+                        setCatalogUrlPasteError(null);
+                      }}
+                      onApplyUrlPaste={applyCatalogUrlPaste}
+                      onTest={() => testDb.mutate()}
+                    />
+                  }
+                  trino={trino}
+                  trinoPassword={trinoPassword}
+                  trinoEditing={trinoEditing}
+                  trinoNotice={trinoNotice}
+                  onTrinoEdit={() => {
+                    setTrinoNotice(null);
+                    setTrinoEditing(true);
                   }}
-                >
-                  {data.llm_backends.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.label}
-                    </option>
-                  ))}
-                </select>
+                  onTrinoCancel={() => {
+                    resetTrinoFromData();
+                    setTrinoEditing(false);
+                  }}
+                  onTrinoChange={(patch) => setTrino((prev) => ({ ...prev, ...patch }))}
+                  onTrinoPasswordChange={setTrinoPassword}
+                  onTrinoNotice={setTrinoNotice}
+                />
               </div>
-              <div className="field mb-0">
-                <label className="label" htmlFor="datapro-llm-model-override">
-                  Model
-                </label>
-                {selectedBackend === "mistral" ? (
-                  <>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={saveConnections.isPending}
+                  onClick={() => saveConnections.mutate()}
+                >
+                  {saveConnections.isPending ? "Saving…" : "Save connection settings"}
+                </button>
+                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                  Catalog database and Trino coordinator — writes to {data.env_path}. Restart Trino after warehouse credential changes.
+                </p>
+              </div>
+            </>
+          )}
+
+          {settingsTab === "llm" && (
+            <>
+              <div className="card card-pad space-y-4">
+                <div>
+                  <h2 className="font-semibold">LLM</h2>
+                  <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                    Default provider and model for Ask &amp; Analytics
+                  </p>
+                </div>
+                <form className="settings-llm-grid" autoComplete="off" onSubmit={(e) => e.preventDefault()}>
+                  <div className="field mb-0">
+                    <label className="label" htmlFor="datapro-llm-provider">
+                      Provider
+                    </label>
                     <select
-                      id="datapro-llm-model-override"
-                      className="select font-mono text-xs"
+                      id="datapro-llm-provider"
+                      className="select"
                       autoComplete="off"
-                      value={mistralSelectValue}
+                      value={selectedBackend}
                       onChange={(e) => {
-                        const value = e.target.value;
-                        if (value === MISTRAL_CUSTOM_MODEL) {
-                          setMistralCustomMode(true);
-                          return;
-                        }
+                        const id = e.target.value;
+                        const backend = data.llm_backends.find((b) => b.id === id);
+                        setLlm((prev) => ({
+                          ...prev,
+                          default_backend: id,
+                          default_model: sanitizeModelOverride(backend?.default_model ?? prev.default_model),
+                        }));
                         setMistralCustomMode(false);
-                        setLlm((prev) => ({ ...prev, default_model: value }));
                       }}
                     >
-                      {mistralModelOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                          {option.hint ? ` — ${option.hint}` : ""}
+                      {data.llm_backends.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.label}
                         </option>
                       ))}
-                      <option value={MISTRAL_CUSTOM_MODEL}>Custom model ID…</option>
                     </select>
-                    {mistralCustomMode && (
+                  </div>
+                  <div className="field mb-0">
+                    <label className="label" htmlFor="datapro-llm-model-override">
+                      Model
+                    </label>
+                    {selectedBackend === "mistral" ? (
+                      <>
+                        <select
+                          id="datapro-llm-model-override"
+                          className="select font-mono text-xs"
+                          autoComplete="off"
+                          value={mistralSelectValue}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            if (value === MISTRAL_CUSTOM_MODEL) {
+                              setMistralCustomMode(true);
+                              return;
+                            }
+                            setMistralCustomMode(false);
+                            setLlm((prev) => ({ ...prev, default_model: value }));
+                          }}
+                        >
+                          {mistralModelOptions.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                              {option.hint ? ` — ${option.hint}` : ""}
+                            </option>
+                          ))}
+                          <option value={MISTRAL_CUSTOM_MODEL}>Custom model ID…</option>
+                        </select>
+                        {mistralCustomMode && (
+                          <input
+                            className="input mt-2 font-mono text-xs"
+                            name="datapro-llm-model-custom"
+                            type="search"
+                            autoComplete="off"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            spellCheck={false}
+                            data-lpignore="true"
+                            data-1p-ignore
+                            data-form-type="other"
+                            placeholder="e.g. mistral-medium-latest"
+                            value={mistralModelValue}
+                            onChange={(e) =>
+                              setLlm((prev) => ({
+                                ...prev,
+                                default_model: setModelOverride(e.target.value),
+                              }))
+                            }
+                          />
+                        )}
+                      </>
+                    ) : (
                       <input
-                        className="input mt-2 font-mono text-xs"
-                        name="datapro-llm-model-custom"
+                        id="datapro-llm-model-override"
+                        className="input font-mono text-xs"
+                        name="datapro-llm-model-override"
                         type="search"
                         autoComplete="off"
                         autoCorrect="off"
@@ -748,464 +717,394 @@ export function SettingsPage() {
                         data-lpignore="true"
                         data-1p-ignore
                         data-form-type="other"
-                        placeholder="e.g. mistral-medium-latest"
-                        value={mistralModelValue}
+                        readOnly
+                        onFocus={(e) => e.currentTarget.removeAttribute("readonly")}
+                        onBlur={(e) => {
+                          e.currentTarget.setAttribute("readonly", "");
+                          const cleaned = sanitizeModelOverride(e.currentTarget.value);
+                          if (cleaned !== e.currentTarget.value) {
+                            setLlm((prev) => ({ ...prev, default_model: cleaned }));
+                          }
+                        }}
+                        placeholder={selectedBackendMeta?.default_model ?? "Provider default"}
+                        value={llm.default_model ?? ""}
                         onChange={(e) =>
-                          setLlm((prev) => ({
-                            ...prev,
-                            default_model: setModelOverride(e.target.value),
-                          }))
+                          setLlm((prev) => ({ ...prev, default_model: setModelOverride(e.target.value) }))
                         }
                       />
                     )}
-                  </>
+                  </div>
+                  {needsApiKey ? (
+                    <div className="field mb-0">
+                      <label className="label">{LLM_KEY_LABELS[selectedBackend as LlmKeyBackend]}</label>
+                      <input
+                        className="input font-mono text-xs"
+                        type="password"
+                        autoComplete="new-password"
+                        name={`datapro-${selectedBackend}-api-key`}
+                        placeholder={apiKeySet ? "Leave blank to keep current key" : "API key"}
+                        value={apiKeys[selectedBackend as LlmKeyBackend]}
+                        onChange={(e) =>
+                          setApiKeys((prev) => ({ ...prev, [selectedBackend as LlmKeyBackend]: e.target.value }))
+                        }
+                      />
+                    </div>
+                  ) : selectedBackend === "ollama" ? (
+                    <div className="field mb-0">
+                      <label className="label">Ollama URL</label>
+                      <input
+                        className="input font-mono text-xs"
+                        value={llm.ollama_base_url ?? "http://localhost:11434"}
+                        onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
+                      />
+                    </div>
+                  ) : selectedBackend === "mlx" ? (
+                    <div className="field mb-0">
+                      <label className="label">Model path</label>
+                      <input
+                        className="input font-mono text-xs"
+                        placeholder="/path/to/model"
+                        value={llm.mlx_model_path || ""}
+                        onChange={(e) => setLlm((prev) => ({ ...prev, mlx_model_path: e.target.value }))}
+                      />
+                    </div>
+                  ) : null}
+                  <div className="field mb-0">
+                    <label className="label" htmlFor="datapro-embedding-model">
+                      Embedding model
+                    </label>
+                    <select
+                      id="datapro-embedding-model"
+                      className="select font-mono text-xs"
+                      value={embeddingModel}
+                      onChange={(e) => setEmbeddingModel(e.target.value)}
+                    >
+                      {data.embedding_model_options.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </form>
+                {selectedBackend === "mistral" ? (
+                  <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                    Free tier rate limits apply per model.{" "}
+                    <code className="text-xs">codestral-2508</code> for SQL and code; Ministral 3B for fast Q&amp;A.
+                  </p>
                 ) : (
-                  <input
-                    id="datapro-llm-model-override"
-                    className="input font-mono text-xs"
-                    name="datapro-llm-model-override"
-                    type="search"
-                    autoComplete="off"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    spellCheck={false}
-                    data-lpignore="true"
-                    data-1p-ignore
-                    data-form-type="other"
-                    readOnly
-                    onFocus={(e) => e.currentTarget.removeAttribute("readonly")}
-                    onBlur={(e) => {
-                      e.currentTarget.setAttribute("readonly", "");
-                      const cleaned = sanitizeModelOverride(e.currentTarget.value);
-                      if (cleaned !== e.currentTarget.value) {
-                        setLlm((prev) => ({ ...prev, default_model: cleaned }));
-                      }
-                    }}
-                    placeholder={selectedBackendMeta?.default_model ?? "Provider default"}
-                    value={llm.default_model ?? ""}
-                    onChange={(e) =>
-                      setLlm((prev) => ({ ...prev, default_model: setModelOverride(e.target.value) }))
-                    }
-                  />
+                  <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                    Leave model blank to use the provider default. Changing the embedding model requires re-ingesting documents.
+                  </p>
                 )}
               </div>
-              {needsApiKey ? (
-                <div className="field mb-0">
-                  <label className="label">{LLM_KEY_LABELS[selectedBackend as LlmKeyBackend]}</label>
-                  <input
-                    className="input font-mono text-xs"
-                    type="password"
-                    autoComplete="new-password"
-                    name={`datapro-${selectedBackend}-api-key`}
-                    placeholder={apiKeySet ? "Leave blank to keep current key" : "API key"}
-                    value={apiKeys[selectedBackend as LlmKeyBackend]}
-                    onChange={(e) =>
-                      setApiKeys((prev) => ({ ...prev, [selectedBackend as LlmKeyBackend]: e.target.value }))
-                    }
-                  />
-                </div>
-              ) : selectedBackend === "ollama" ? (
-                <div className="field mb-0">
-                  <label className="label">Ollama URL</label>
-                  <input
-                    className="input font-mono text-xs"
-                    value={llm.ollama_base_url ?? "http://localhost:11434"}
-                    onChange={(e) => setLlm((prev) => ({ ...prev, ollama_base_url: e.target.value }))}
-                  />
-                </div>
-              ) : selectedBackend === "mlx" ? (
-                <div className="field mb-0">
-                  <label className="label">Model path</label>
-                  <input
-                    className="input font-mono text-xs"
-                    placeholder="/path/to/model"
-                    value={llm.mlx_model_path || ""}
-                    onChange={(e) => setLlm((prev) => ({ ...prev, mlx_model_path: e.target.value }))}
-                  />
-                </div>
-              ) : null}
-              <div className="field mb-0">
-                <label className="label" htmlFor="datapro-embedding-model">
-                  Embedding model
-                </label>
-                <select
-                  id="datapro-embedding-model"
-                  className="select font-mono text-xs"
-                  value={embeddingModel}
-                  onChange={(e) => setEmbeddingModel(e.target.value)}
-                >
-                  {data.embedding_model_options.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                  Current embedding model used for RAG and metadata embeddings.
-                </p>
-              </div>
-            </form>
-            {selectedBackend === "mistral" ? (
-              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                Free tier rate limits apply per model.{" "}
-                <code className="text-xs">codestral-2508</code> for SQL and code; Ministral 3B for fast Q&amp;A.
-              </p>
-            ) : (
-              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                Leave model blank to use the provider default.
-              </p>
-            )}
-          </div>
 
-          <div className="card card-pad space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold">Metadata RAG</h2>
-                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  View metadata chunk RAG status and re-embed chunks with a chosen embedding model.
-                </p>
-              </div>
-              <span className={`badge ${reRag.isPending ? "badge-warn" : "badge-ok"}`}>
-                {reRag.isPending ? "Running" : "Idle"}
-              </span>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="rounded-lg border border-zinc-200 p-4">
-                <div className="text-sm text-zinc-500">Total metadata chunks</div>
-                <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.total ?? "—"}</div>
-              </div>
-              <div className="rounded-lg border border-zinc-200 p-4">
-                <div className="text-sm text-zinc-500">Embedded</div>
-                <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.embedded ?? "—"}</div>
-              </div>
-              <div className="rounded-lg border border-zinc-200 p-4">
-                <div className="text-sm text-zinc-500">Missing embeddings</div>
-                <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.missing ?? "—"}</div>
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="field mb-0">
-                <label className="label" htmlFor="metadata-rag-embed-model">
-                  Embedding model
-                </label>
-                <select
-                  id="metadata-rag-embed-model"
-                  className="select font-mono text-xs"
-                  value={metadataRagEmbedModel}
-                  onChange={(e) => setMetadataRagEmbedModel(e.target.value)}
-                >
-                  {data.embedding_model_options.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                  Choose the model used for metadata RAG re-embedding.
-                </p>
-              </div>
-
-              <div className="field mb-0">
-                <label className="label">Status</label>
-                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
-                  {metadataRagLoading ? "Loading metadata RAG status…" : metadataRagStatus ? (
-                    `${metadataRagStatus.embedded} embedded, ${metadataRagStatus.missing} missing`
-                  ) : "Status unavailable"}
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={reRag.isPending || !catalogConfigured}
-                onClick={() => reRag.mutate(metadataRagEmbedModel)}
-              >
-                {reRag.isPending ? "Recomputing…" : "Recompute metadata RAG"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={metadataRagLoading}
-                onClick={() => void metadataRagStatusQuery.refetch()}
-              >
-                {metadataRagLoading ? "Refreshing…" : "Refresh status"}
-              </button>
-            </div>
-            {metadataRagStatusQuery.isError && (
-              <p className="alert-error text-sm">
-                Unable to load metadata RAG status: {String(metadataRagStatusQuery.error)}
-              </p>
-            )}
-            {metadataRagStatus?.rows && metadataRagStatus.rows.length > 0 && (
-              <div className="table-wrap dataset-data-table">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Source file</th>
-                      <th>Chunk ID</th>
-                      <th>Status</th>
-                      <th>Embedding model</th>
-                      <th>Updated</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {metadataRagStatus.rows.map((row) => (
-                      <tr key={`${row.source_file}:${row.chunk_id}`}>
-                        <td>{row.source_file}</td>
-                        <td>{row.chunk_id}</td>
-                        <td>
-                          {row.embedded ? (
-                            <span className="badge badge-ok">Embedded</span>
-                          ) : (
-                            <span className="badge badge-muted">Missing</span>
-                          )}
-                        </td>
-                        <td>{row.embedding_model || "—"}</td>
-                        <td>{row.updated_at ? new Date(row.updated_at).toLocaleString() : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <div className="card card-pad">
-            <div className="space-y-4">
-              <div>
-                <h2 className="font-semibold">Ask</h2>
-                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  Follow-up context for the chat prompt until you press New chat
-                </p>
-              </div>
-              <div className="field mb-0 max-w-md">
-                <label className="label" htmlFor="ask-conversation-turns">
-                  Conversation turns to remember
-                </label>
-                <input
-                  id="ask-conversation-turns"
-                  type="number"
-                  className="input"
-                  min={0}
-                  max={data.ask?.max_conversation_turns ?? 20}
-                  value={conversationTurns}
-                  onChange={(e) => setConversationTurns(Number(e.target.value))}
-                />
-                <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                  Number of prior Q&amp;A exchanges included in each follow-up (0 = disabled). Cleared when you start a new chat.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="settings-servers-stack">
-            <div className="card card-pad space-y-4">
-              <div>
-                <h2 className="font-semibold">MCP server</h2>
-                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  Local MCP process
-                </p>
-              </div>
-
-              {mcpStatus && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`badge ${mcpStatus.reachable ? "badge-ok" : "badge-muted"}`}>
-                    {mcpStatus.reachable ? "Reachable" : "Stopped"}
+              <div className="card card-pad space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-semibold">Metadata RAG</h2>
+                    <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      View metadata chunk RAG status and re-embed chunks with a chosen embedding model.
+                    </p>
+                  </div>
+                  <span className={`badge ${reRag.isPending ? "badge-warn" : "badge-ok"}`}>
+                    {reRag.isPending ? "Running" : "Idle"}
                   </span>
-                  <span className="badge-muted badge">{mcpStatus.status_label}</span>
-                  {mcpStatus.active_pid != null && (
-                    <span className="badge-muted badge">PID {mcpStatus.active_pid}</span>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="catalog-themed-box p-4">
+                    <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>Total metadata chunks</div>
+                    <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.total ?? "—"}</div>
+                  </div>
+                  <div className="catalog-themed-box p-4">
+                    <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>Embedded</div>
+                    <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.embedded ?? "—"}</div>
+                  </div>
+                  <div className="catalog-themed-box p-4">
+                    <div className="text-sm" style={{ color: "var(--color-text-muted)" }}>Missing embeddings</div>
+                    <div className="mt-2 text-2xl font-semibold">{metadataRagStatus?.missing ?? "—"}</div>
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="field mb-0">
+                    <label className="label" htmlFor="metadata-rag-embed-model">
+                      Embedding model
+                    </label>
+                    <select
+                      id="metadata-rag-embed-model"
+                      className="select font-mono text-xs"
+                      value={metadataRagEmbedModel}
+                      onChange={(e) => setMetadataRagEmbedModel(e.target.value)}
+                    >
+                      {data.embedding_model_options.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field mb-0">
+                    <label className="label">Status</label>
+                    <div className="catalog-themed-box p-3 text-sm">
+                      {metadataRagLoading
+                        ? "Loading metadata RAG status…"
+                        : metadataRagStatus
+                          ? `${metadataRagStatus.embedded} embedded, ${metadataRagStatus.missing} missing`
+                          : "Status unavailable"}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={reRag.isPending || !catalogConfigured}
+                    onClick={() => reRag.mutate(metadataRagEmbedModel)}
+                  >
+                    {reRag.isPending ? "Recomputing…" : "Recompute metadata RAG"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={metadataRagLoading}
+                    onClick={() => void metadataRagStatusQuery.refetch()}
+                  >
+                    {metadataRagLoading ? "Refreshing…" : "Refresh status"}
+                  </button>
+                </div>
+                {metadataRagStatusQuery.isError && (
+                  <p className="alert-error text-sm">
+                    Unable to load metadata RAG status: {String(metadataRagStatusQuery.error)}
+                  </p>
+                )}
+              </div>
+
+              <div className="card card-pad">
+                <div className="space-y-4">
+                  <div>
+                    <h2 className="font-semibold">Ask</h2>
+                    <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      Follow-up context and RAG retrieval for Ask queries
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="field mb-0">
+                      <div className="sidebar-label-row">
+                        <label className="label mb-0" htmlFor="ask-retrieval-top-k">
+                          Retrieval top K
+                        </label>
+                        <span className="sidebar-range-value">{retrievalTopK}</span>
+                      </div>
+                      <input
+                        id="ask-retrieval-top-k"
+                        type="range"
+                        className="sidebar-range mt-2 w-full"
+                        min={1}
+                        max={data.ask?.max_retrieval_top_k ?? 8}
+                        step={1}
+                        value={retrievalTopK}
+                        onChange={(e) => setRetrievalTopK(Number(e.target.value))}
+                        aria-valuemin={1}
+                        aria-valuemax={data.ask?.max_retrieval_top_k ?? 8}
+                        aria-valuenow={retrievalTopK}
+                      />
+                      <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                        Number of document chunks retrieved per Ask query (1–{data.ask?.max_retrieval_top_k ?? 8}).
+                      </p>
+                    </div>
+                    <div className="field mb-0">
+                      <label className="label" htmlFor="ask-conversation-turns">
+                        Conversation turns to remember
+                      </label>
+                      <input
+                        id="ask-conversation-turns"
+                        type="number"
+                        className="input"
+                        min={0}
+                        max={data.ask?.max_conversation_turns ?? 20}
+                        value={conversationTurns}
+                        onChange={(e) => setConversationTurns(Number(e.target.value))}
+                      />
+                      <p className="mt-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                        Number of prior Q&amp;A exchanges included in each follow-up (0 = disabled). Cleared when you start a new chat.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={saveLlm.isPending}
+                  onClick={() => saveLlm.mutate()}
+                >
+                  {saveLlm.isPending ? "Saving…" : "Save LLM & Ask settings"}
+                </button>
+                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                  Writes to {data.env_path}. Restart the API after changing the embedding model.
+                </p>
+              </div>
+            </>
+          )}
+
+          {settingsTab === "mcp" && <McpSettingsPanel />}
+
+          {settingsTab === "servers" && (
+            <>
+              <div className="settings-servers-stack">
+                <McpServersPanel envPath={data.env_path} />
+
+                <div className="card card-pad space-y-4">
+                  <div>
+                    <h2 className="font-semibold">API server</h2>
+                    <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      FastAPI backend for the UI and catalog
+                    </p>
+                  </div>
+
+                  {backendStatus && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`badge ${backendStatus.reachable ? "badge-ok" : "badge-muted"}`}>
+                        {backendStatus.reachable ? "Reachable" : "Stopped"}
+                      </span>
+                      <span className="badge-muted badge">{backendStatus.status_label}</span>
+                      {backendStatus.active_pid != null && (
+                        <span className="badge-muted badge">PID {backendStatus.active_pid}</span>
+                      )}
+                      <span className="badge-muted badge">Port {backendStatus.port}</span>
+                    </div>
+                  )}
+
+                  {backendStatus && (
+                    <p className="text-sm">
+                      URL:{" "}
+                      <code className="rounded px-1.5 py-0.5 text-xs" style={{ background: "var(--color-surface-subtle)" }}>
+                        {backendStatus.url}
+                      </code>
+                    </p>
+                  )}
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={backendBusy || backendIsRunning}
+                      onClick={() => backendStart.mutate()}
+                    >
+                      {backendStart.isPending ? "Starting…" : "Start"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={backendBusy || !backendIsRunning}
+                      onClick={() => backendStop.mutate()}
+                    >
+                      {backendStop.isPending ? "Stopping…" : "Stop"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={backendBusy || !backendIsRunning}
+                      onClick={() => backendRestart.mutate()}
+                    >
+                      {backendRestart.isPending ? "Restarting…" : "Restart"}
+                    </button>
+                  </div>
+
+                  {backendStatus?.stopping_self && backendIsRunning && (
+                    <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                      Restart may disconnect this page briefly.
+                    </p>
+                  )}
+
+                  {backendNotice && (
+                    <p className={backendNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{backendNotice.text}</p>
                   )}
                 </div>
-              )}
 
-              <div className="field mb-0">
-                <label className="label">MCP URL</label>
-                <input className="input font-mono text-xs" value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} />
-              </div>
+                <div className="card card-pad space-y-4">
+                  <div>
+                    <h2 className="font-semibold">Trino coordinator</h2>
+                    <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      Docker service for business warehouse SQL
+                    </p>
+                  </div>
 
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={mcpBusy || mcpIsRunning}
-                  onClick={() => mcpStart.mutate()}
-                >
-                  {mcpStart.isPending ? "Starting…" : "Start"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={mcpBusy || !mcpIsRunning}
-                  onClick={() => mcpStop.mutate()}
-                >
-                  {mcpStop.isPending ? "Stopping…" : "Stop"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={mcpBusy || !mcpIsRunning}
-                  onClick={() => mcpRestart.mutate()}
-                >
-                  {mcpRestart.isPending ? "Restarting…" : "Restart"}
-                </button>
-              </div>
-
-              {mcpStatus?.source === "external" && (
-                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                  External process — Stop kills port {mcpStatus.port}.
-                </p>
-              )}
-
-              {mcpNotice && (
-                <p className={mcpNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{mcpNotice.text}</p>
-              )}
-            </div>
-
-            <div className="card card-pad space-y-4">
-              <div>
-                <h2 className="font-semibold">API server</h2>
-                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  FastAPI backend
-                </p>
-              </div>
-
-              {backendStatus && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`badge ${backendStatus.reachable ? "badge-ok" : "badge-muted"}`}>
-                    {backendStatus.reachable ? "Reachable" : "Stopped"}
-                  </span>
-                  <span className="badge-muted badge">{backendStatus.status_label}</span>
-                  {backendStatus.active_pid != null && (
-                    <span className="badge-muted badge">PID {backendStatus.active_pid}</span>
+                  {trinoServiceStatus && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`badge ${trinoServiceStatus.reachable ? "badge-ok" : "badge-muted"}`}>
+                        {trinoServiceStatus.reachable ? "Reachable" : "Stopped"}
+                      </span>
+                      <span className="badge-muted badge">{trinoServiceStatus.status_label}</span>
+                      {trinoServiceStatus.container_id && (
+                        <span className="badge-muted badge font-mono text-xs">
+                          {trinoServiceStatus.container_name}
+                        </span>
+                      )}
+                      <span className="badge-muted badge">Port {trinoServiceStatus.port}</span>
+                      {!trinoServiceStatus.docker_available && (
+                        <span className="badge-muted badge">Docker unavailable</span>
+                      )}
+                    </div>
                   )}
-                  <span className="badge-muted badge">Port {backendStatus.port}</span>
-                </div>
-              )}
 
-              {backendStatus && (
-                <p className="text-sm">
-                  URL:{" "}
-                  <code className="rounded px-1.5 py-0.5 text-xs" style={{ background: "var(--color-surface-subtle)" }}>
-                    {backendStatus.url}
-                  </code>
-                </p>
-              )}
+                  {trinoServiceStatus && (
+                    <p className="text-sm">
+                      URL:{" "}
+                      <code className="rounded px-1.5 py-0.5 text-xs" style={{ background: "var(--color-surface-subtle)" }}>
+                        {trinoServiceStatus.url}
+                      </code>
+                    </p>
+                  )}
 
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={backendBusy || backendIsRunning}
-                  onClick={() => backendStart.mutate()}
-                >
-                  {backendStart.isPending ? "Starting…" : "Start"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={backendBusy || !backendIsRunning}
-                  onClick={() => backendStop.mutate()}
-                >
-                  {backendStop.isPending ? "Stopping…" : "Stop"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={backendBusy || !backendIsRunning}
-                  onClick={() => backendRestart.mutate()}
-                >
-                  {backendRestart.isPending ? "Restarting…" : "Restart"}
-                </button>
-              </div>
+                  <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                    Runs <code className="text-xs">docker compose up -d trino</code> from the project root. Configure host and port on the Connections tab.
+                  </p>
 
-              {backendStatus?.stopping_self && backendIsRunning && (
-                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                  Restart may disconnect this page briefly.
-                </p>
-              )}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={trinoServiceBusy || trinoServiceIsRunning || !trinoServiceStatus?.docker_available}
+                      onClick={() => trinoServiceStart.mutate()}
+                    >
+                      {trinoServiceStart.isPending ? "Starting…" : "Start"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={trinoServiceBusy || !trinoServiceIsRunning}
+                      onClick={() => trinoServiceStop.mutate()}
+                    >
+                      {trinoServiceStop.isPending ? "Stopping…" : "Stop"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={trinoServiceBusy || !trinoServiceIsRunning}
+                      onClick={() => trinoServiceRestart.mutate()}
+                    >
+                      {trinoServiceRestart.isPending ? "Restarting…" : "Restart"}
+                    </button>
+                  </div>
 
-              {backendNotice && (
-                <p className={backendNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{backendNotice.text}</p>
-              )}
-            </div>
+                  {trinoServiceStatus?.source === "external" && (
+                    <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                      External container — Stop runs <code className="text-xs">docker compose stop trino</code>.
+                    </p>
+                  )}
 
-            <div className="card card-pad space-y-4">
-              <div>
-                <h2 className="font-semibold">Trino engine</h2>
-                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  Business SQL coordinator
-                </p>
-              </div>
-
-              {trinoStatus && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`badge ${trinoStatus.reachable ? "badge-ok" : "badge-muted"}`}>
-                    {trinoStatus.reachable ? "Reachable" : "Stopped"}
-                  </span>
-                  <span className="badge-muted badge">{trinoStatus.status_label}</span>
-                  <span className="badge-muted badge">Port {trinoStatus.port}</span>
-                  {trinoStatus.container_id && (
-                    <span className="badge-muted badge">Container {trinoStatus.container_name}</span>
+                  {trinoServiceNotice && (
+                    <p className={trinoServiceNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>
+                      {trinoServiceNotice.text}
+                    </p>
                   )}
                 </div>
-              )}
-
-              {trinoStatus && (
-                <p className="text-sm">
-                  URL:{" "}
-                  <code className="rounded px-1.5 py-0.5 text-xs" style={{ background: "var(--color-surface-subtle)" }}>
-                    {trinoStatus.url}
-                  </code>
-                </p>
-              )}
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={trinoBusy || trinoIsRunning}
-                  onClick={() => trinoStart.mutate()}
-                >
-                  {trinoStart.isPending ? "Starting…" : "Start"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={trinoBusy || !trinoIsRunning}
-                  onClick={() => trinoStop.mutate()}
-                >
-                  {trinoStop.isPending ? "Stopping…" : "Stop"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={trinoBusy || !trinoIsRunning}
-                  onClick={() => trinoRestart.mutate()}
-                >
-                  {trinoRestart.isPending ? "Restarting…" : "Restart"}
-                </button>
               </div>
-
-              {trinoStatus && !trinoStatus.docker_available && (
-                <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                  Docker/Podman compose is not available from this process. Start Trino manually if controls fail.
-                </p>
-              )}
-
-              {trinoNotice && (
-                <p className={trinoNotice.ok ? "alert-ok text-sm" : "alert-error text-sm"}>{trinoNotice.text}</p>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button type="button" className="btn" disabled={save.isPending} onClick={() => save.mutate()}>
-              {save.isPending ? "Saving…" : "Save catalog & service settings"}
-            </button>
-            <p className="text-xs text-zinc-500">Writes to {data.env_path}. Restart API or MCP after changes.</p>
-          </div>
+            </>
+          )}
 
           {message && <p className="alert-ok">{message}</p>}
           {error && <p className="alert-error">{error}</p>}

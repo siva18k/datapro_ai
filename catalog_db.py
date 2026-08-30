@@ -180,6 +180,7 @@ def apply_migrations() -> dict[str, bool]:
             "012_domain_mcp_references.sql",
             "013_mcp_reference_bindings.sql",
             "014_domain_prompts.sql",
+            "016_agent_mcp_kit.sql",
         ):
             migration = MIGRATIONS_DIR / migration_name
             if not migration.exists():
@@ -206,7 +207,10 @@ def verify_catalog_schema() -> dict[str, Any]:
     issues: list[str] = []
     info: dict[str, Any] = {}
     try:
-        for table in ("domains", "data_sources", "rag_profiles", "mcp_servers", "mcp_bindings", "agents"):
+        for table in (
+            "domains", "data_sources", "rag_profiles", "mcp_servers", "mcp_bindings",
+            "agents", "agent_mcp_tools", "agent_mcp_prompts", "agent_mcp_resources",
+        ):
             rows = conn.run(
                 """
                 SELECT COUNT(*) FROM information_schema.tables
@@ -787,6 +791,7 @@ def upsert_domain_reference_doc(domain_id: str, doc_type: str, content: str) -> 
         )
     finally:
         conn.close()
+    _invalidate_routing_cache()
     return {
         "doc_type": rows[0][0],
         "content": rows[0][1],
@@ -1267,9 +1272,8 @@ _LEGACY_SOURCE_CONFIG_KEYS = frozenset(
 
 
 def migrate_postgres_sources_to_trino(*, dry_run: bool = True) -> list[dict[str, Any]]:
-    """Rewrite catalog datasets that still use direct Postgres config to Trino bindings."""
-    from connections_service import connection_config, get_connection
-    from trino_catalog_files import infer_trino_catalog_schema, is_legacy_postgres_row
+    """Rewrite structured datasets so they only reference Settings connections."""
+    from connections_service import bind_source_to_saved_connection
 
     conn, schema = connect()
     try:
@@ -1277,62 +1281,34 @@ def migrate_postgres_sources_to_trino(*, dry_run: bool = True) -> list[dict[str,
             f"""
             SELECT id::text, name, connector, config::text, source_type
             FROM {schema}.data_sources
-            WHERE connector = 'postgres'
+            WHERE connector IN ('postgres', 'trino')
             """
         )
     finally:
         conn.close()
 
     changes: list[dict[str, Any]] = []
-    for source_id, name, _connector, config_text, source_type in rows:
+    for source_id, name, connector, config_text, source_type in rows:
         cfg = json.loads(config_text or "{}")
-        connection_id = (cfg.get("connection_id") or "").strip()
-        catalog = (cfg.get("catalog") or "").strip()
-        schema_name = (cfg.get("schema") or "").strip()
-
-        if connection_id:
-            try:
-                binding = connection_config(connection_id)
-                catalog = binding.get("catalog") or catalog
-                schema_name = binding.get("schema") or schema_name
-            except ValueError:
-                saved = get_connection(connection_id)
-                if saved:
-                    catalog, schema_name = infer_trino_catalog_schema(saved)
-        elif cfg.get("host"):
-            catalog, schema_name = infer_trino_catalog_schema(cfg)
-        elif not catalog:
+        try:
+            bound = bind_source_to_saved_connection(cfg)
+        except ValueError:
             continue
-
-        if not catalog:
-            continue
-        schema_name = schema_name or "public"
-
-        new_cfg = {
-            k: v
-            for k, v in cfg.items()
-            if k not in _LEGACY_SOURCE_CONFIG_KEYS and k != "connector"
-        }
-        new_cfg["catalog"] = catalog
-        new_cfg["schema"] = schema_name
-        if connection_id:
-            new_cfg["connection_id"] = connection_id
-            saved = get_connection(connection_id)
-            if saved and saved.get("name"):
-                new_cfg["connection_name"] = saved["name"]
-
+        new_connector = str(bound["connector"])
+        new_cfg = bound["config"]
         change = {
             "id": source_id,
             "name": name,
-            "catalog": catalog,
-            "schema": schema_name,
+            "connector": new_connector,
+            "schema": new_cfg.get("schema"),
+            "connection_id": new_cfg.get("connection_id"),
         }
         changes.append(change)
         if dry_run:
             continue
         update_source(
             source_id,
-            connector="trino",
+            connector=new_connector,
             config=new_cfg,
             source_type=source_type or "structured",
         )
@@ -1537,7 +1513,9 @@ def create_mcp_server(
     finally:
         conn.close()
     cols = ["id", "slug", "name", "description", "url", "server_kind", "transport", "enabled", "is_builtin"]
-    return _row_to_dict(cols, rows[0])
+    server = _row_to_dict(cols, rows[0])
+    _invalidate_routing_cache()
+    return server
 
 
 def update_mcp_server(server_id: str, **fields) -> dict | None:
@@ -1573,7 +1551,9 @@ def update_mcp_server(server_id: str, **fields) -> dict | None:
     if not rows:
         return existing
     cols = ["id", "slug", "name", "description", "url", "server_kind", "transport", "enabled", "is_builtin"]
-    return _row_to_dict(cols, rows[0])
+    server = _row_to_dict(cols, rows[0])
+    _invalidate_routing_cache()
+    return server
 
 
 def delete_mcp_server(server_id: str) -> bool:
@@ -1600,7 +1580,10 @@ def delete_mcp_server(server_id: str) -> bool:
         )
     finally:
         conn.close()
-    return bool(rows)
+    deleted = bool(rows)
+    if deleted:
+        _invalidate_routing_cache()
+    return deleted
 
 
 def set_mcp_binding(
@@ -1627,6 +1610,7 @@ def set_mcp_binding(
         )
     finally:
         conn.close()
+    _invalidate_routing_cache()
 
 
 def add_mcp_binding(
@@ -1666,7 +1650,9 @@ def add_mcp_binding(
         "id", "domain_id", "mcp_server_id", "capability_type", "capability_name", "enabled",
         "server_name", "server_slug", "server_url", "server_kind",
     ]
-    return _row_to_dict(cols, rows[0])
+    binding = _row_to_dict(cols, rows[0])
+    _invalidate_routing_cache()
+    return binding
 
 
 def remove_mcp_binding(binding_id: str) -> bool:
@@ -1678,6 +1664,8 @@ def remove_mcp_binding(binding_id: str) -> bool:
         )
     finally:
         conn.close()
+    if rows:
+        _invalidate_routing_cache()
     return bool(rows)
 
 
@@ -2257,13 +2245,45 @@ def get_agent(agent_id: str) -> dict | None:
             """,
             agent_id=agent_id,
         )
+        prompt_rows = conn.run(
+            f"""
+            SELECT p.id::text, p.agent_id::text, p.mcp_server_id::text, p.prompt_name,
+                   s.name AS server_name, s.slug AS server_slug, s.url AS server_url
+            FROM {schema}.agent_mcp_prompts p
+            JOIN {schema}.mcp_servers s ON s.id = p.mcp_server_id
+            WHERE p.agent_id = :agent_id::uuid
+            ORDER BY s.name, p.prompt_name
+            """,
+            agent_id=agent_id,
+        )
+        resource_rows = conn.run(
+            f"""
+            SELECT r.id::text, r.agent_id::text, r.mcp_server_id::text, r.resource_uri,
+                   s.name AS server_name, s.slug AS server_slug, s.url AS server_url
+            FROM {schema}.agent_mcp_resources r
+            JOIN {schema}.mcp_servers s ON s.id = r.mcp_server_id
+            WHERE r.agent_id = :agent_id::uuid
+            ORDER BY s.name, r.resource_uri
+            """,
+            agent_id=agent_id,
+        )
     finally:
         conn.close()
     tool_cols = [
         "id", "agent_id", "mcp_server_id", "tool_name",
         "server_name", "server_slug", "server_url",
     ]
+    prompt_cols = [
+        "id", "agent_id", "mcp_server_id", "prompt_name",
+        "server_name", "server_slug", "server_url",
+    ]
+    resource_cols = [
+        "id", "agent_id", "mcp_server_id", "resource_uri",
+        "server_name", "server_slug", "server_url",
+    ]
     agent["tools"] = [_row_to_dict(tool_cols, row) for row in tool_rows]
+    agent["prompts"] = [_row_to_dict(prompt_cols, row) for row in prompt_rows]
+    agent["resources"] = [_row_to_dict(resource_cols, row) for row in resource_rows]
     return agent
 
 
@@ -2301,6 +2321,8 @@ def create_agent(
         conn.close()
     agent = _agent_row_to_dict(rows[0])
     agent["tools"] = []
+    agent["prompts"] = []
+    agent["resources"] = []
     return agent
 
 
@@ -2378,6 +2400,78 @@ def set_agent_tools(agent_id: str, tools: list[dict]) -> list[dict]:
     return agent["tools"] if agent else []
 
 
+def set_agent_mcp_kit(
+    agent_id: str,
+    *,
+    tools: list[dict] | None = None,
+    prompts: list[dict] | None = None,
+    resources: list[dict] | None = None,
+) -> dict | None:
+    """Replace saved MCP tools, prompts, and resources for an agent."""
+    conn, schema = connect()
+    try:
+        conn.run(
+            f"DELETE FROM {schema}.agent_mcp_tools WHERE agent_id = :agent_id::uuid",
+            agent_id=agent_id,
+        )
+        conn.run(
+            f"DELETE FROM {schema}.agent_mcp_prompts WHERE agent_id = :agent_id::uuid",
+            agent_id=agent_id,
+        )
+        conn.run(
+            f"DELETE FROM {schema}.agent_mcp_resources WHERE agent_id = :agent_id::uuid",
+            agent_id=agent_id,
+        )
+        for item in tools or []:
+            server_id = item.get("mcp_server_id")
+            tool_name = (item.get("tool_name") or "").strip()
+            if not server_id or not tool_name:
+                continue
+            conn.run(
+                f"""
+                INSERT INTO {schema}.agent_mcp_tools (agent_id, mcp_server_id, tool_name)
+                VALUES (:agent_id::uuid, :mcp_server_id::uuid, :tool_name)
+                ON CONFLICT (agent_id, mcp_server_id, tool_name) DO NOTHING
+                """,
+                agent_id=agent_id,
+                mcp_server_id=server_id,
+                tool_name=tool_name,
+            )
+        for item in prompts or []:
+            server_id = item.get("mcp_server_id")
+            prompt_name = (item.get("prompt_name") or "").strip()
+            if not server_id or not prompt_name:
+                continue
+            conn.run(
+                f"""
+                INSERT INTO {schema}.agent_mcp_prompts (agent_id, mcp_server_id, prompt_name)
+                VALUES (:agent_id::uuid, :mcp_server_id::uuid, :prompt_name)
+                ON CONFLICT (agent_id, mcp_server_id, prompt_name) DO NOTHING
+                """,
+                agent_id=agent_id,
+                mcp_server_id=server_id,
+                prompt_name=prompt_name,
+            )
+        for item in resources or []:
+            server_id = item.get("mcp_server_id")
+            resource_uri = (item.get("resource_uri") or "").strip()
+            if not server_id or not resource_uri:
+                continue
+            conn.run(
+                f"""
+                INSERT INTO {schema}.agent_mcp_resources (agent_id, mcp_server_id, resource_uri)
+                VALUES (:agent_id::uuid, :mcp_server_id::uuid, :resource_uri)
+                ON CONFLICT (agent_id, mcp_server_id, resource_uri) DO NOTHING
+                """,
+                agent_id=agent_id,
+                mcp_server_id=server_id,
+                resource_uri=resource_uri,
+            )
+    finally:
+        conn.close()
+    return get_agent(agent_id)
+
+
 def _coerce_jsonb_steps(raw: Any) -> Any:
     if raw is None:
         return []
@@ -2415,7 +2509,7 @@ def _enrich_flow_steps(flow: dict) -> dict:
             continue
         agent_id = node.get("agent_id")
         item = dict(node)
-        if agent_id:
+        if agent_id and item.get("kind") != "task":
             agent = get_agent(agent_id)
             if agent:
                 item["agent_name"] = agent.get("name")

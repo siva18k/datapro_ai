@@ -40,7 +40,7 @@ from catalog_service import (
     test_dataset_connection,
 )
 from dataset_connectors.registry import CONNECTOR_SOURCE_TYPES, is_content_connector, is_remote_connector
-from connections_service import get_connection_by_name, list_connections
+from connections_service import bind_source_to_saved_connection
 from ingest_service import SUPPORTED_EXTENSIONS
 from structured_db import (
     list_schema_tables_for_source,
@@ -54,55 +54,11 @@ from relationship_inference import build_relationships_section, merge_relationsh
 router = APIRouter(tags=["datasets"])
 
 DATASET_TYPES = CONNECTOR_SOURCE_TYPES
-_POSTGRES_LOCAL_KEYS = {"host", "port", "user", "password", "database", "sslmode"}
-
-
-def _normalize_structured_config(connector: str, config: dict | None) -> dict | None:
-    if not isinstance(config, dict):
-        return config
+def _bind_structured_dataset(connector: str, config: dict | None) -> tuple[str, dict | None]:
     if connector not in {"postgres", "trino"}:
-        return config
-
-    cfg = dict(config)
-    connection_id = str(cfg.get("connection_id") or "").strip()
-    if not connection_id:
-        return cfg
-
-    from connections_service import connection_config
-
-    try:
-        linked = connection_config(connection_id)
-    except ValueError:
-        # Repair datasets whose saved connection was deleted and recreated.
-        replacement = get_connection_by_name(str(cfg.get("connection_name") or ""))
-        if not replacement:
-            postgres_connections = [
-                row for row in list_connections()
-                if str(row.get("connector") or "").strip().lower() == "postgres"
-            ]
-            replacement = postgres_connections[0] if len(postgres_connections) == 1 else None
-        if not replacement:
-            raise
-        connection_id = str(replacement["id"])
-        linked = connection_config(connection_id)
-    normalized: dict[str, object] = {
-        "connection_id": connection_id,
-        "connection_name": str(
-            cfg.get("connection_name") or linked.get("connection_name") or ""
-        ).strip(),
-    }
-
-    if connector == "postgres":
-        schema = str(cfg.get("schema") or linked.get("schema") or "public").strip() or "public"
-        normalized["schema"] = schema
-        return normalized
-
-    catalog = str(cfg.get("catalog") or linked.get("catalog") or "").strip()
-    schema = str(cfg.get("schema") or linked.get("schema") or "public").strip() or "public"
-    if catalog:
-        normalized["catalog"] = catalog
-    normalized["schema"] = schema
-    return normalized
+        return connector, config
+    bound = bind_source_to_saved_connection(config)
+    return str(bound["connector"]), bound["config"]
 
 
 class SyncBody(BaseModel):
@@ -192,15 +148,15 @@ def create_dataset(domain_id: str, body: DatasetCreate):
     if body.connector not in DATASET_TYPES:
         raise HTTPException(400, f"Unknown connector: {body.connector}")
     try:
-        config = _normalize_structured_config(body.connector, body.config)
+        connector, config = _bind_structured_dataset(body.connector, body.config)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return create_source(
         domain_id,
         body.name,
         description=body.description,
-        source_type=DATASET_TYPES[body.connector],
-        connector=body.connector,
+        source_type=DATASET_TYPES[connector],
+        connector=connector,
         config=config,
     )
 
@@ -227,18 +183,25 @@ def patch_dataset(dataset_id: str, body: DatasetUpdate):
     if not source:
         raise HTTPException(404, "Dataset not found")
     fields = body.model_dump(exclude_none=True)
-    target_connector = source.get("connector")
-    if "connector" in fields:
-        connector = fields.pop("connector")
-        if connector not in DATASET_TYPES:
-            raise HTTPException(400, f"Unknown connector: {connector}")
-        update_source(dataset_id, connector=connector, source_type=DATASET_TYPES[connector])
-        target_connector = connector
-    if "config" in fields:
+    target_connector = str(fields.pop("connector", None) or source.get("connector") or "")
+    incoming_config = fields.get("config")
+    if target_connector in {"postgres", "trino"} or (
+        isinstance(incoming_config, dict) and incoming_config.get("connection_id")
+    ):
         try:
-            fields["config"] = _normalize_structured_config(str(target_connector or ""), fields["config"])
+            merged = dict(source.get("config") or {})
+            if isinstance(incoming_config, dict):
+                merged.update(incoming_config)
+            target_connector, fields["config"] = _bind_structured_dataset(
+                target_connector if target_connector in {"postgres", "trino"} else "trino",
+                merged,
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+    if target_connector and target_connector != source.get("connector"):
+        if target_connector not in DATASET_TYPES:
+            raise HTTPException(400, f"Unknown connector: {target_connector}")
+        update_source(dataset_id, connector=target_connector, source_type=DATASET_TYPES[target_connector])
     if fields:
         update_source(dataset_id, **fields)
     return get_source(source_id=dataset_id)

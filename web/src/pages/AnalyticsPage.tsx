@@ -5,7 +5,7 @@ import { AnalyticsPanel } from "../components/AnalyticsPanel";
 import { AgentRunResearchView } from "../components/AgentRunResearchView";
 import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
-import { api } from "../api/client";
+import { api, isAbortError } from "../api/client";
 import { AskPromptComposer, buildAskQuestion, type AskAttachment } from "../components/AskPromptComposer";
 import type { AnalyticsResponse, Agent, AgentFlow, AgentRunStep } from "../types";
 import { buildAskConversationHistory, sessionResetTurns, shouldSendConversationHistory, type ConversationTurn } from "../utils/askConversation";
@@ -31,6 +31,7 @@ export function AnalyticsPage() {
     reportHtml: string | null;
   } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -78,6 +79,7 @@ export function AnalyticsPage() {
           conversation_history: history.length ? history : undefined,
         },
         (message) => setActivityStatus(message),
+        abortRef.current?.signal,
       ),
     onMutate: () => setProcessing(true),
     onSettled: () => {
@@ -131,6 +133,7 @@ export function AnalyticsPage() {
           }
         },
         extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+        abortRef.current?.signal,
       );
       return { entityLabel: agent.name, entityKind: "agent" as const, steps: [...steps], reportHtml };
     },
@@ -177,6 +180,7 @@ export function AnalyticsPage() {
           }
         },
         extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+        abortRef.current?.signal,
       );
       return { entityLabel: flow.name, entityKind: "flow" as const, steps: [...steps], reportHtml };
     },
@@ -196,17 +200,35 @@ export function AnalyticsPage() {
     },
   });
 
-  const isPending = processing;
-  const submitError = run.isError
+  const isPending = run.isPending || agentRun.isPending || flowRun.isPending;
+  const submitError = run.isError && !isAbortError(run.error)
     ? String(run.error)
-    : agentRun.isError
+    : agentRun.isError && !isAbortError(agentRun.error)
       ? String(agentRun.error)
-      : flowRun.isError
+      : flowRun.isError && !isAbortError(flowRun.error)
         ? String(flowRun.error)
         : null;
 
+  const startRunAbort = () => {
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    return abortRef.current.signal;
+  };
+
+  const stopRun = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    run.reset();
+    agentRun.reset();
+    flowRun.reset();
+    setProcessing(false);
+    setActivityStatus(null);
+    setLiveRun(null);
+  };
+
   const submit = () => {
     if (isPending) return;
+    startRunAbort();
 
     if (selectedFlow) {
       const extra = buildAskQuestion(prompt, attachments);
@@ -264,7 +286,7 @@ export function AnalyticsPage() {
       <div className="shrink-0">
         <PageHeader
           title="Analytics"
-          description="Analyze your multi-domain data effortlessly"
+          description="Explore your data intelligently"
         />
       </div>
 
@@ -283,6 +305,7 @@ export function AnalyticsPage() {
                 value={prompt}
                 onChange={setPrompt}
                 onSubmit={submit}
+                onStop={stopRun}
                 isPending={isPending}
                 error={submitError}
                 attachments={attachments}

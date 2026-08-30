@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from api.llm import generate_answer
-from catalog_db import get_mcp_server
+from catalog_db import get_domain, get_mcp_server
 from mcp_ask_planner import (
     McpToolResult,
     _format_structured_tool_result,
@@ -23,12 +23,18 @@ from mcp_client import (
     check_mcp_server,
     get_default_mcp_url,
     get_prompt_preview,
+    read_resource_preview,
 )
 from mcp_domain_service import domain_mcp_capabilities
-from mcp_reference_service import gather_domain_reference_texts
+from mcp_reference_service import (
+    expand_domain_uri,
+    gather_domain_reference_texts,
+    is_reference_resource_uri,
+    read_reference_resource_content,
+)
 
 # Write / side-effect tools are not invoked during agent runs unless explicitly needed later.
-BLOCKED_AGENT_MCP_TOOLS = frozenset({"ingest_documents"})
+BLOCKED_AGENT_MCP_TOOLS = frozenset({"ingest_documents", "send_email", "sync_dataset"})
 
 _GROUNDED_PROMPTS = frozenset({"grounded_answer", "domain_grounded_answer"})
 
@@ -450,6 +456,243 @@ def execute_agent_domain_mcp(
     return enrichment
 
 
+def _plan_saved_kit_tools(
+    instructions: str,
+    tools: list[dict[str, Any]],
+    *,
+    domain_slug: str | None,
+) -> list[dict[str, Any]]:
+    query = instructions.strip().splitlines()[0][:500] if instructions.strip() else "overview"
+    planned: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for tool in tools:
+        name = (tool.get("tool_name") or "").strip()
+        server_id = str(tool.get("mcp_server_id") or "")
+        if not name or not server_id or name in BLOCKED_AGENT_MCP_TOOLS:
+            continue
+        key = (server_id, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        args: dict[str, str] = {}
+        if name == "search_documents":
+            args = {"query": query, "top_k": "5"}
+        elif name in ("list_domain_sources", "get_rag_profile"):
+            if domain_slug:
+                args = {"domain": domain_slug}
+        elif name == "resolve_time_period":
+            args = {"requirement": instructions[:800]}
+        elif name == "search_inbox":
+            args = {"query": query, "limit": "10"}
+        planned.append(
+            {
+                "tool_name": name,
+                "mcp_server_id": server_id,
+                "arguments": args,
+            }
+        )
+    return planned[:10]
+
+
+def _execute_saved_prompt(
+    prompt: dict[str, Any],
+    *,
+    instructions: str,
+    domain: dict[str, Any] | None,
+    enrichment: AgentMcpEnrichment,
+) -> None:
+    prompt_name = (prompt.get("prompt_name") or "").strip()
+    if not prompt_name:
+        return
+    domain_id = domain.get("id") if domain else None
+    domain_slug = domain.get("slug") if domain else None
+    query = instructions.strip().splitlines()[0][:500] if instructions.strip() else "overview"
+    args: dict[str, str] = {"question": query, "top_k": "5"}
+
+    if prompt_name.startswith("local:"):
+        from domain_prompt_service import local_prompt_slug, render_domain_local_prompt
+
+        if not domain_id:
+            return
+        slug = local_prompt_slug(prompt_name)
+        try:
+            text = render_domain_local_prompt(
+                domain_id,
+                slug,
+                domain_slug=domain_slug,
+                user_args={"question": query},
+            )
+        except Exception as exc:
+            text = f"[prompt error: {exc}]"
+        if text and text.strip():
+            enrichment.prompt_results.append(
+                {
+                    "name": prompt_name,
+                    "domain": domain_slug,
+                    "server": "local",
+                    "text": text[:12000],
+                }
+            )
+            enrichment.trace.append(
+                {
+                    "kind": "prompt",
+                    "source": "kit",
+                    "domain": domain_slug,
+                    "prompt": prompt_name,
+                    "server": "local",
+                }
+            )
+        return
+
+    url = (prompt.get("server_url") or "").strip()
+    if not url:
+        server = get_mcp_server(server_id=prompt.get("mcp_server_id"))
+        url = ((server or {}).get("url") or "").strip()
+    if not url or not check_mcp_server(url):
+        enrichment.trace.append(
+            {
+                "kind": "prompt",
+                "source": "kit",
+                "prompt": prompt_name,
+                "status": "unreachable",
+            }
+        )
+        return
+
+    if domain_slug and prompt_name == "domain_grounded_answer":
+        args["domain"] = domain_slug
+    if prompt_name == "domain_sql_context" and domain_id:
+        domain_row = get_domain(domain_id=domain_id) or {}
+        refs = gather_domain_reference_texts(domain_id, domain_slug=domain_slug)
+        args["domain"] = domain_slug or ""
+        args["domain_name"] = domain_row.get("name") or domain_slug or "Domain"
+        args["schema"] = refs["schema"][:8000]
+        args["calendar"] = refs["calendar"][:4000]
+        args["glossary"] = refs["glossary"][:4000]
+        args["sql_notes"] = refs["sql_notes"][:4000]
+        tool_lines = []
+        for tr in enrichment.tool_results[:4]:
+            tool_lines.append(f"- {tr.tool}: {(tr.raw or '')[:500]}")
+        args["tool_context"] = "\n".join(tool_lines) if tool_lines else "(none)"
+    try:
+        text = get_prompt_preview(url, prompt_name, args)
+    except Exception as exc:
+        text = f"[prompt error: {exc}]"
+    if text and text.strip():
+        enrichment.prompt_results.append(
+            {
+                "name": prompt_name,
+                "domain": domain_slug,
+                "server": prompt.get("server_slug") or prompt.get("server_name"),
+                "text": text[:12000],
+            }
+        )
+        enrichment.trace.append(
+            {
+                "kind": "prompt",
+                "source": "kit",
+                "domain": domain_slug,
+                "prompt": prompt_name,
+                "server": prompt.get("server_slug"),
+            }
+        )
+
+
+def execute_saved_agent_kit(
+    instructions: str,
+    *,
+    agent_tools: list[dict[str, Any]],
+    agent_prompts: list[dict[str, Any]],
+    agent_resources: list[dict[str, Any]],
+    resolved_domains: list[dict[str, Any]],
+) -> AgentMcpEnrichment:
+    """Run the MCP kit persisted on save — no planner LLM."""
+    enrichment = AgentMcpEnrichment(reasoning="Using MCP kit saved with this agent.")
+    tools = enrich_agent_tool_bindings(agent_tools)
+    domains = resolved_domains[:3] or [None]
+    primary = resolved_domains[0] if resolved_domains else {}
+    primary_slug = primary.get("slug")
+
+    seen_uris: set[str] = set()
+    for domain in domains:
+        domain_id = domain.get("id") if domain else None
+        domain_slug = domain.get("slug") if domain else None
+        for item in agent_resources:
+            uri_tmpl = (item.get("resource_uri") or "").strip()
+            if not uri_tmpl:
+                continue
+            uri = expand_domain_uri(uri_tmpl, domain_slug)
+            if uri in seen_uris:
+                continue
+            seen_uris.add(uri)
+            try:
+                if is_reference_resource_uri(uri) or is_reference_resource_uri(uri_tmpl):
+                    content = read_reference_resource_content(
+                        uri if is_reference_resource_uri(uri) else expand_domain_uri(uri_tmpl, domain_slug),
+                        domain_id=domain_id,
+                        domain_slug=domain_slug,
+                    )
+                    kind = "reference"
+                    server_label = "datapro"
+                else:
+                    server = get_mcp_server(server_id=item.get("mcp_server_id"))
+                    url = ((server or {}).get("url") or "").strip()
+                    if not url or not check_mcp_server(url):
+                        enrichment.trace.append(
+                            {
+                                "kind": "resource",
+                                "source": "kit",
+                                "uri": uri,
+                                "status": "unreachable",
+                            }
+                        )
+                        continue
+                    content = read_resource_preview(url, uri)
+                    kind = "optional"
+                    server_label = (server or {}).get("slug") or (server or {}).get("name")
+            except Exception as exc:
+                content = f"[resource error: {exc}]"
+                kind = "optional"
+                server_label = item.get("server_slug")
+            enrichment.resources.append(
+                {
+                    "uri": uri,
+                    "content": (content or "")[:8000],
+                    "kind": kind,
+                    "server": server_label,
+                }
+            )
+            enrichment.trace.append(
+                {
+                    "kind": "resource",
+                    "source": "kit",
+                    "resource_kind": kind,
+                    "uri": uri,
+                    "server": server_label,
+                    "domain": domain_slug,
+                }
+            )
+
+    if tools:
+        planned = _plan_saved_kit_tools(instructions, tools, domain_slug=primary_slug)
+        tool_results, trace = execute_agent_tool_plan(planned, tools, domain_slug=primary_slug)
+        enrichment.tool_results.extend(tool_results)
+        enrichment.trace.extend(trace)
+
+    for domain in domains:
+        for prompt in agent_prompts[:4]:
+            _execute_saved_prompt(
+                prompt,
+                instructions=instructions,
+                domain=domain if isinstance(domain, dict) else None,
+                enrichment=enrichment,
+            )
+            if len(enrichment.prompt_results) >= 3:
+                return enrichment
+
+    return enrichment
+
+
 def run_agent_mcp_enrichment(
     instructions: str,
     *,
@@ -458,8 +701,20 @@ def run_agent_mcp_enrichment(
     model: str,
     backend: str,
     base_url: str,
+    agent_prompts: list[dict[str, Any]] | None = None,
+    agent_resources: list[dict[str, Any]] | None = None,
+    use_saved_kit: bool = False,
 ) -> AgentMcpEnrichment:
     """Plan and execute agent-bound and domain-bound MCP capabilities."""
+    if use_saved_kit:
+        return execute_saved_agent_kit(
+            instructions,
+            agent_tools=agent_tools,
+            agent_prompts=agent_prompts or [],
+            agent_resources=agent_resources or [],
+            resolved_domains=resolved_domains,
+        )
+
     enrichment = AgentMcpEnrichment()
     tools = enrich_agent_tool_bindings(agent_tools)
     primary_slug = resolved_domains[0].get("slug") if resolved_domains else None

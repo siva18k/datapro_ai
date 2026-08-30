@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { ColumnMeta, Dataset, TableMeta, TableRole } from "../types";
 import { CONNECTOR_LABELS } from "../types";
@@ -42,21 +43,16 @@ function normalizeConnectionConfig(connector: string, form: PgForm, existing: Pg
   if (!isStructuredSqlConnector(connector) && dataset && !merged.path) {
     merged.path = `data/${dataset.domain_slug}/${dataset.slug}`;
   }
-  if (connector === "postgres") {
-    const linkedConnectionId = String(merged.connection_id ?? "").trim();
-    if (linkedConnectionId) {
-      // Keep saved connection credentials authoritative when local fields are blank.
-      for (const key of ["host", "user", "password", "database", "sslmode"]) {
-        const value = merged[key as keyof typeof merged];
-        if (typeof value === "string" && !value.trim()) {
-          delete merged[key as keyof typeof merged];
-        }
-      }
-      const portValue = merged.port;
-      if (typeof portValue === "string" && !portValue.trim()) {
-        delete merged.port;
-      }
+  if (isStructuredSqlConnector(connector)) {
+    const connectionId = String(merged.connection_id ?? "").trim();
+    const schema = String(merged.schema ?? existing.schema ?? "public").trim() || "public";
+    const connectionName = String(merged.connection_name ?? existing.connection_name ?? "");
+    const next: Record<string, unknown> = { ...existing, ...form, connection_id: connectionId, schema };
+    if (connectionName) next.connection_name = connectionName;
+    for (const key of ["host", "port", "user", "password", "database", "sslmode", "catalog", "trino_catalog"]) {
+      delete next[key];
     }
+    return next;
   }
   return merged;
 }
@@ -122,6 +118,75 @@ function useSaveFlash(saveCount: number, ms = 3000) {
 }
 
 /** Persist connection form to API before operations that read stored config. */
+function StructuredConnectionFields({
+  dataset,
+  pgForm,
+  setPgForm,
+}: {
+  dataset: Dataset;
+  pgForm: PgForm;
+  setPgForm: (form: PgForm) => void;
+}) {
+  const { data: connections } = useQuery({
+    queryKey: ["db-connections"],
+    queryFn: api.listDbConnections,
+  });
+  const selectedId = String(pgForm.connection_id ?? dataset.config?.connection_id ?? "");
+  const selected = connections?.find((row) => row.id === selectedId);
+
+  return (
+    <>
+      <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+        Reuse a Trino or native Postgres connection from{" "}
+        <Link to="/settings?tab=connections" className="underline">
+          Settings → Connections
+        </Link>
+        . Credentials stay there and are shared across domains.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="field mb-0">
+          <label className="label">Settings connection</label>
+          <select
+            className="select"
+            value={selectedId}
+            onChange={(e) => {
+              const next = connections?.find((row) => row.id === e.target.value);
+              setPgForm({
+                ...pgForm,
+                connection_id: e.target.value,
+                connection_name: next?.name ?? "",
+                connector: next?.connector ?? pgForm.connector,
+                schema: String(pgForm.schema || next?.schema || "public"),
+              });
+            }}
+          >
+            <option value="" disabled>
+              Select a Settings connection…
+            </option>
+            {(connections ?? []).map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.name} · {row.connector === "postgres" ? "Native Postgres" : "Trino"} ·{" "}
+                {row.connector === "postgres" ? row.host : `${row.catalog}.${row.schema}`}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field mb-0">
+          <label className="label">Dataset schema</label>
+          <input
+            className="input font-mono text-xs"
+            value={String(pgForm.schema ?? selected?.schema ?? "public")}
+            onChange={(e) => setPgForm({ ...pgForm, schema: e.target.value })}
+          />
+          <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+            Optional override on this dataset. Host, catalog, and password come from Settings.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
 async function persistConnection(
   datasetId: string,
   connector: string,
@@ -396,7 +461,11 @@ function ConnectionTab({
       existingConfig,
       dataset,
     );
-    return api.updateDataset(dataset.id, { config: payload });
+    const nextConnector = String(pgForm.connector || connector);
+    return api.updateDataset(dataset.id, {
+      connector: isStructuredSqlConnector(nextConnector) ? nextConnector : connector,
+      config: payload,
+    });
   };
 
   const save = useMutation({
@@ -426,8 +495,6 @@ function ConnectionTab({
     onSuccess: () => qc.invalidateQueries({ queryKey: ["datasets"] }),
   });
 
-  const connName = String(pgForm.connection_name ?? existingConfig.connection_name ?? "");
-
   return (
     <div className="max-w-3xl space-y-5">
       <div className="field mb-0 max-w-md">
@@ -455,53 +522,11 @@ function ConnectionTab({
       </div>
 
       {isStructuredSqlConnector(connector) && (
-        <>
-          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-            {connector === "postgres"
-              ? "PostgreSQL connection for this dataset. Use the Data tab to discover tables."
-              : "Trino catalog and schema for this dataset. Use the Data tab to discover tables."}
-            {connName ? ` Linked from «${connName}».` : ""}
-          </p>
-          {connector === "postgres" ? (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="field mb-0">
-                <label className="label">Database</label>
-                <input
-                  className="input font-mono text-xs"
-                  value={String(pgForm.database ?? "postgres")}
-                  onChange={(e) => setPgForm({ ...pgForm, database: e.target.value })}
-                />
-              </div>
-              <div className="field mb-0">
-                <label className="label">Schema</label>
-                <input
-                  className="input font-mono text-xs"
-                  value={String(pgForm.schema ?? "public")}
-                  onChange={(e) => setPgForm({ ...pgForm, schema: e.target.value })}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="field mb-0">
-                <label className="label">Trino catalog</label>
-                <input
-                  className="input font-mono text-xs"
-                  value={String(pgForm.catalog ?? "")}
-                  onChange={(e) => setPgForm({ ...pgForm, catalog: e.target.value })}
-                />
-              </div>
-              <div className="field mb-0">
-                <label className="label">Schema</label>
-                <input
-                  className="input font-mono text-xs"
-                  value={String(pgForm.schema ?? "public")}
-                  onChange={(e) => setPgForm({ ...pgForm, schema: e.target.value })}
-                />
-              </div>
-            </div>
-          )}
-        </>
+        <StructuredConnectionFields
+          dataset={dataset}
+          pgForm={pgForm}
+          setPgForm={setPgForm}
+        />
       )}
 
       {connector === "upload" && (

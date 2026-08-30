@@ -299,6 +299,33 @@ export interface AgentToolBinding {
   server_slug?: string;
 }
 
+export interface AgentPromptBinding {
+  id?: string;
+  agent_id?: string;
+  mcp_server_id: string;
+  prompt_name: string;
+  server_name?: string;
+  server_slug?: string;
+}
+
+export interface AgentResourceBinding {
+  id?: string;
+  agent_id?: string;
+  mcp_server_id: string;
+  resource_uri: string;
+  server_name?: string;
+  server_slug?: string;
+}
+
+export interface AgentMcpKit {
+  resolved_at?: string;
+  domain_method?: string;
+  domain_slugs?: string[];
+  tool_count?: number;
+  prompt_count?: number;
+  resource_count?: number;
+}
+
 export interface Agent {
   id: string;
   slug: string;
@@ -310,6 +337,9 @@ export interface Agent {
   domain_slugs?: string[];
   domain_warnings?: string[];
   tools?: AgentToolBinding[];
+  prompts?: AgentPromptBinding[];
+  resources?: AgentResourceBinding[];
+  mcp_kit?: AgentMcpKit;
   created_at?: string;
   updated_at?: string;
 }
@@ -329,18 +359,24 @@ export interface AgentRunResult {
 }
 
 export interface AgentFlowStep {
-  agent_id: string;
+  agent_id?: string;
+  kind?: "agent" | "task";
   handoff?: string;
   agent_name?: string;
   agent_slug?: string;
+  title?: string;
+  instructions?: string;
 }
 
 export interface AgentFlowGraphNode {
   id: string;
-  agent_id: string;
+  kind?: "agent" | "task";
+  agent_id?: string;
   column: 0 | 1;
   agent_name?: string;
   agent_slug?: string;
+  title?: string;
+  instructions?: string;
 }
 
 export interface AgentFlowGraphEdge {
@@ -363,6 +399,7 @@ export interface AgentFlow {
   instructions: string;
   steps: AgentFlowStep[] | AgentFlowGraph;
   enabled: boolean;
+  lint_warnings?: string[];
   created_at?: string;
   updated_at?: string;
 }
