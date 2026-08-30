@@ -90,9 +90,9 @@ export function SavedConnectionsPanel({
     <div className="flex h-full flex-col space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="font-semibold">Database connections</h2>
+          <h2 className="font-semibold">Connections</h2>
           <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
-            Catalog Postgres (metadata) plus Trino-backed warehouse connections for business datasets
+            Catalog database, Trino coordinator, and warehouse bindings for business datasets
           </p>
         </div>
         <button type="button" className="btn btn-sm shrink-0" onClick={openNew}>

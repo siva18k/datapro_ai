@@ -41,7 +41,12 @@ MANAGED_KEYS = (
     "TRINO_HTTP_SCHEME",
     "TRINO_VERIFY_SSL",
     "ASK_CONVERSATION_TURNS",
+    "ASK_RETRIEVAL_TOP_K",
 )
+
+DEFAULT_ASK_RETRIEVAL_TOP_K = 3
+MIN_ASK_RETRIEVAL_TOP_K = 1
+MAX_ASK_RETRIEVAL_TOP_K = 8
 
 SECRET_KEYS = frozenset(
     {
@@ -220,6 +225,17 @@ def get_ask_conversation_turns() -> int:
     return max(0, min(value, MAX_ASK_CONVERSATION_TURNS))
 
 
+def get_ask_retrieval_top_k() -> int:
+    raw = get_raw_settings().get("ASK_RETRIEVAL_TOP_K", "").strip()
+    if not raw:
+        return DEFAULT_ASK_RETRIEVAL_TOP_K
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_ASK_RETRIEVAL_TOP_K
+    return max(MIN_ASK_RETRIEVAL_TOP_K, min(value, MAX_ASK_RETRIEVAL_TOP_K))
+
+
 def get_llm_settings() -> dict[str, str]:
     from llm_providers import DEFAULT_LLM_BACKEND
 
@@ -295,6 +311,8 @@ def get_public_settings() -> dict[str, Any]:
         "ask": {
             "conversation_turns": get_ask_conversation_turns(),
             "max_conversation_turns": 20,
+            "retrieval_top_k": get_ask_retrieval_top_k(),
+            "max_retrieval_top_k": MAX_ASK_RETRIEVAL_TOP_K,
         },
         "trino": get_public_trino_settings(),
     }
@@ -380,6 +398,14 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             turns = 0
         updates["ASK_CONVERSATION_TURNS"] = str(max(0, min(turns, MAX_ASK_CONVERSATION_TURNS)))
+    if ask.get("retrieval_top_k") is not None:
+        try:
+            top_k = int(ask.get("retrieval_top_k"))
+        except (TypeError, ValueError):
+            top_k = DEFAULT_ASK_RETRIEVAL_TOP_K
+        updates["ASK_RETRIEVAL_TOP_K"] = str(
+            max(MIN_ASK_RETRIEVAL_TOP_K, min(top_k, MAX_ASK_RETRIEVAL_TOP_K))
+        )
 
     llm = payload.get("llm") or {}
     if llm.get("default_backend") is not None:

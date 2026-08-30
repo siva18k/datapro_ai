@@ -4,7 +4,7 @@
 
 **Data Catalog** — domains, datasets, connections, table metadata, uploads.
 
-**Ask** — chat; you can override the domain, tweak Top K, turn on debug mode to see which chunks came back. Follow-up messages reuse prior SQL results (same session until **New chat**) so refinements like “show that in USD” stay on the same breakdown. After **5 follow-ups** (configurable in Settings), the app summarizes the thread and starts a fresh chat automatically. Unrelated questions are detected as a **new topic** and processed without old context.
+**Ask** — chat; you can override the domain, turn on debug mode to see which chunks came back. Configure **Top K** (RAG chunk count) in **Settings → LLM → Ask**. Follow-up messages reuse prior SQL results (same session until **New chat**) so refinements like “show that in USD” stay on the same breakdown. After **5 follow-ups** (configurable in Settings), the app summarizes the thread and starts a fresh chat automatically. Unrelated questions are detected as a **new topic** and processed without old context.
 
 **Analytics** — natural-language dashboards (needs Postgres datasets). Follow-up prompts in the same session reuse the prior dashboard data until you click **Clear**; the same auto-summary and new-topic rules apply. Time-based questions (quarters, months, last year, etc.) call the MCP **`resolve_time_period`** tool when the MCP server is running; chart and table axes show period labels like **Q1-2024** instead of raw SQL timestamp buckets.
 

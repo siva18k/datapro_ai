@@ -11,7 +11,6 @@ import { AboutPage } from "./pages/AboutPage";
 import { AskDebugPage } from "./pages/AskDebugPage";
 import { AskPage } from "./pages/AskPage";
 import { CatalogPage } from "./pages/CatalogPage";
-import { McpPage } from "./pages/McpPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 const queryClient = new QueryClient({
@@ -41,7 +40,7 @@ export default function App() {
             <Route path="agents" element={<AgentsPage />} />
             <Route path="agent-flows" element={<AgentFlowsPage />} />
             <Route path="rag" element={<Navigate to="/" replace />} />
-            <Route path="mcp" element={<McpPage />} />
+            <Route path="mcp" element={<Navigate to="/settings?tab=mcp" replace />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

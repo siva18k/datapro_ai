@@ -955,6 +955,27 @@ button.sidebar-hint {
   .settings-servers-stack {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+  .settings-servers-stack--two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.catalog-domain-mcp-wrap {
+  border-bottom: 1px solid var(--color-border);
+}
+.catalog-domain-mcp {
+  @apply px-5 py-4;
+}
+.catalog-domain-mcp-toggle {
+  @apply flex w-full items-center gap-3 text-left;
+  color: var(--color-text);
+}
+.catalog-domain-mcp-chevron {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+.catalog-domain-mcp-body {
+  @apply mt-4 border-t pt-4;
+  border-color: var(--color-border);
 }
 .db-connection-summary {
   @apply m-0 grid gap-1.5 text-sm;
@@ -1043,7 +1064,29 @@ button.sidebar-hint {
   color: var(--color-text);
 }
 .agents-page-split {
-  @apply grid gap-4 lg:grid-cols-[minmax(11rem,14rem)_1fr] lg:items-start;
+  @apply grid gap-4;
+}
+.agents-top-selector {
+  @apply mb-4 md:hidden;
+}
+.agents-top-selector-scroll {
+  @apply flex gap-2 overflow-x-auto pb-1;
+}
+.agents-top-selector-tab {
+  @apply inline-flex max-w-[12rem] shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors;
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+}
+.agents-top-selector-tab:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+.agents-top-selector-tab--active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+  font-weight: 500;
 }
 .agents-list-tabs {
   @apply m-0 list-none space-y-1 p-0;
@@ -1070,6 +1113,16 @@ button.sidebar-hint {
 }
 .agents-list-tab-dot--on {
   background: var(--color-primary);
+}
+.agent-form-name-row {
+  @apply flex flex-wrap items-end justify-between gap-3;
+}
+.agent-form-name-row .field {
+  @apply mb-0 min-w-0 flex-1;
+}
+.agent-form-enabled {
+  @apply inline-flex shrink-0 items-center gap-2 pb-2 text-sm;
+  color: var(--color-text);
 }
 .agent-flow-builder {
   @apply grid gap-4 lg:grid-cols-[minmax(10rem,12rem)_1fr];

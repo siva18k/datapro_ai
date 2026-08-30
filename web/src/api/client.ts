@@ -728,7 +728,7 @@ export const api = {
     trino?: TrinoSettingsPayload;
     mcp_url?: string;
     embedding_model?: string;
-    ask?: { conversation_turns?: number };
+    ask?: { conversation_turns?: number; retrieval_top_k?: number };
     llm?: LlmSettingsPayload;
     mistral_api_key?: string;
   }) => request<AppSettings>("/settings", { method: "PUT", body: JSON.stringify(data) }),
@@ -1138,6 +1138,8 @@ export interface AppSettings {
   ask: {
     conversation_turns: number;
     max_conversation_turns: number;
+    retrieval_top_k: number;
+    max_retrieval_top_k: number;
   };
   trino: TrinoSettingsPublic;
 }

@@ -49,7 +49,9 @@ export function AgentToolPicker({ selected, onChange, disabled = false }: Props)
       <p className="mb-2 text-xs text-zinc-500">Select tools this agent may use during a test run.</p>
       <div className="agent-tool-picker max-h-48 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--color-border)" }}>
         {entries.length === 0 && (
-          <p className="text-sm text-zinc-500">No MCP servers registered. Add servers on the MCP page.</p>
+          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+            No MCP servers registered. Add servers under Settings → MCP.
+          </p>
         )}
         {entries.map((entry) => {
           const tools = entry.tools ?? [];

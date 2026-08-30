@@ -77,7 +77,6 @@ export function AskPage() {
   const [input, setInput] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [selectedFlow, setSelectedFlow] = useState<AgentFlow | null>(null);
-  const [topK, setTopK] = useState(3);
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>([]);
   const [debugMode, setDebugMode] = useState(false);
@@ -93,6 +92,7 @@ export function AskPage() {
     queryFn: api.getSettings,
   });
   const conversationTurns = settings?.ask?.conversation_turns ?? 5;
+  const retrievalTopK = settings?.ask?.retrieval_top_k ?? 3;
 
   const appendPipelineTrace = (step: PipelineTraceStep) => {
     const prev = pipelineTraceRef.current;
@@ -117,8 +117,6 @@ export function AskPage() {
   const sidebarPanel = useMemo(
     () => (
       <AskRetrievalPanel
-        topK={topK}
-        onTopKChange={setTopK}
         selectedDomains={selectedDomains}
         onSelectedDomainsChange={setSelectedDomains}
         outputFormats={outputFormats}
@@ -126,7 +124,7 @@ export function AskPage() {
         debugMode={debugMode}
       />
     ),
-    [topK, selectedDomains, outputFormats, debugMode],
+    [selectedDomains, outputFormats, debugMode],
   );
   useSetSidebarContent(sidebarPanel);
 
@@ -349,7 +347,7 @@ export function AskPage() {
     ask.mutate({
       question: q,
       displayQuestion,
-      topK,
+      topK: retrievalTopK,
       selectedDomains,
       debug: debugMode,
       conversationHistory,
@@ -401,8 +399,6 @@ export function AskPage() {
 
       <div className="card mb-4 shrink-0 md:hidden">
         <AskRetrievalPanel
-          topK={topK}
-          onTopKChange={setTopK}
           selectedDomains={selectedDomains}
           onSelectedDomainsChange={setSelectedDomains}
           outputFormats={outputFormats}

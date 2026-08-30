@@ -14,9 +14,15 @@ class ConversationTurn(BaseModel):
     rows: list[list[Any]] | None = None
 
 
+def _default_ask_top_k() -> int:
+    from settings_service import get_ask_retrieval_top_k
+
+    return get_ask_retrieval_top_k()
+
+
 class AskRequest(BaseModel):
     question: str
-    top_k: int = Field(default=3, ge=1, le=8)
+    top_k: int = Field(default_factory=_default_ask_top_k, ge=1, le=8)
     domain_override: str | None = None
     domain_overrides: list[str] | None = None
     conversation_history: list[ConversationTurn] = Field(default_factory=list)
