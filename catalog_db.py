@@ -1267,9 +1267,8 @@ _LEGACY_SOURCE_CONFIG_KEYS = frozenset(
 
 
 def migrate_postgres_sources_to_trino(*, dry_run: bool = True) -> list[dict[str, Any]]:
-    """Rewrite catalog datasets that still use direct Postgres config to Trino bindings."""
-    from connections_service import connection_config, get_connection
-    from trino_catalog_files import infer_trino_catalog_schema, is_legacy_postgres_row
+    """Rewrite structured datasets so they only reference Settings connections."""
+    from connections_service import bind_source_to_saved_connection
 
     conn, schema = connect()
     try:
@@ -1277,62 +1276,34 @@ def migrate_postgres_sources_to_trino(*, dry_run: bool = True) -> list[dict[str,
             f"""
             SELECT id::text, name, connector, config::text, source_type
             FROM {schema}.data_sources
-            WHERE connector = 'postgres'
+            WHERE connector IN ('postgres', 'trino')
             """
         )
     finally:
         conn.close()
 
     changes: list[dict[str, Any]] = []
-    for source_id, name, _connector, config_text, source_type in rows:
+    for source_id, name, connector, config_text, source_type in rows:
         cfg = json.loads(config_text or "{}")
-        connection_id = (cfg.get("connection_id") or "").strip()
-        catalog = (cfg.get("catalog") or "").strip()
-        schema_name = (cfg.get("schema") or "").strip()
-
-        if connection_id:
-            try:
-                binding = connection_config(connection_id)
-                catalog = binding.get("catalog") or catalog
-                schema_name = binding.get("schema") or schema_name
-            except ValueError:
-                saved = get_connection(connection_id)
-                if saved:
-                    catalog, schema_name = infer_trino_catalog_schema(saved)
-        elif cfg.get("host"):
-            catalog, schema_name = infer_trino_catalog_schema(cfg)
-        elif not catalog:
+        try:
+            bound = bind_source_to_saved_connection(cfg)
+        except ValueError:
             continue
-
-        if not catalog:
-            continue
-        schema_name = schema_name or "public"
-
-        new_cfg = {
-            k: v
-            for k, v in cfg.items()
-            if k not in _LEGACY_SOURCE_CONFIG_KEYS and k != "connector"
-        }
-        new_cfg["catalog"] = catalog
-        new_cfg["schema"] = schema_name
-        if connection_id:
-            new_cfg["connection_id"] = connection_id
-            saved = get_connection(connection_id)
-            if saved and saved.get("name"):
-                new_cfg["connection_name"] = saved["name"]
-
+        new_connector = str(bound["connector"])
+        new_cfg = bound["config"]
         change = {
             "id": source_id,
             "name": name,
-            "catalog": catalog,
-            "schema": schema_name,
+            "connector": new_connector,
+            "schema": new_cfg.get("schema"),
+            "connection_id": new_cfg.get("connection_id"),
         }
         changes.append(change)
         if dry_run:
             continue
         update_source(
             source_id,
-            connector="trino",
+            connector=new_connector,
             config=new_cfg,
             source_type=source_type or "structured",
         )

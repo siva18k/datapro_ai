@@ -21,6 +21,13 @@ import type {
 
 const BASE = "/api";
 
+export function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
+  );
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -265,11 +272,13 @@ export const api = {
     },
     onStatus: (message: string) => void,
     onTrace?: (step: PipelineTraceStep) => void,
+    signal?: AbortSignal,
   ): Promise<AskResponse> => {
     const res = await fetch(`${BASE}/ask/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
+      signal,
     });
     if (!res.ok) {
       const text = await res.text();
@@ -332,11 +341,13 @@ export const api = {
       model?: string;
     },
     onStatus: (message: string) => void,
+    signal?: AbortSignal,
   ): Promise<AnalyticsResponse> => {
     const res = await fetch(`${BASE}/analytics/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
+      signal,
     });
     if (!res.ok) {
       const text = await res.text();
@@ -418,11 +429,13 @@ export const api = {
       payload?: Record<string, unknown>;
     }) => void,
     data?: { extra_instructions?: string; backend?: string; model?: string; ollama_base_url?: string },
+    signal?: AbortSignal,
   ): Promise<AgentRunResult> => {
     const res = await fetch(`${BASE}/agents/${agentId}/run/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data ?? {}),
+      signal,
     });
     if (!res.ok) {
       const text = await res.text();
@@ -491,11 +504,13 @@ export const api = {
       payload?: Record<string, unknown>;
     }) => void,
     data?: { extra_instructions?: string; backend?: string; model?: string; ollama_base_url?: string },
+    signal?: AbortSignal,
   ): Promise<AgentFlowRunResult> => {
     const res = await fetch(`${BASE}/agent-flows/${flowId}/run/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data ?? {}),
+      signal,
     });
     if (!res.ok) {
       const text = await res.text();

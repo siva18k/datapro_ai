@@ -30,7 +30,7 @@ flowchart TB
         PG[(PostgreSQL<br/>schema: ragpro)]
         Vec[pgvector<br/>knowledge_chunks]
         Files[Dataset files<br/>sample_docs / uploads]
-        ExtDB[(External Postgres<br/>per dataset)]
+        ExtDB[(Warehouse via Settings<br/>Trino or native Postgres)]
     end
 
     Web -->|REST /api| FastAPI
@@ -51,7 +51,8 @@ flowchart TB
     Catalog --> PG
     Ingest --> Vec
     Ingest --> Files
-    Struct --> ExtDB
+    Struct --> SettingsConn[Settings connections]
+    SettingsConn --> ExtDB
     Code --> Files
 ```
 

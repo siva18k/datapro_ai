@@ -135,6 +135,77 @@ def get_connection_by_name(name: str) -> dict[str, Any] | None:
     return None
 
 
+def resolve_saved_connection(source_or_config: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Find the saved connection for a dataset, even if connection_id is stale."""
+    cfg = dict((source_or_config or {}).get("config") or source_or_config or {})
+    connection_id = str(cfg.get("connection_id") or "").strip()
+    if connection_id:
+        row = get_connection(connection_id)
+        if row:
+            return row
+    connection_name = str(cfg.get("connection_name") or "").strip()
+    if connection_name:
+        return get_connection_by_name(connection_name)
+    catalog = str(cfg.get("catalog") or "").strip()
+    if catalog:
+        for row in _load_store()["connections"]:
+            if str(row.get("catalog") or "").strip() == catalog:
+                return _migrate_legacy_row(dict(row))
+    raw = dict(source_or_config or {})
+    if raw.get("id") and (raw.get("connector") or "").strip().lower() in {
+        BUSINESS_CONNECTOR,
+        NATIVE_POSTGRES_CONNECTOR,
+    }:
+        return _migrate_legacy_row(raw)
+    return None
+
+
+DATASET_LOCAL_CONNECTION_KEYS = frozenset(
+    {
+        "host",
+        "port",
+        "user",
+        "password",
+        "database",
+        "sslmode",
+        "catalog",
+        "trino_catalog",
+        "warehouse_type",
+        "extra",
+    }
+)
+
+
+def bind_source_to_saved_connection(
+    source_or_config: dict[str, Any] | None,
+    *,
+    connection_id: str | None = None,
+    schema: str | None = None,
+) -> dict[str, Any]:
+    """Attach a dataset to a Settings connection. Credentials stay on the connection."""
+    cfg = dict((source_or_config or {}).get("config") or source_or_config or {})
+    if connection_id:
+        cfg["connection_id"] = connection_id
+    saved = resolve_saved_connection({"config": cfg})
+    if not saved:
+        raise ValueError(
+            "Choose a connection from Settings. Datasets reuse Settings connections "
+            "and do not store their own database credentials."
+        )
+    connector = (saved.get("connector") or BUSINESS_CONNECTOR).strip().lower() or BUSINESS_CONNECTOR
+    schema_name = str(schema or cfg.get("schema") or saved.get("schema") or "public").strip() or "public"
+    bound: dict[str, Any] = {
+        "connection_id": saved.get("id"),
+        "connection_name": saved.get("name") or "",
+        "schema": schema_name,
+    }
+    for key, value in cfg.items():
+        if key in DATASET_LOCAL_CONNECTION_KEYS or key in bound:
+            continue
+        bound[key] = value
+    return {"connector": connector, "config": bound}
+
+
 def connection_config(connection_id: str) -> dict[str, Any]:
     row = get_connection(connection_id)
     if not row:

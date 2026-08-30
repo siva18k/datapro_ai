@@ -11,7 +11,7 @@ import { AskPromptComposer, buildAskQuestion, type AskAttachment } from "../comp
 import { AskRetrievalPanel } from "../components/AskRetrievalPanel";
 import { PageHeader } from "../components/PageHeader";
 import { useSetSidebarContent } from "../context/SidebarContext";
-import { api } from "../api/client";
+import { api, isAbortError } from "../api/client";
 import type { Agent, AgentFlow, AgentRunStep, AskSource, PipelineTraceStep } from "../types";
 import { stripSourceCitations } from "../utils/answerDisplay";
 import {
@@ -82,6 +82,7 @@ export function AskPage() {
   const [debugMode, setDebugMode] = useState(false);
   const [attachments, setAttachments] = useState<AskAttachment[]>([]);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
   const [liveRun, setLiveRun] = useState<LiveAgentRunState | null>(null);
   const [pipelineTrace, setPipelineTrace] = useState<PipelineTraceStep[]>([]);
@@ -140,9 +141,11 @@ export function AskPage() {
         },
         (message) => setActivityStatus(message),
         debug ? (step) => appendPipelineTrace(step) : undefined,
+        abortRef.current?.signal,
       ),
     onSettled: () => setActivityStatus(null),
-    onError: (_err, variables) => {
+    onError: (err, variables) => {
+      if (isAbortError(err)) return;
       if (variables.debug) {
         appendPipelineTrace({
           message: "Request failed — see error above",
@@ -203,6 +206,7 @@ export function AskPage() {
           }
         },
         extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+        abortRef.current?.signal,
       );
 
       return { agentName: agent.name, steps: [...steps], reportHtml };
@@ -254,6 +258,7 @@ export function AskPage() {
           }
         },
         extraInstructions.trim() ? { extra_instructions: extraInstructions } : undefined,
+        abortRef.current?.signal,
       );
 
       return { flowName: flow.name, steps: [...steps], reportHtml };
@@ -278,13 +283,29 @@ export function AskPage() {
   });
 
   const isPending = ask.isPending || agentRun.isPending || flowRun.isPending;
-  const submitError = ask.isError
+  const submitError = ask.isError && !isAbortError(ask.error)
     ? String(ask.error)
-    : agentRun.isError
+    : agentRun.isError && !isAbortError(agentRun.error)
       ? String(agentRun.error)
-      : flowRun.isError
+      : flowRun.isError && !isAbortError(flowRun.error)
         ? String(flowRun.error)
         : null;
+
+  const startRunAbort = () => {
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    return abortRef.current.signal;
+  };
+
+  const stopRun = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    ask.reset();
+    agentRun.reset();
+    flowRun.reset();
+    setActivityStatus(null);
+    setLiveRun(null);
+  };
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -293,6 +314,7 @@ export function AskPage() {
 
   const submitQuestion = () => {
     if (isPending) return;
+    startRunAbort();
 
     if (selectedFlow) {
       const extra = buildAskQuestion(input, attachments);
@@ -381,7 +403,7 @@ export function AskPage() {
   return (
     <div className="ask-page">
       <div className="shrink-0">
-      <PageHeader title="Ask" description="Explore your knowledge base">
+      <PageHeader title="Ask" description="Get insight, effortlessly">
         <button
           type="button"
           className="btn btn-secondary btn-sm"
@@ -527,6 +549,7 @@ export function AskPage() {
             value={input}
             onChange={setInput}
             onSubmit={submitQuestion}
+            onStop={stopRun}
             isPending={isPending}
             error={submitError}
             attachments={attachments}

@@ -97,7 +97,8 @@ def read_catalog_file(catalog: str) -> dict[str, str]:
 
 
 def read_catalog_password(catalog: str) -> str:
-    return read_catalog_file(catalog).get("connection-password", "")
+    raw = read_catalog_file(catalog).get("connection-password", "")
+    return str(raw or "").strip().strip("\"'")
 
 
 def catalog_password_is_set(catalog: str) -> bool:

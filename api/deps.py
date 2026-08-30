@@ -123,6 +123,12 @@ def bootstrap() -> None:
         # Keep API startup available even if catalog DB is temporarily unavailable.
         print(f"[bootstrap] catalog init skipped: {exc}")
         return
+    try:
+        from catalog_db import migrate_postgres_sources_to_trino
+
+        migrate_postgres_sources_to_trino(dry_run=False)
+    except Exception as exc:
+        print(f"[bootstrap] connection relink skipped: {exc}")
 
     # Warm routing metadata so first Ask/Analytics request does not block on catalog scans.
     try:

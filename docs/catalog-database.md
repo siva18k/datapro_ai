@@ -15,7 +15,7 @@ The API, MCP server, and migration script all read the **same connection** from 
 
 ## Not the same as business warehouse data
 
-When you add a **business dataset** (Trino-backed warehouse), that is a **separate database** queried at Ask/Analytics time via the Trino coordinator. Bindings live in:
+When you add a **business dataset**, Ask/Analytics reuse a **Settings connection** (Trino or native Postgres). Bindings live in:
 
 - **`saved_db_connections.json`** (local, gitignored), or
 - **Settings → Dataset connections** in the UI

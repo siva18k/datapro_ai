@@ -144,24 +144,26 @@ def resolve_table_scope(
     selected: list[str] = []
     all_hints: list[str] = []
     for table_score, tname, hints, role in scored:
+        if role in _LOOKUP_ROLES:
+            continue
         if len(selected) >= max_tables:
             break
-        if table_score >= cutoff or (role in _LOOKUP_ROLES and tname in lookup_tables):
+        if table_score >= cutoff:
             if tname not in selected:
                 selected.append(tname)
             for hint in hints:
                 if hint not in all_hints:
                     all_hints.append(hint)
 
+    # Lookups (channels, countries, …) must stay available for joins even when
+    # fact-table narrowing already filled MAX_TABLES.
     for tname in lookup_tables:
-        if len(selected) >= max_tables:
-            break
         if tname not in selected and selected:
             selected.append(tname)
 
     confidence = min(1.0, best_score / (best_score + (scored[1][0] if len(scored) > 1 else 0) + 1.0))
     return ResolvedCatalogScope(
-        table_names=selected[:max_tables],
+        table_names=selected,
         column_hints=all_hints[:8],
         method="metadata_tables",
         confidence=confidence,
@@ -290,7 +292,7 @@ def resolve_catalog_scope(
 
 
 def _merge_scopes(a: ResolvedCatalogScope, b: ResolvedCatalogScope) -> ResolvedCatalogScope:
-    tables = list(dict.fromkeys(a.table_names + b.table_names))[:MAX_TABLES]
+    tables = list(dict.fromkeys(a.table_names + b.table_names))
     hints = list(dict.fromkeys(a.column_hints + b.column_hints))[:8]
     return ResolvedCatalogScope(
         table_names=tables,

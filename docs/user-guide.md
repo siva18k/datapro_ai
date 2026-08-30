@@ -33,7 +33,7 @@ Default domains are created by `migrate.py`. To add another: **Data Catalog** �
 - **Web link** — URLs fetched into the dataset cache
 - **SharePoint** — document links synced with optional Bearer token
 
-For Postgres, pick an existing connection from **Settings → Dataset connections** or create one there.
+For Trino or native Postgres, pick an existing connection from **Settings → Connections**. Credentials live only there and are reused by every domain. A dataset can override schema, not host or password.
 
 Remote connectors: **Connection** tab → set URL/auth → **Data** tab → **Sync now** → **RAG** tab → ingest.
 
@@ -47,9 +47,9 @@ Remote connectors: **Connection** tab → set URL/auth → **Data** tab → **Sy
 
 ---
 
-## Postgres datasets
+## Postgres / Trino datasets
 
-1. **Connection** — test and save credentials.
+1. **Connection** — choose a Settings connection (Trino or native Postgres) and an optional schema.
 2. **Data** — **Refresh tables** → select → **Add selected**.
 3. Tweak table roles (fact vs lookup), **table definitions** (status filters, revenue rules, join hints), and column labels — Ask and Analytics use these in SQL generation and answer prompts.
 4. **Definition** — when two or more tables are cataloged, open this tab to auto-append a **Table relationships** section at the bottom. **AI draft** uses only cataloged tables/columns (no invented fields), strips markdown code fences, and refreshes relationships. Use **Refresh relationships** after catalog changes, then **Save definition**. **Ask** blends ingested catalog/document chunks with the definition for SQL when embeddings exist; otherwise it uses the definition and column metadata alone.

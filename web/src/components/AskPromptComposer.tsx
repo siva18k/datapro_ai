@@ -21,6 +21,7 @@ interface AskPromptComposerProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onStop?: () => void;
   isPending: boolean;
   error?: string | null;
   attachments: AskAttachment[];
@@ -69,6 +70,7 @@ export function AskPromptComposer({
   value,
   onChange,
   onSubmit,
+  onStop,
   isPending,
   error,
   attachments,
@@ -153,13 +155,13 @@ export function AskPromptComposer({
   const textRows = Math.min(Math.max(value.split("\n").length, 1), 8);
 
   useEffect(() => {
-    if (wasPendingRef.current && !isPending) {
+    if (wasPendingRef.current && !isPending && !value.trim()) {
       setSubmitted(true);
       textareaRef.current?.blur();
       setIsFocused(false);
     }
     wasPendingRef.current = isPending;
-  }, [isPending]);
+  }, [isPending, value]);
 
   const syncMenuPosition = useCallback(() => {
     const marker = atMarkerRef.current;
@@ -295,6 +297,16 @@ export function AskPromptComposer({
         e.preventDefault();
         return;
       }
+    }
+    if (isPending) {
+      if (
+        (submitOnEnter && e.key === "Enter" && !e.shiftKey) ||
+        (!submitOnEnter && e.key === "Enter" && (e.metaKey || e.ctrlKey))
+      ) {
+        e.preventDefault();
+        onStop?.();
+      }
+      return;
     }
     if (submitOnEnter) {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -471,6 +483,10 @@ export function AskPromptComposer({
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (isPending) {
+            onStop?.();
+            return;
+          }
           if (canSend) onSubmit();
         }}
         className="ask-composer-form"
@@ -535,7 +551,6 @@ export function AskPromptComposer({
               onKeyDown={onKeyDown}
               onSelect={onSelect}
               onScroll={syncMenuPosition}
-              disabled={isPending}
               aria-busy={isPending}
               aria-expanded={menuOpen}
               aria-autocomplete="list"
@@ -595,14 +610,30 @@ export function AskPromptComposer({
               )}
             </div>
             <button
-              type="submit"
-              className="ask-composer-send-btn"
-              disabled={!canSend}
-              aria-label={selectedFlow ? "Run flow" : selectedAgent ? "Run agent" : "Send question"}
+              type={isPending ? "button" : "submit"}
+              className={`ask-composer-send-btn${isPending ? " ask-composer-send-btn--stop" : ""}`}
+              disabled={!isPending && !canSend}
+              onClick={isPending ? () => onStop?.() : undefined}
+              aria-label={
+                isPending
+                  ? "Stop"
+                  : selectedFlow
+                    ? "Run flow"
+                    : selectedAgent
+                      ? "Run agent"
+                      : "Send question"
+              }
+              title={isPending ? "Stop" : undefined}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
-                <path d="M12 19V5M5 12l7-7 7 7" />
-              </svg>
+              {isPending ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              )}
             </button>
           </div>
           </div>

@@ -2462,6 +2462,15 @@ label.file-upload-btn {
   background: var(--color-border);
   color: var(--color-text-muted);
 }
+.ask-composer-send-btn--stop {
+  background: var(--color-text);
+  color: var(--color-surface);
+  opacity: 1;
+  cursor: pointer;
+}
+.ask-composer-send-btn--stop:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
 .ask-composer-options {
   @apply mt-3 flex flex-wrap items-center gap-2;
 }

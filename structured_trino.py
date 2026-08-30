@@ -31,14 +31,21 @@ def _qualified_table(catalog: str, schema: str, table: str) -> str:
 
 
 def trino_config_from_source(source: dict) -> dict[str, Any]:
-    """Dataset config + global Trino coordinator settings."""
+    """Settings connection + optional dataset schema override."""
+    from connections_service import resolve_saved_connection
+
     cfg = dict(source.get("config") or {})
-    catalog = (cfg.get("catalog") or cfg.get("trino_catalog") or "").strip()
-    schema = (cfg.get("schema") or "public").strip() or "public"
+    saved = resolve_saved_connection(source)
+    if not saved:
+        raise ValueError(
+            "This dataset is not linked to a Settings connection. "
+            "Open Settings → Connections and attach one to the dataset."
+        )
+    catalog = (saved.get("catalog") or "").strip()
+    schema = (cfg.get("schema") or saved.get("schema") or "public").strip() or "public"
     if not catalog:
         raise ValueError(
-            "Dataset is missing Trino catalog. Re-link the dataset to a business connection "
-            "in Settings → Database connections."
+            "The Settings connection is missing a Trino catalog. Edit it under Settings → Connections."
         )
     return {
         **get_trino_settings(),
