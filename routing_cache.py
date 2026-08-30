@@ -16,6 +16,12 @@ def clear_routing_cache() -> None:
         clear_vocabulary_cache()
     except Exception:
         pass
+    try:
+        from domain_context import clear_domain_context
+
+        clear_domain_context()
+    except Exception:
+        pass
 
 
 def get_cached_routing_context() -> list[dict]:

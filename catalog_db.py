@@ -791,6 +791,7 @@ def upsert_domain_reference_doc(domain_id: str, doc_type: str, content: str) -> 
         )
     finally:
         conn.close()
+    _invalidate_routing_cache()
     return {
         "doc_type": rows[0][0],
         "content": rows[0][1],
@@ -1512,7 +1513,9 @@ def create_mcp_server(
     finally:
         conn.close()
     cols = ["id", "slug", "name", "description", "url", "server_kind", "transport", "enabled", "is_builtin"]
-    return _row_to_dict(cols, rows[0])
+    server = _row_to_dict(cols, rows[0])
+    _invalidate_routing_cache()
+    return server
 
 
 def update_mcp_server(server_id: str, **fields) -> dict | None:
@@ -1548,7 +1551,9 @@ def update_mcp_server(server_id: str, **fields) -> dict | None:
     if not rows:
         return existing
     cols = ["id", "slug", "name", "description", "url", "server_kind", "transport", "enabled", "is_builtin"]
-    return _row_to_dict(cols, rows[0])
+    server = _row_to_dict(cols, rows[0])
+    _invalidate_routing_cache()
+    return server
 
 
 def delete_mcp_server(server_id: str) -> bool:
@@ -1575,7 +1580,10 @@ def delete_mcp_server(server_id: str) -> bool:
         )
     finally:
         conn.close()
-    return bool(rows)
+    deleted = bool(rows)
+    if deleted:
+        _invalidate_routing_cache()
+    return deleted
 
 
 def set_mcp_binding(
@@ -1602,6 +1610,7 @@ def set_mcp_binding(
         )
     finally:
         conn.close()
+    _invalidate_routing_cache()
 
 
 def add_mcp_binding(
@@ -1641,7 +1650,9 @@ def add_mcp_binding(
         "id", "domain_id", "mcp_server_id", "capability_type", "capability_name", "enabled",
         "server_name", "server_slug", "server_url", "server_kind",
     ]
-    return _row_to_dict(cols, rows[0])
+    binding = _row_to_dict(cols, rows[0])
+    _invalidate_routing_cache()
+    return binding
 
 
 def remove_mcp_binding(binding_id: str) -> bool:
@@ -1653,6 +1664,8 @@ def remove_mcp_binding(binding_id: str) -> bool:
         )
     finally:
         conn.close()
+    if rows:
+        _invalidate_routing_cache()
     return bool(rows)
 
 

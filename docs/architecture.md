@@ -161,7 +161,7 @@ sequenceDiagram
     W->>A: question, top_k, domain_override
     A->>P: resolve_query_plan()
     P-->>A: domain, dataset, execution_kind
-    A->>M: plan_mcp_enrichment (bound tools/resources/prompts)
+    A->>M: plan_mcp_enrichment (in-memory domain pack + question-specific tools)
     M-->>A: MCP context supplement
     alt sql or hybrid
         A->>V: retrieve chunks (MCP search_documents or vector)
@@ -183,7 +183,7 @@ sequenceDiagram
 
 **Follow-up context (Ask and Analytics):** The UI sends recent turns plus the prior structured result (SQL, columns, rows) in `conversation_history`. Before each request, `conversation_session.py` either (a) detects a **new topic** via LLM and clears context, (b) after **N follow-ups** (Settings → `ASK_CONVERSATION_TURNS`, default 5) **summarizes** the session and starts a fresh chat, or (c) keeps context for a true follow-up. `structured_follow_up.py` then decides transform vs refined SQL.
 
-**Domain MCP bindings** attach reference **resources** (`schema`, `calendar`, `glossary`), **tools**, and **prompts**. Ask/Analytics auto-load reference resources into the LLM supplement; Agents may also render `domain_sql_context` / `domain_grounded_answer` prompts.
+**Domain MCP bindings** attach reference **resources** (`schema`, `calendar`, `glossary`), **tools**, and **prompts**. Ask/Analytics keep a warmed **domain context pack** in API memory (bindings + reference texts + default MCP plan) so each question skips catalog re-scans; only question-specific tools still run live. Catalog writes clear the pack. Agents may also render `domain_sql_context` / `domain_grounded_answer` prompts.
 
 ## Execution kinds
 
@@ -235,4 +235,4 @@ SQL path is read-only by design; dataset credentials sit in catalog config (encr
 - Configurable agents (`agent_runner.py`, `agent_mcp_runner.py`): on save, `save_agent_mcp_kit` pins domain tools/prompts/resources (plus Advanced extras). Execute uses that kit without the Ask planner. SQL KPI/report still uses `run_analytics_events`.
 - Agent flows (`agent_flow_runner.py`): DAG of **agent** nodes and **custom** instruction nodes; connected steps pass result summaries (including table previews) downstream
 - **Per-table / per-file RAG** (Catalog → dataset → **RAG** tab): `table_metadata.rag_enabled`, per-row chunk settings, `source_file_rag` for documents; ingest via `POST /api/datasets/{id}/rag/ingest`
-- Domain MCP: bind tools/resources/prompts per domain in Catalog → MCP; Ask uses `mcp_ask_planner` automatically
+- Domain MCP: bind tools/resources/prompts per domain in Catalog → MCP; Ask/Analytics use a warmed `domain_context` pack plus `mcp_ask_planner` for question-specific tools

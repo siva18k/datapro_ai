@@ -130,10 +130,25 @@ def bootstrap() -> None:
     except Exception as exc:
         print(f"[bootstrap] connection relink skipped: {exc}")
 
-    # Warm routing metadata so first Ask/Analytics request does not block on catalog scans.
+    # Warm routing metadata and per-domain MCP packs so first Ask/Analytics is not cold.
     try:
         from routing_cache import get_cached_routing_context
 
         get_cached_routing_context()
     except Exception as exc:
         print(f"[bootstrap] routing warmup skipped: {exc}")
+    try:
+        import threading
+
+        from domain_context import warm_domain_context
+
+        def _warm() -> None:
+            try:
+                warmed = warm_domain_context()
+                print(f"[bootstrap] warmed {warmed} domain context pack(s)")
+            except Exception as exc:
+                print(f"[bootstrap] domain context warmup skipped: {exc}")
+
+        threading.Thread(target=_warm, name="domain-context-warmup", daemon=True).start()
+    except Exception as exc:
+        print(f"[bootstrap] domain context warmup skipped: {exc}")

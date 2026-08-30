@@ -10,7 +10,7 @@
 
 **RAG** — chunk size, overlap, ingest.
 
-**Settings → MCP** — catalog of tools, prompts, and resources. **Settings → Servers** — start/stop DATA Pro MCP, Email, API, and Trino. Domain bindings still live on each domain in the Catalog. Bound tools, resources, and prompts are used automatically during **Ask** and **Analytics** when a domain is routed.
+**Settings → MCP** — catalog of tools, prompts, and resources. **Settings → Servers** — start/stop DATA Pro MCP, Email, API, and Trino. Domain bindings still live on each domain in the Catalog. Ask and Analytics reuse a warmed in-memory pack of those bindings and reference docs for the routed domain so they do not re-plan MCP on every question.
 
 **Settings** — connections, LLM, MCP catalog, and server start/stop.
 

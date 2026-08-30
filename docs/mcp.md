@@ -34,7 +34,7 @@ Register MCP servers under **Settings → Servers**. **Settings → MCP** lists 
 
 Default domain bindings include reference **resources** (schema, calendar, glossary, sql-notes, citation-rules), **tools** (`list_domains`, `list_domain_sources`, `search_documents`, `resolve_time_period`), and **prompts** (`domain_sql_context`, `domain_grounded_answer`).
 
-Ask / Analytics **automatically attach bound reference resources** (schema for SQL/hybrid; glossary + citation rules for RAG). Optional inventory resources (`ragpro://domains`, sources, stats) load only when the planner sets `use_resources`.
+Ask / Analytics **automatically attach bound reference resources** (schema for SQL/hybrid; glossary + citation rules for RAG) from an in-memory **domain context pack** warmed at API startup. Optional inventory resources (`ragpro://domains`, sources, stats) load only when the planner sets `use_resources`. Question-specific tools (`search_documents`, `resolve_time_period`) still run live.
 
 **Agents** resolve that same domain catalog when you **Save agent** (plus extras from Advanced). Tools, prompts, and resources are stored on the agent (`agent_mcp_tools`, `agent_mcp_prompts`, `agent_mcp_resources`). Execute uses the saved kit directly and does not run the Ask planner again. Re-save after you change the goal or `/domain` pins. Run migration `016_agent_mcp_kit.sql`.
 

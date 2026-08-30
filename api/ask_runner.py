@@ -500,7 +500,7 @@ def _mcp_enrichment_events(
         yield {"type": "_mcp_enrichment", "enrichment": None}
         return
 
-    yield _status("Reviewing domain MCP tools, resources, and prompts…")
+    yield _status("Loading domain MCP context…")
     plan = plan_mcp_enrichment(
         body.question,
         domain_id=domain_id,
