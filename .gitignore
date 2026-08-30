@@ -12,6 +12,7 @@ certs/
 .env
 .env.*
 !.env.example
+docs/notes
 saved_db_connections.json
 !saved_db_connections.json.example
 docker/trino/catalog/*.properties
